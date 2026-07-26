@@ -5,7 +5,7 @@ import { getRequestConfig } from 'next-intl/server';
 // box; the language toggle writes a `NEXT_LOCALE` cookie to switch.
 export const locales = ['zh', 'en'] as const;
 export type Locale = (typeof locales)[number];
-export const defaultLocale: Locale = 'zh';
+export const defaultLocale: Locale = 'en';
 
 export default getRequestConfig(async () => {
   const store = await cookies();
