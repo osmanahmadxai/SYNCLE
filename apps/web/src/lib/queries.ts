@@ -71,9 +71,12 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.logout(),
-    // drop every cached query from the previous session, then re-probe status
+    // flip AuthGate back to the login screen immediately: drop every cached
+    // query from the previous session EXCEPT the auth-status probe (removing it
+    // would leave its mounted observer with nothing to refetch), then invalidate
+    // that probe so it re-runs and reports the logged-out state
     onSuccess: () => {
-      qc.clear();
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'auth' });
       qc.invalidateQueries({ queryKey: queryKeys.authStatus });
     },
   });

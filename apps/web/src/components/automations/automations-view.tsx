@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
@@ -21,6 +22,7 @@ import { RunDetail, RunStatusBadge } from './run-detail';
 import { WorkspaceMap } from './workspace-map';
 
 export function AutomationsView() {
+  const t = useTranslations('automations');
   const { selectedHookId, selectHook } = useStudio();
   const { data: hooks } = useHooks();
   const hook = hooks?.find((h) => h.id === selectedHookId) ?? null;
@@ -46,7 +48,7 @@ export function AutomationsView() {
       hookId={hook.id}
       hookName={hook.name}
       sourceLabel={
-        hook.source.kind === 'table' ? hook.source.table : 'custom query'
+        hook.source.kind === 'table' ? hook.source.table : t('customQuery')
       }
       destLabel={destinationLabel(dest)}
       endpoint={endpoint}
@@ -74,6 +76,8 @@ function HookPanel({
   onDeleted: () => void;
 }) {
   const confirm = useConfirm();
+  const t = useTranslations('automations');
+  const tc = useTranslations('common');
   const { openHookEditor } = useStudio();
   const start = useStartHookRun(hookId);
   const startWatch = useStartWatch(hookId);
@@ -102,9 +106,9 @@ function HookPanel({
     try {
       const run = await start.mutateAsync({});
       setSelectedRunId(run.id);
-      toast.success('Run started');
+      toast.success(t('runStarted'));
     } catch (err) {
-      toast.error('Could not start run', {
+      toast.error(t('couldNotStartRun'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -114,9 +118,9 @@ function HookPanel({
     try {
       const run = await startWatch.mutateAsync();
       setSelectedRunId(run.id);
-      toast.success('Listening for new data');
+      toast.success(t('listeningForData'));
     } catch (err) {
-      toast.error('Could not start listening', {
+      toast.error(t('couldNotStartListening'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -125,9 +129,9 @@ function HookPanel({
   async function handleStopWatch() {
     try {
       await stopWatch.mutateAsync();
-      toast.success('Stopped listening');
+      toast.success(t('stoppedListening'));
     } catch (err) {
-      toast.error('Could not stop', {
+      toast.error(t('couldNotStop'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -135,19 +139,18 @@ function HookPanel({
 
   async function handleDelete() {
     const ok = await confirm({
-      title: `Delete "${hookName}"?`,
-      description:
-        'This removes the bridge and its run history. This cannot be undone.',
-      confirmText: 'Delete',
+      title: t('deleteTitle', { name: hookName }),
+      description: t('deleteDescription'),
+      confirmText: tc('delete'),
       destructive: true,
     });
     if (!ok) return;
     try {
       await del.mutateAsync(hookId);
       onDeleted();
-      toast.success('Bridge deleted');
+      toast.success(t('bridgeDeleted'));
     } catch (err) {
-      toast.error('Could not delete', {
+      toast.error(t('couldNotDelete'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -177,7 +180,7 @@ function HookPanel({
                 ) : (
                   <Square className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                Stop listening
+                {t('stopListening')}
               </Button>
             ) : (
               <Button
@@ -190,7 +193,7 @@ function HookPanel({
                 ) : (
                   <Radio className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                Start listening
+                {t('startListening')}
               </Button>
             )
           ) : (
@@ -200,7 +203,7 @@ function HookPanel({
               ) : (
                 <Play className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Run
+              {t('run')}
             </Button>
           )}
           <Button
@@ -209,7 +212,7 @@ function HookPanel({
             onClick={() => openHookEditor({ editingId: hookId })}
           >
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
-            Edit
+            {tc('edit')}
           </Button>
           <Button size="sm" variant="ghost" onClick={handleDelete}>
             <Trash2 className="text-destructive h-3.5 w-3.5" />
@@ -230,7 +233,7 @@ function HookPanel({
           />
         ) : (
           <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-            Select a run to see its delivery log.
+            {t('selectRun')}
           </div>
         )}
       </div>

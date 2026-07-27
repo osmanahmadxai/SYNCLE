@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import Image from 'next/image';
+import { useTranslations } from 'next-intl';
 import { Database } from 'lucide-react';
 import { useStudio } from '@/lib/store';
 import {
@@ -12,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { LangToggle } from '@/components/lang-toggle';
 import { UserMenu } from '@/components/settings/user-menu';
 import { ConnectionDialog } from '@/components/connections/connection-dialog';
 import { AutomationsView } from '@/components/automations/automations-view';
@@ -26,6 +28,7 @@ import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
  * Sources surface and the Hook Builder. data sources exist to feed hooks.
  */
 export function Studio() {
+  const t = useTranslations('nav');
   const {
     selectedHookId,
     selectHook,
@@ -92,12 +95,13 @@ export function Studio() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  title="Data sources"
+                  title={t('dataSources')}
                   onClick={openDataSources}
                 >
                   <Database className="h-4 w-4" />
                 </Button>
                 <ThemeToggle />
+                <LangToggle />
                 <UserMenu />
               </div>
             </div>

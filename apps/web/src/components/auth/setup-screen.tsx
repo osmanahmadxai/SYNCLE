@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import { useTranslations } from 'next-intl';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
@@ -18,6 +19,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function SetupScreen() {
+  const t = useTranslations('auth.setup');
+  const tc = useTranslations('common');
   const setup = useSetup();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -28,15 +31,15 @@ export function SetupScreen() {
     // the Enter-key handler bypasses the button's disabled state
     if (setup.isPending) return;
     if (username.trim().length < 3) {
-      setError('Username must be at least 3 characters.');
+      setError(t('usernameTooShort'));
       return;
     }
     if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+      setError(t('passwordTooShort'));
       return;
     }
     if (password !== confirm) {
-      setError('Passwords do not match.');
+      setError(t('passwordsNoMatch'));
       return;
     }
     setError(null);
@@ -44,9 +47,9 @@ export function SetupScreen() {
       await setup.mutateAsync({ username: username.trim(), password });
     } catch (err) {
       const message =
-        err instanceof ApiError ? err.message : 'Something went wrong';
+        err instanceof ApiError ? err.message : tc('somethingWrong');
       setError(message);
-      toast.error('Could not create account', { description: message });
+      toast.error(t('couldNotCreate'), { description: message });
     }
   }
 
@@ -70,11 +73,8 @@ export function SetupScreen() {
             priority
             className="mb-2 hidden h-8 w-auto dark:block"
           />
-          <CardTitle>Create the admin account</CardTitle>
-          <CardDescription>
-            This is the first run. The account you create here is the single
-            operator that protects every Syncle endpoint.
-          </CardDescription>
+          <CardTitle>{t('title')}</CardTitle>
+          <CardDescription>{t('description')}</CardDescription>
         </CardHeader>
         <CardContent>
           <form
@@ -85,7 +85,7 @@ export function SetupScreen() {
             }}
           >
             <div className="grid gap-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t('username')}</Label>
               <Input
                 id="username"
                 autoFocus
@@ -95,7 +95,7 @@ export function SetupScreen() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('password')}</Label>
               <Input
                 id="password"
                 type="password"
@@ -104,11 +104,11 @@ export function SetupScreen() {
                 onChange={(e) => setPassword(e.target.value)}
               />
               <p className="text-muted-foreground text-xs">
-                At least 8 characters.
+                {t('passwordHint')}
               </p>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="confirm">Confirm password</Label>
+              <Label htmlFor="confirm">{t('confirm')}</Label>
               <Input
                 id="confirm"
                 type="password"
@@ -124,7 +124,7 @@ export function SetupScreen() {
               ) : (
                 <ShieldCheck className="mr-2 h-4 w-4" />
               )}
-              Create account
+              {t('submit')}
             </Button>
           </form>
         </CardContent>

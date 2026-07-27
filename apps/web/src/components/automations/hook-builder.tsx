@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useTranslations } from 'next-intl';
 import {
   mapRow,
   renderRow,
@@ -137,6 +138,7 @@ function formatCell(value: unknown): string {
 }
 
 export function HookBuilder() {
+  const t = useTranslations('hookBuilder');
   const { hookEditor, closeHookEditor, selectHook, openConnectionDialog } =
     useStudio();
   const editing = hookEditor.editingId;
@@ -228,7 +230,7 @@ export function HookBuilder() {
         },
         (err) => {
           if (stale) return;
-          toast.error('Could not load hook for editing', {
+          toast.error(t('loadFailed'), {
             description: err instanceof ApiError ? err.message : String(err),
           });
         },
@@ -247,7 +249,7 @@ export function HookBuilder() {
       setDatabase(hookEditor.seed.database ?? '');
       setSchema(hookEditor.seed.schema ?? '');
       setTable(hookEditor.seed.table);
-      setName(`${hookEditor.seed.table} → bridge`);
+      setName(t('defaultName', { table: hookEditor.seed.table }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hookEditor.open, editing, hookEditor.seed]);
@@ -558,7 +560,7 @@ export function HookBuilder() {
           };
 
     return {
-      name: name.trim() || `${table} → bridge`,
+      name: name.trim() || t('defaultName', { table }),
       source: {
         kind: 'table',
         connectionId,
@@ -616,7 +618,7 @@ export function HookBuilder() {
         }),
       );
     } catch (err) {
-      toast.error('Readiness check failed', {
+      toast.error(t('readinessFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -629,15 +631,15 @@ export function HookBuilder() {
       const input = buildInput();
       if (editing) {
         await update.mutateAsync({ id: editing, input });
-        toast.success('Bridge updated');
+        toast.success(t('bridgeUpdated'));
       } else {
         const hook = await create.mutateAsync(input);
         selectHook(hook.id);
-        toast.success('Bridge created');
+        toast.success(t('bridgeCreated'));
       }
       closeHookEditor();
     } catch (err) {
-      toast.error('Could not save bridge', {
+      toast.error(t('saveFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -654,36 +656,42 @@ export function HookBuilder() {
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Bridge name"
+          placeholder={t('namePlaceholder')}
           className="h-8 max-w-xs font-medium"
         />
         <div className="text-muted-foreground ml-2 text-sm">
           {builderKind === 'job'
             ? sendCount != null && (
                 <span>
-                  sends{' '}
-                  <span className="text-foreground font-medium">
-                    {sendCount.toLocaleString()}
-                  </span>{' '}
-                  {mode === 'selected' ? 'selected' : ''} row
-                  {sendCount === 1 ? '' : 's'} · {includedList.length}/
-                  {columns.length} columns
+                  {mode === 'selected'
+                    ? t('sendsSelected', {
+                        count: sendCount,
+                        cols: includedList.length,
+                        total: columns.length,
+                      })
+                    : t('sendsAll', {
+                        count: sendCount,
+                        cols: includedList.length,
+                        total: columns.length,
+                      })}
                 </span>
               )
             : table && (
                 <span>
-                  streams new rows · {includedList.length}/{columns.length}{' '}
-                  columns
+                  {t('streamsNewRows', {
+                    cols: includedList.length,
+                    total: columns.length,
+                  })}
                 </span>
               )}
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={closeHookEditor}>
-            Cancel
+            {t('cancel')}
           </Button>
           <Button onClick={handleSave} disabled={!canSave || saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {editing ? 'Save bridge' : 'Create bridge'}
+            {editing ? t('saveBridge') : t('createBridge')}
           </Button>
         </div>
       </div>
@@ -707,12 +715,12 @@ export function HookBuilder() {
                   }}
                 >
                   <SelectTrigger className="h-8 w-44">
-                    <SelectValue placeholder="Connection" />
+                    <SelectValue placeholder={t('connection')} />
                   </SelectTrigger>
                   <SelectContent>
                     {(connections?.length ?? 0) === 0 && (
                       <div className="text-muted-foreground px-2 py-1.5 text-xs">
-                        No connections yet
+                        {t('noConnections')}
                       </div>
                     )}
                     {connections?.map((c) => (
@@ -727,7 +735,7 @@ export function HookBuilder() {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    title="Edit connection"
+                    title={t('editConnection')}
                     onClick={() => openConnectionDialog(connectionId)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -739,7 +747,7 @@ export function HookBuilder() {
                     className="h-8"
                     onClick={() => openConnectionDialog()}
                   >
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Connect a database
+                    <Plus className="mr-1 h-3.5 w-3.5" /> {t('connectDatabase')}
                   </Button>
                 )}
               </div>
@@ -758,7 +766,7 @@ export function HookBuilder() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__default">(default db)</SelectItem>
+                    <SelectItem value="__default">{t('defaultDb')}</SelectItem>
                     {databases?.map((d) => (
                       <SelectItem key={d} value={d}>
                         {d}
@@ -780,7 +788,7 @@ export function HookBuilder() {
                 }}
               >
                 <SelectTrigger className="h-8 w-52">
-                  <SelectValue placeholder="Table" />
+                  <SelectValue placeholder={t('table')} />
                 </SelectTrigger>
                 <SelectContent>
                   {tables.map((t) => (
@@ -812,17 +820,17 @@ export function HookBuilder() {
                             )}
                             title={
                               m === 'selected' && !singlePk
-                                ? 'Needs a single-column primary key'
+                                ? t('needsSinglePk')
                                 : undefined
                             }
                           >
-                            {m === 'selected' ? 'Selected rows' : 'All rows'}
+                            {m === 'selected' ? t('selectedRows') : t('allRows')}
                           </button>
                         ))}
                       </div>
                       {mode === 'selected' && (
                         <Badge variant="secondary" className="font-normal">
-                          {selectedKeys.size} selected
+                          {t('nSelected', { count: selectedKeys.size })}
                         </Badge>
                       )}
                     </>
@@ -848,9 +856,7 @@ export function HookBuilder() {
               <div className="flex items-start gap-2 border-b bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
                 <Radio className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
-                  <strong>Column selection only.</strong> New rows added to this
-                  table will be delivered automatically — no row selection needed.
-                  Click a column header to include or exclude it from the payload.
+                  <strong>{t('columnSelectionOnly')}</strong> {t('hookBannerRest')}
                 </span>
               </div>
             )}
@@ -860,8 +866,8 @@ export function HookBuilder() {
               {!table ? (
                 <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
                   {builderKind === 'hook'
-                    ? 'Pick a connection and table to preview data and select columns.'
-                    : 'Pick a connection and table to choose the data to send.'}
+                    ? t('pickHook')
+                    : t('pickJob')}
                 </div>
               ) : (
                 <table className="w-full border-collapse text-sm">
@@ -899,8 +905,8 @@ export function HookBuilder() {
                               onClick={() => toggleColumn(col.name)}
                               title={
                                 on
-                                  ? 'Included — click to exclude'
-                                  : 'Excluded — click to include'
+                                  ? t('includedClickExclude')
+                                  : t('excludedClickInclude')
                               }
                             >
                               <span
@@ -980,10 +986,12 @@ export function HookBuilder() {
             {table && (
               <div className="text-muted-foreground flex items-center gap-2 border-t px-3 py-1.5 text-xs">
                 <span>
-                  {builderKind === 'hook' ? 'preview rows ' : 'rows '}
+                  {builderKind === 'hook' ? t('previewRows') + ' ' : t('rows') + ' '}
                   {rows.length ? offset + 1 : 0}–{offset + rows.length}
                   {builderKind === 'job' && browse?.total != null
-                    ? ` of ${browse.estimated ? '~' : ''}${browse.total.toLocaleString()}`
+                    ? t('ofTotal', {
+                        total: `${browse.estimated ? '~' : ''}${browse.total.toLocaleString()}`,
+                      })
                     : ''}
                 </span>
                 <div className="ml-auto flex gap-1">
@@ -994,7 +1002,7 @@ export function HookBuilder() {
                     disabled={offset === 0}
                     onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                   >
-                    Prev
+                    {t('prev')}
                   </Button>
                   <Button
                     variant="outline"
@@ -1003,7 +1011,7 @@ export function HookBuilder() {
                     disabled={!browse?.hasMore}
                     onClick={() => setOffset(offset + PAGE_SIZE)}
                   >
-                    Next
+                    {t('next')}
                   </Button>
                 </div>
               </div>
@@ -1019,12 +1027,12 @@ export function HookBuilder() {
             <div className="space-y-5 p-4">
               {/* what runs in this bridge: an on-demand job or a live hook */}
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold">What runs in this bridge</h3>
+                <h3 className="text-sm font-semibold">{t('whatRuns')}</h3>
                 <div className="flex overflow-hidden rounded-md border text-xs">
                   {(
                     [
-                      ['job', 'Job · on-demand'],
-                      ['hook', 'Hook · live'],
+                      ['job', t('jobOnDemand')],
+                      ['hook', t('hookLive')],
                     ] as const
                   ).map(([k, label]) => (
                     <button
@@ -1046,20 +1054,20 @@ export function HookBuilder() {
                 </div>
                 <p className="text-muted-foreground text-[11px]">
                   {builderKind === 'job'
-                    ? 'Streams rows once when you press Run — good for backfills.'
-                    : 'Listens and delivers changes the moment they happen.'}
+                    ? t('jobDesc')
+                    : t('hookDesc')}
                 </p>
               </section>
 
               {/* trigger, hooks only. jobs are always a one-shot replay */}
               {builderKind === 'hook' && (
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold">How it listens</h3>
+                  <h3 className="text-sm font-semibold">{t('howItListens')}</h3>
                   <div className="flex overflow-hidden rounded-md border text-xs">
                     {(
                       [
-                        ['watch', 'Polling'],
-                        ['cdc', 'Event-based (real-time)'],
+                        ['watch', t('polling')],
+                        ['cdc', t('eventBased')],
                       ] as const
                     ).map(([k, label]) => (
                       <button
@@ -1079,10 +1087,10 @@ export function HookBuilder() {
 
                   {triggerKind === 'cdc' && (
                     <div className="grid gap-2 rounded-md border p-2.5">
-                    <Label className="text-xs">Operations to deliver</Label>
+                    <Label className="text-xs">{t('operationsToDeliver')}</Label>
                     <div className="flex gap-3 text-xs">
                       {(['insert', 'update', 'delete'] as const).map((op) => (
-                        <label key={op} className="flex items-center gap-1.5 capitalize">
+                        <label key={op} className="flex items-center gap-1.5">
                           <input
                             type="checkbox"
                             className="accent-primary h-3.5 w-3.5"
@@ -1096,7 +1104,11 @@ export function HookBuilder() {
                               })
                             }
                           />
-                          {op}
+                          {op === 'insert'
+                            ? t('opInsert')
+                            : op === 'update'
+                              ? t('opUpdate')
+                              : t('opDelete')}
                         </label>
                       ))}
                     </div>
@@ -1104,7 +1116,7 @@ export function HookBuilder() {
                     {/* readiness / setup */}
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground text-[11px]">
-                        Streams changes from the DB log in real time (no polling).
+                        {t('cdcDesc')}
                       </span>
                       <Button
                         size="sm"
@@ -1116,7 +1128,7 @@ export function HookBuilder() {
                         {checkingCdc ? (
                           <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                         ) : null}
-                        Check readiness
+                        {t('checkReadiness')}
                       </Button>
                     </div>
 
@@ -1135,8 +1147,8 @@ export function HookBuilder() {
                               )}
                             >
                               {readiness.ready
-                                ? '✓ Ready — we’ll auto-create the publication & slot on start.'
-                                : 'Setup needed:'}
+                                ? t('cdcReady')
+                                : t('setupNeeded')}
                             </p>
                             {readiness.checks.map((c) => (
                               <div key={c.label} className="flex items-center gap-1.5">
@@ -1164,7 +1176,7 @@ export function HookBuilder() {
                 {triggerKind === 'watch' && (
                   <div className="grid gap-2 rounded-md border p-2.5">
                     <div className="grid gap-1.5">
-                      <Label className="text-xs">Detect new rows by</Label>
+                      <Label className="text-xs">{t('detectNewRowsBy')}</Label>
                       <Select
                         value={watchStrategy}
                         onValueChange={(v) =>
@@ -1176,13 +1188,13 @@ export function HookBuilder() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="increment">
-                            Incrementing column (id / sequence)
+                            {t('strategyIncrement')}
                           </SelectItem>
                           <SelectItem value="timestamp">
-                            Timestamp column (created/updated at)
+                            {t('strategyTimestamp')}
                           </SelectItem>
                           <SelectItem value="snapshot">
-                            New primary keys (small tables / UUIDs)
+                            {t('strategySnapshot')}
                           </SelectItem>
                         </SelectContent>
                       </Select>
@@ -1191,12 +1203,13 @@ export function HookBuilder() {
                     {watchStrategy !== 'snapshot' && (
                       <div className="grid gap-1.5">
                         <Label className="text-xs">
-                          {watchStrategy === 'timestamp' ? 'Timestamp' : 'Incrementing'}{' '}
-                          column
+                          {watchStrategy === 'timestamp'
+                            ? t('timestampColumn')
+                            : t('incrementingColumn')}
                         </Label>
                         <Select value={watchColumn} onValueChange={setWatchColumn}>
                           <SelectTrigger className="h-8">
-                            <SelectValue placeholder="Select a column" />
+                            <SelectValue placeholder={t('selectColumn')} />
                           </SelectTrigger>
                           <SelectContent>
                             {columns.map((c) => (
@@ -1211,13 +1224,13 @@ export function HookBuilder() {
 
                     <div className="grid grid-cols-2 gap-2">
                       <NumField
-                        label="Poll every (sec)"
+                        label={t('pollEvery')}
                         value={pollSeconds}
                         min={1}
                         onChange={setPollSeconds}
                       />
                       <div className="grid gap-1.5">
-                        <Label className="text-xs">Start from</Label>
+                        <Label className="text-xs">{t('startFrom')}</Label>
                         <Select
                           value={watchStartFrom}
                           onValueChange={(v) =>
@@ -1228,15 +1241,14 @@ export function HookBuilder() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="now">New rows from now</SelectItem>
-                            <SelectItem value="beginning">All existing + new</SelectItem>
+                            <SelectItem value="now">{t('fromNow')}</SelectItem>
+                            <SelectItem value="beginning">{t('fromBeginning')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                     </div>
                       <p className="text-muted-foreground text-[11px]">
-                        The hook keeps polling this table and delivers new rows as
-                        they appear.
+                        {t('watchDesc')}
                       </p>
                     </div>
                   )}
@@ -1245,13 +1257,13 @@ export function HookBuilder() {
 
               {/* payload */}
               <section>
-                <h3 className="mb-2 text-sm font-semibold">What gets sent</h3>
+                <h3 className="mb-2 text-sm font-semibold">{t('whatGetsSent')}</h3>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="grid gap-1.5">
-                    <Label className="text-xs">Wrap under key (optional)</Label>
+                    <Label className="text-xs">{t('wrapKey')}</Label>
                     <Input
                       value={wrapKey}
-                      placeholder="e.g. data"
+                      placeholder={t('wrapKeyPlaceholder')}
                       className="h-8"
                       onChange={(e) => setWrapKey(e.target.value)}
                     />
@@ -1265,7 +1277,7 @@ export function HookBuilder() {
                   <div className="mt-2 space-y-2">
                     <div>
                       <p className="text-muted-foreground mb-1 text-xs">
-                        Schema (types)
+                        {t('schemaTypes')}
                       </p>
                       <pre className="bg-muted max-h-40 overflow-auto rounded-md p-2 font-mono text-[11px] leading-relaxed">
                         {JSON.stringify(preview.schema, null, 2)}
@@ -1273,7 +1285,7 @@ export function HookBuilder() {
                     </div>
                     <div>
                       <p className="text-muted-foreground mb-1 text-xs">
-                        Sample payload (one row)
+                        {t('samplePayload')}
                       </p>
                       <pre className="bg-muted max-h-48 overflow-auto rounded-md p-2 font-mono text-[11px] leading-relaxed">
                         {JSON.stringify(preview.body, null, 2)}
@@ -1282,19 +1294,19 @@ export function HookBuilder() {
                   </div>
                 ) : (
                   <p className="text-muted-foreground mt-2 text-xs">
-                    Select a table and include at least one column to preview.
+                    {t('previewHint')}
                   </p>
                 )}
               </section>
 
               {/* destination */}
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold">Destination</h3>
+                <h3 className="text-sm font-semibold">{t('destination')}</h3>
                 <div className="flex overflow-hidden rounded-md border text-xs">
                   {(
                     [
-                      ['http', 'HTTP endpoint'],
-                      ['database', 'Database'],
+                      ['http', t('httpEndpoint')],
+                      ['database', t('database')],
                     ] as const
                   ).map(([k, label]) => (
                     <button
@@ -1380,16 +1392,16 @@ export function HookBuilder() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No auth</SelectItem>
-                    <SelectItem value="bearer">Bearer token</SelectItem>
-                    <SelectItem value="header">Custom header</SelectItem>
+                    <SelectItem value="none">{t('authNone')}</SelectItem>
+                    <SelectItem value="bearer">{t('authBearer')}</SelectItem>
+                    <SelectItem value="header">{t('authHeader')}</SelectItem>
                   </SelectContent>
                 </Select>
                 {dest.authType === 'bearer' && (
                   <Input
                     type="password"
                     className="h-8"
-                    placeholder="Token"
+                    placeholder={t('token')}
                     value={dest.authToken}
                     onChange={(e) =>
                       setDest((d) => ({ ...d, authToken: e.target.value }))
@@ -1412,7 +1424,7 @@ export function HookBuilder() {
                     <Input
                       className="h-8"
                       type="password"
-                      placeholder="Value"
+                      placeholder={t('value')}
                       value={dest.authHeaderValue}
                       onChange={(e) =>
                         setDest((d) => ({
@@ -1431,7 +1443,7 @@ export function HookBuilder() {
                   >
                     <Input
                       className="h-8"
-                      placeholder="Header"
+                      placeholder={t('header')}
                       value={h.key}
                       onChange={(e) =>
                         setDest((d) => ({
@@ -1444,7 +1456,7 @@ export function HookBuilder() {
                     />
                     <Input
                       className="h-8"
-                      placeholder="Value"
+                      placeholder={t('value')}
                       value={h.value}
                       onChange={(e) =>
                         setDest((d) => ({
@@ -1481,12 +1493,12 @@ export function HookBuilder() {
                     }))
                   }
                 >
-                  <Plus className="mr-1 h-3.5 w-3.5" /> Header
+                  <Plus className="mr-1 h-3.5 w-3.5" /> {t('header')}
                 </Button>
 
                 <label className="flex items-center justify-between rounded-md border p-2.5">
                   <span className="text-xs">
-                    Send <code>Idempotency-Key</code>
+                    {t('send')} <code>Idempotency-Key</code>
                   </span>
                   <Switch
                     checked={dest.idempotency}
@@ -1501,11 +1513,11 @@ export function HookBuilder() {
 
               {/* delivery */}
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold">Delivery</h3>
+                <h3 className="text-sm font-semibold">{t('delivery')}</h3>
                 <div className="grid grid-cols-2 gap-2">
                   {builderKind === 'job' && (
                     <NumField
-                      label="Batch size"
+                      label={t('batchSize')}
                       value={delivery.batchSize}
                       min={1}
                       onChange={(v) =>
@@ -1514,7 +1526,7 @@ export function HookBuilder() {
                     />
                   )}
                   <NumField
-                    label="Max attempts"
+                    label={t('maxAttempts')}
                     value={delivery.maxAttempts}
                     min={1}
                     onChange={(v) =>
@@ -1523,7 +1535,7 @@ export function HookBuilder() {
                   />
                   {builderKind === 'job' && (
                     <NumField
-                      label="Delay between (ms)"
+                      label={t('delayBetween')}
                       value={delivery.minDelayMs}
                       min={0}
                       onChange={(v) =>
@@ -1532,7 +1544,7 @@ export function HookBuilder() {
                     />
                   )}
                   <NumField
-                    label="Timeout (ms)"
+                    label={t('timeout')}
                     value={delivery.timeoutMs}
                     min={100}
                     onChange={(v) =>
@@ -1543,7 +1555,7 @@ export function HookBuilder() {
                 {/* on-failure abort is a job concept. a listener must never stop on one bad delivery */}
                 {builderKind === 'job' && (
                   <div className="grid gap-1.5">
-                    <Label className="text-xs">On failure</Label>
+                    <Label className="text-xs">{t('onFailure')}</Label>
                     <Select
                       value={delivery.onError}
                       onValueChange={(v) =>
@@ -1558,9 +1570,9 @@ export function HookBuilder() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="continue">
-                          Log &amp; continue
+                          {t('logContinue')}
                         </SelectItem>
-                        <SelectItem value="abort">Stop the run</SelectItem>
+                        <SelectItem value="abort">{t('stopRun')}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1619,6 +1631,7 @@ function DbTargetsEditor({
   sourceColumns: string[];
   sourcePk: string | null;
 }) {
+  const t = useTranslations('hookBuilder');
   const patch = (i: number, p: Partial<DbTarget>) =>
     setTargets((prev) => prev.map((t, j) => (j === i ? { ...t, ...p } : t)));
   const add = () =>
@@ -1632,9 +1645,7 @@ function DbTargetsEditor({
   return (
     <div className="space-y-2">
       <p className="text-muted-foreground text-[11px]">
-        Write each row into one or more databases. <strong>Upsert</strong> keeps
-        targets in sync with no duplicates, even on replays. Cross-engine is
-        supported (e.g. Postgres → MySQL or MongoDB).
+        {t('dbDescPre')} <strong>{t('dbDescUpsert')}</strong> {t('dbDescPost')}
       </p>
       {targets.map((t, i) => (
         <DbTargetCard
@@ -1646,7 +1657,7 @@ function DbTargetsEditor({
         />
       ))}
       <Button variant="outline" size="sm" className="h-7" onClick={add}>
-        <Plus className="mr-1 h-3.5 w-3.5" /> Add target database
+        <Plus className="mr-1 h-3.5 w-3.5" /> {t('addTargetDb')}
       </Button>
     </div>
   );
@@ -1663,6 +1674,7 @@ function DbTargetCard({
   onChange: (patch: Partial<DbTarget>) => void;
   onRemove?: () => void;
 }) {
+  const t = useTranslations('hookBuilder');
   const { data: connections } = useConnections();
   const { data: databases } = useDatabases(target.connectionId || null);
   const { data: schemaData } = useSchema(
@@ -1697,12 +1709,12 @@ function DbTargetCard({
           }
         >
           <SelectTrigger className="h-8 flex-1">
-            <SelectValue placeholder="Target connection" />
+            <SelectValue placeholder={t('targetConnection')} />
           </SelectTrigger>
           <SelectContent>
             {(connections?.length ?? 0) === 0 && (
               <div className="text-muted-foreground px-2 py-1.5 text-xs">
-                No connections yet
+                {t('noConnections')}
               </div>
             )}
             {connections?.map((c) => (
@@ -1721,7 +1733,7 @@ function DbTargetCard({
             size="icon"
             className="h-8 w-8 shrink-0"
             onClick={onRemove}
-            title="Remove this target"
+            title={t('removeTarget')}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -1740,7 +1752,7 @@ function DbTargetCard({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__default">(default db)</SelectItem>
+              <SelectItem value="__default">{t('defaultDb')}</SelectItem>
               {databases?.map((d) => (
                 <SelectItem key={d} value={d}>
                   {d}
@@ -1752,7 +1764,7 @@ function DbTargetCard({
         {conn?.engine === 'postgres' && (
           <Input
             className="h-8"
-            placeholder="schema (e.g. public)"
+            placeholder={t('schemaPlaceholder')}
             value={target.schema}
             onChange={(e) => onChange({ schema: e.target.value })}
           />
@@ -1760,11 +1772,11 @@ function DbTargetCard({
       </div>
 
       <div className="grid gap-1.5">
-        <Label className="text-xs">Target table / collection</Label>
+        <Label className="text-xs">{t('targetTable')}</Label>
         <Input
           className="h-8"
           list={`tables-${target.connectionId}`}
-          placeholder="existing or new table name"
+          placeholder={t('tableNamePlaceholder')}
           value={target.table}
           onChange={(e) => onChange({ table: e.target.value })}
         />
@@ -1777,7 +1789,7 @@ function DbTargetCard({
 
       <div className="grid grid-cols-2 gap-2">
         <div className="grid gap-1.5">
-          <Label className="text-xs">Write mode</Label>
+          <Label className="text-xs">{t('writeMode')}</Label>
           <Select
             value={target.writeMode}
             onValueChange={(v) =>
@@ -1788,13 +1800,13 @@ function DbTargetCard({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="upsert">Upsert (no duplicates)</SelectItem>
-              <SelectItem value="insert">Insert (append)</SelectItem>
+              <SelectItem value="upsert">{t('upsertOpt')}</SelectItem>
+              <SelectItem value="insert">{t('insertOpt')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <label className="flex items-end justify-between gap-2 pb-1">
-          <span className="text-xs">Create table if missing</span>
+          <span className="text-xs">{t('createIfMissing')}</span>
           <Switch
             checked={target.createMissingTable}
             onCheckedChange={(v) => onChange({ createMissingTable: v })}
@@ -1805,15 +1817,15 @@ function DbTargetCard({
       {target.writeMode === 'upsert' && (
         <div className="grid gap-1.5">
           <Label className="text-xs">
-            Key columns{' '}
+            {t('keyColumns')}{' '}
             <span className="text-muted-foreground">
-              (match rows on — required for upsert)
+              {t('keyColumnsHint')}
             </span>
           </Label>
           <div className="flex flex-wrap gap-1.5">
             {targetNames.length === 0 && (
               <span className="text-muted-foreground text-[11px]">
-                Select source columns first.
+                {t('selectSourceFirst')}
               </span>
             )}
             {targetNames.map((name) => {
@@ -1841,13 +1853,13 @@ function DbTargetCard({
         onClick={() => setShowMap((s) => !s)}
         className="text-muted-foreground hover:text-foreground text-[11px] underline"
       >
-        {showMap ? 'Hide column mapping' : 'Map / rename columns'}
+        {showMap ? t('hideMapping') : t('mapRename')}
       </button>
       {showMap && (
         <div className="grid gap-1 rounded-md border p-2">
           <div className="text-muted-foreground grid grid-cols-2 gap-2 text-[10px] uppercase">
-            <span>Source column</span>
-            <span>Target column</span>
+            <span>{t('sourceColumn')}</span>
+            <span>{t('targetColumn')}</span>
           </div>
           {sourceColumns.map((s) => (
             <div key={s} className="grid grid-cols-2 items-center gap-2">

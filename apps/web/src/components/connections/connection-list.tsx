@@ -1,6 +1,7 @@
 'use client';
 
 import { MoreVertical, Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { useConnections, useDeleteConnection } from '@/lib/queries';
@@ -18,6 +19,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function ConnectionList() {
+  const t = useTranslations('connections');
+  const tc = useTranslations('common');
   const { data: connections, isLoading } = useConnections();
   const { activeConnectionId, setActiveConnection, openConnectionDialog } =
     useStudio();
@@ -26,9 +29,9 @@ export function ConnectionList() {
   async function handleTest(id: string) {
     try {
       await api.testSavedConnection(id);
-      toast.success('Connection successful');
+      toast.success(t('successful'));
     } catch (err) {
-      toast.error('Connection failed', {
+      toast.error(t('failed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -38,9 +41,9 @@ export function ConnectionList() {
     try {
       await del.mutateAsync(id);
       if (activeConnectionId === id) setActiveConnection(null);
-      toast.success('Connection removed');
+      toast.success(t('removed'));
     } catch (err) {
-      toast.error('Could not delete', {
+      toast.error(t('deleteFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -50,13 +53,13 @@ export function ConnectionList() {
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Connections
+          {t('title')}
         </span>
         <Button
           variant="ghost"
           size="icon"
           className="h-6 w-6"
-          aria-label="New connection"
+          aria-label={t('new')}
           onClick={() => openConnectionDialog()}
         >
           <Plus className="h-4 w-4" />
@@ -74,9 +77,9 @@ export function ConnectionList() {
             onClick={() => openConnectionDialog()}
             className="w-full rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground hover:bg-accent"
           >
-            No connections yet.
+            {t('noneYet')}
             <br />
-            Click to add one.
+            {t('clickToAdd')}
           </button>
         )}
 
@@ -118,19 +121,19 @@ export function ConnectionList() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onClick={() => handleTest(conn.id)}>
-                    <PlugZap className="mr-2 h-4 w-4" /> Test
+                    <PlugZap className="mr-2 h-4 w-4" /> {tc('test')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => openConnectionDialog(conn.id)}
                   >
-                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                    <Pencil className="mr-2 h-4 w-4" /> {tc('edit')}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
                     onClick={() => handleDelete(conn.id)}
                   >
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete
+                    <Trash2 className="mr-2 h-4 w-4" /> {tc('delete')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

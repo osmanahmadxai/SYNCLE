@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   Background,
   Controls,
@@ -66,6 +67,7 @@ function ConnectionNode({ data }: NodeProps<Node<ConnNodeData>>) {
 }
 
 function BridgeNode({ data }: NodeProps<Node<BridgeNodeData>>) {
+  const t = useTranslations('workspaceMap');
   const Icon = data.kind === 'replay' ? Zap : Radio;
   return (
     <div
@@ -87,7 +89,11 @@ function BridgeNode({ data }: NodeProps<Node<BridgeNodeData>>) {
       </div>
       <div className="text-muted-foreground mt-1 flex items-center gap-1 text-[10px]">
         <Icon className="h-3 w-3" />
-        {data.kind === 'replay' ? 'on-demand' : data.kind === 'cdc' ? 'CDC' : 'watch'}
+        {data.kind === 'replay'
+          ? t('kindOnDemand')
+          : data.kind === 'cdc'
+            ? 'CDC'
+            : t('kindWatch')}
       </div>
       <Handle type="source" position={Position.Right} className="!bg-primary" />
     </div>
@@ -213,6 +219,7 @@ function buildGraph(
 }
 
 export function WorkspaceMap() {
+  const t = useTranslations('workspaceMap');
   const { data: hooks, isLoading } = useHooks();
   const { data: connections } = useConnections();
   const { data: statuses } = useHookStatuses();
@@ -236,7 +243,7 @@ export function WorkspaceMap() {
   if (isLoading) {
     return (
       <div className="text-muted-foreground flex h-full items-center justify-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading workspace…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t('loadingWorkspace')}
       </div>
     );
   }
@@ -246,21 +253,20 @@ export function WorkspaceMap() {
       <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 text-center">
         <Network className="h-10 w-10 opacity-40" />
         <div>
-          <p className="text-sm">No bridges in this workspace yet</p>
+          <p className="text-sm">{t('noBridges')}</p>
           <p className="text-xs">
-            A bridge moves data from a database to an endpoint.{' '}
+            {t('description')}{' '}
             <button
               className="text-primary hover:underline"
               onClick={() => openHookEditor()}
             >
-              Create one
+              {t('createOne')}
             </button>
-            .
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={() => openHookEditor()}>
           <Plus className="mr-1.5 h-3.5 w-3.5" />
-          New bridge
+          {t('newBridge')}
         </Button>
       </div>
     );

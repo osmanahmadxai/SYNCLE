@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Loader2, PlugZap } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ConnectionInputDTO, DatabaseEngine } from '@syncle/core';
@@ -35,6 +36,8 @@ import {
 type FormState = Record<string, string> & { name?: string; ssl?: string };
 
 export function ConnectionDialog() {
+  const t = useTranslations('connections');
+  const tc = useTranslations('common');
   const { dialog, closeConnectionDialog } = useStudio();
   const { data: drivers } = useDrivers();
   const create = useCreateConnection();
@@ -72,12 +75,13 @@ export function ConnectionDialog() {
       },
       (err) => {
         // don't silently show new-connection defaults for an edit
-        toast.error('Could not load connection', {
+        toast.error(t('loadFailed'), {
           description: err instanceof ApiError ? err.message : String(err),
         });
         closeConnectionDialog();
       },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialog.open, editing, closeConnectionDialog]);
 
   const driver = useMemo(
@@ -104,9 +108,9 @@ export function ConnectionDialog() {
     setTesting(true);
     try {
       await api.testConnection(buildPayload());
-      toast.success('Connection successful');
+      toast.success(t('successful'));
     } catch (err) {
-      toast.error('Connection failed', {
+      toast.error(t('failed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -119,14 +123,14 @@ export function ConnectionDialog() {
     try {
       if (editing) {
         await update.mutateAsync({ id: editing, input: payload });
-        toast.success('Connection updated');
+        toast.success(t('updated'));
       } else {
         await create.mutateAsync(payload);
-        toast.success('Connection created');
+        toast.success(t('created'));
       }
       closeConnectionDialog();
     } catch (err) {
-      toast.error('Could not save', {
+      toast.error(t('saveFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -142,26 +146,26 @@ export function ConnectionDialog() {
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle>
-            {editing ? 'Edit connection' : 'New connection'}
+            {editing ? t('edit') : t('new')}
           </DialogTitle>
           <DialogDescription>
-            Credentials are encrypted at rest. Nothing leaves your machine.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="name">Display name</Label>
+            <Label htmlFor="name">{t('displayName')}</Label>
             <Input
               id="name"
               value={form.name ?? ''}
-              placeholder="My database"
+              placeholder={t('displayNamePlaceholder')}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </div>
 
           <div className="grid gap-2">
-            <Label>Engine</Label>
+            <Label>{t('engine')}</Label>
             <Select
               value={engine}
               onValueChange={(v) => setEngine(v as DatabaseEngine)}
@@ -212,9 +216,9 @@ export function ConnectionDialog() {
           {engine !== 'sqlite' && (
             <div className="flex items-center justify-between rounded-md border p-3">
               <div>
-                <Label htmlFor="ssl">Use TLS / SSL</Label>
+                <Label htmlFor="ssl">{t('useTls')}</Label>
                 <p className="text-xs text-muted-foreground">
-                  Encrypt the connection to the server.
+                  {t('useTlsHint')}
                 </p>
               </div>
               <Switch id="ssl" checked={ssl} onCheckedChange={setSsl} />
@@ -229,15 +233,15 @@ export function ConnectionDialog() {
             ) : (
               <PlugZap className="mr-2 h-4 w-4" />
             )}
-            Test
+            {tc('test')}
           </Button>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={closeConnectionDialog}>
-              Cancel
+              {tc('cancel')}
             </Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {editing ? 'Save' : 'Create'}
+              {editing ? tc('save') : tc('create')}
             </Button>
           </div>
         </DialogFooter>

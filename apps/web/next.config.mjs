@@ -1,7 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import createNextIntlPlugin from 'next-intl/plugin';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+// Wires up next-intl. Locale + messages are resolved per request in
+// src/i18n/request.ts (cookie-based, no i18n routing).
+const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -17,4 +22,4 @@ const nextConfig = {
   poweredByHeader: false,
 };
 
-export default nextConfig;
+export default withNextIntl(nextConfig);
