@@ -1,0 +1,156 @@
+<svg width="960" height="320" viewBox="0 0 960 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated diagram: rows flow live from a source database across a Syncle bridge to MongoDB, Redis and MySQL destinations">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="960" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#101A30"/>
+    </linearGradient>
+    <linearGradient id="bridge" x1="200" y1="0" x2="760" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="0.5" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+
+  <!-- card -->
+  <rect width="960" height="320" rx="16" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="959" height="319" rx="15.5" stroke="#293548" stroke-opacity="0.8"/>
+
+  <!-- faint dotted grid -->
+  <g fill="#3B4A63" opacity="0.25">
+    <circle cx="80" cy="60" r="1.2"/><circle cx="240" cy="40" r="1.2"/><circle cx="420" cy="70" r="1.2"/>
+    <circle cx="620" cy="45" r="1.2"/><circle cx="820" cy="65" r="1.2"/><circle cx="140" cy="270" r="1.2"/>
+    <circle cx="360" cy="285" r="1.2"/><circle cx="560" cy="275" r="1.2"/><circle cx="760" cy="290" r="1.2"/>
+    <circle cx="900" cy="250" r="1.2"/><circle cx="60" cy="160" r="1.2"/><circle cx="905" cy="140" r="1.2"/>
+  </g>
+
+  <!-- headline -->
+  <text x="480" y="52" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="26" font-weight="800" letter-spacing="6" fill="#E2E8F0">SYNCLE</text>
+  <text x="480" y="76" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#94A3B8">any engine → any engine · draw a bridge, rows flow live</text>
+
+  <!-- glow behind bridge center -->
+  <ellipse cx="480" cy="185" rx="230" ry="90" fill="url(#glow)"/>
+
+  <!-- ═══ SOURCE ═══ -->
+  <g>
+    <rect x="48" y="140" width="168" height="92" rx="12" fill="#111C33" stroke="#6366F1" stroke-opacity="0.7"/>
+    <!-- db cylinder icon -->
+    <g transform="translate(72,162)">
+      <ellipse cx="16" cy="6" rx="16" ry="6" fill="none" stroke="#818CF8" stroke-width="2"/>
+      <path d="M0 6 V30 C0 33.3 7.2 36 16 36 C24.8 36 32 33.3 32 30 V6" fill="none" stroke="#818CF8" stroke-width="2"/>
+      <path d="M0 18 C0 21.3 7.2 24 16 24 C24.8 24 32 21.3 32 18" fill="none" stroke="#818CF8" stroke-width="2" opacity="0.6"/>
+    </g>
+    <text x="120" y="176" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#E2E8F0">PostgreSQL</text>
+    <text x="120" y="194" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" fill="#7C89A6">source · CDC live</text>
+    <!-- heartbeat dot -->
+    <circle cx="200" cy="154" r="4" fill="#34D399">
+      <animate attributeName="opacity" values="1;0.25;1" dur="1.6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ═══ BRIDGE PATHS ═══ -->
+  <path id="lane1" d="M216 172 C 340 130, 600 110, 744 138" stroke="url(#bridge)" stroke-width="2" stroke-opacity="0.35" fill="none"/>
+  <path id="lane2" d="M216 186 C 360 186, 600 186, 744 186" stroke="url(#bridge)" stroke-width="2" stroke-opacity="0.35" fill="none"/>
+  <path id="lane3" d="M216 200 C 340 244, 600 262, 744 236" stroke="url(#bridge)" stroke-width="2" stroke-opacity="0.35" fill="none"/>
+
+  <!-- traveling rows: lane 1 -->
+  <g>
+    <circle r="4" fill="#22D3EE" filter="url(#soft)">
+      <animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#lane1"/></animateMotion>
+    </circle>
+    <circle r="2.5" fill="#A5F3FC">
+      <animateMotion dur="2.8s" begin="0.9s" repeatCount="indefinite"><mpath href="#lane1"/></animateMotion>
+    </circle>
+    <circle r="2.5" fill="#818CF8">
+      <animateMotion dur="2.8s" begin="1.8s" repeatCount="indefinite"><mpath href="#lane1"/></animateMotion>
+    </circle>
+  </g>
+  <!-- traveling rows: lane 2 -->
+  <g>
+    <circle r="4" fill="#34D399" filter="url(#soft)">
+      <animateMotion dur="2.4s" begin="0.4s" repeatCount="indefinite"><mpath href="#lane2"/></animateMotion>
+    </circle>
+    <circle r="2.5" fill="#6EE7B7">
+      <animateMotion dur="2.4s" begin="1.4s" repeatCount="indefinite"><mpath href="#lane2"/></animateMotion>
+    </circle>
+  </g>
+  <!-- traveling rows: lane 3 -->
+  <g>
+    <circle r="4" fill="#F472B6" filter="url(#soft)">
+      <animateMotion dur="3.1s" begin="0.2s" repeatCount="indefinite"><mpath href="#lane3"/></animateMotion>
+    </circle>
+    <circle r="2.5" fill="#FBCFE8">
+      <animateMotion dur="3.1s" begin="1.7s" repeatCount="indefinite"><mpath href="#lane3"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- op chips riding the lanes -->
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="9" font-weight="700">
+    <g>
+      <animateMotion dur="5.6s" repeatCount="indefinite"><mpath href="#lane1"/></animateMotion>
+      <rect x="-24" y="-22" width="48" height="15" rx="7.5" fill="#0B1220" stroke="#22D3EE" stroke-opacity="0.8"/>
+      <text x="0" y="-11" text-anchor="middle" fill="#22D3EE">INSERT</text>
+    </g>
+    <g>
+      <animateMotion dur="5.6s" begin="1.9s" repeatCount="indefinite"><mpath href="#lane2"/></animateMotion>
+      <rect x="-26" y="-22" width="52" height="15" rx="7.5" fill="#0B1220" stroke="#34D399" stroke-opacity="0.8"/>
+      <text x="0" y="-11" text-anchor="middle" fill="#34D399">UPDATE</text>
+    </g>
+    <g>
+      <animateMotion dur="5.6s" begin="3.8s" repeatCount="indefinite"><mpath href="#lane3"/></animateMotion>
+      <rect x="-24" y="-22" width="48" height="15" rx="7.5" fill="#0B1220" stroke="#F472B6" stroke-opacity="0.8"/>
+      <text x="0" y="-11" text-anchor="middle" fill="#F472B6">DELETE</text>
+    </g>
+  </g>
+
+  <!-- ═══ DESTINATIONS ═══ -->
+  <g font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+    <!-- MongoDB -->
+    <g>
+      <rect x="744" y="112" width="168" height="52" rx="10" fill="#111C33" stroke="#34D399" stroke-opacity="0.7">
+        <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2.8s" repeatCount="indefinite"/>
+      </rect>
+      <path d="M770 126 C 782 134, 782 150, 770 158 C 758 150, 758 134, 770 126 Z" fill="none" stroke="#6EE7B7" stroke-width="2"/>
+      <text x="794" y="134" font-size="13" font-weight="700" fill="#E2E8F0">MongoDB</text>
+      <text x="794" y="150" font-size="10.5" fill="#7C89A6">upsert · no duplicates</text>
+    </g>
+    <!-- Redis -->
+    <g>
+      <rect x="744" y="160" width="168" height="52" rx="10" fill="#111C33" stroke="#22D3EE" stroke-opacity="0.7">
+        <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2.4s" begin="0.4s" repeatCount="indefinite"/>
+      </rect>
+      <g stroke="#67E8F9" stroke-width="2" fill="none">
+        <path d="M758 180 L770 175 L782 180 L770 185 Z"/>
+        <path d="M758 188 L770 183 M770 193 L782 188 M758 188 L770 193"/>
+      </g>
+      <text x="794" y="182" font-size="13" font-weight="700" fill="#E2E8F0">Redis</text>
+      <text x="794" y="198" font-size="10.5" fill="#7C89A6">key-value · live</text>
+    </g>
+    <!-- MySQL -->
+    <g>
+      <rect x="744" y="208" width="168" height="52" rx="10" fill="#111C33" stroke="#F472B6" stroke-opacity="0.7">
+        <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="3.1s" begin="0.2s" repeatCount="indefinite"/>
+      </rect>
+      <g transform="translate(756,222)">
+        <ellipse cx="14" cy="5" rx="14" ry="5" fill="none" stroke="#F9A8D4" stroke-width="2"/>
+        <path d="M0 5 V19 C0 21.8 6.3 24 14 24 C21.7 24 28 21.8 28 19 V5" fill="none" stroke="#F9A8D4" stroke-width="2"/>
+      </g>
+      <text x="794" y="230" font-size="13" font-weight="700" fill="#E2E8F0">MySQL</text>
+      <text x="794" y="246" font-size="10.5" fill="#7C89A6">auto-created table</text>
+    </g>
+  </g>
+
+  <!-- footer strip -->
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11">
+    <text x="480" y="300" text-anchor="middle" fill="#64748B">
+      replay · watch · CDC&#160;&#160;│&#160;&#160;exactly-once&#160;&#160;│&#160;&#160;PostgreSQL · MySQL · SQLite · MongoDB · Redis · HTTP
+      <animate attributeName="opacity" values="0.7;1;0.7" dur="4s" repeatCount="indefinite"/>
+    </text>
+  </g>
+</svg>
