@@ -207,3 +207,89 @@ describe('rowKey', () => {
     expect(rowKey({ id: 1 }, ['id'])).not.toBe(rowKey({ id: 2 }, ['id']));
   });
 });
+
+describe('timestamp lookback window', () => {
+  const TSL: TimestampStrategy = {
+    strategy: 'timestamp',
+    column: 'updated_at',
+    lookbackMs: 5000,
+  };
+
+  it('queries a window behind the cursor instead of the exact boundary', () => {
+    const cursor = {
+      strategy: 'timestamp' as const,
+      ts: '2026-01-01T00:00:10.000Z',
+      boundaryKeys: [],
+    };
+    const q = watchQuery(TSL, cursor, ['id']);
+    expect(q.filters).toEqual([
+      { column: 'updated_at', operator: 'gte', value: '2026-01-01T00:00:05.000Z' },
+    ]);
+    // numeric cursors stay numeric
+    const qn = watchQuery(TSL, { ...cursor, ts: 10_000 }, ['id']);
+    expect(qn.filters[0]!.value).toBe(5000);
+  });
+
+  it('keys every row inside the window so the overlap re-fetch dedupes', () => {
+    const rows = [
+      { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
+      { id: 2, updated_at: '2026-01-01T00:00:09.000Z' },
+      { id: 3, updated_at: '2026-01-01T00:00:10.000Z' },
+    ];
+    const first = advanceCursor(TSL, emptyCursor(TSL), rows, ['id']);
+    expect(first.newRows).toHaveLength(3);
+    // all three rows fall within 5s of the max — all are remembered
+    expect(
+      (first.cursor as { boundaryKeys: string[] }).boundaryKeys,
+    ).toHaveLength(3);
+
+    // the next poll re-fetches the window; nothing re-emits, and a genuinely
+    // late-committing row that appeared inside the window IS emitted
+    const late = { id: 4, updated_at: '2026-01-01T00:00:07.000Z' };
+    const second = advanceCursor(TSL, first.cursor, [...rows, late], ['id']);
+    expect(second.newRows.map((r) => r.id)).toEqual([4]);
+  });
+
+  it('without lookback only exact-boundary rows are keyed (legacy behavior)', () => {
+    const rows = [
+      { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
+      { id: 2, updated_at: '2026-01-01T00:00:10.000Z' },
+    ];
+    const r = advanceCursor(TS, emptyCursor(TS), rows, ['id']);
+    expect((r.cursor as { boundaryKeys: string[] }).boundaryKeys).toHaveLength(1);
+  });
+});
+
+describe('cursor column stamping', () => {
+  it('cursors carry the column they were read from', () => {
+    expect(emptyCursor(INC)).toMatchObject({ column: 'id' });
+    expect(emptyCursor(TS)).toMatchObject({ column: 'updated_at' });
+    const adv = advanceCursor(INC, emptyCursor(INC), [{ id: 7 }], ['id']);
+    expect(adv.cursor).toMatchObject({ column: 'id' });
+    const advTs = advanceCursor(
+      TS,
+      emptyCursor(TS),
+      [{ id: 1, updated_at: 100 }],
+      ['id'],
+    );
+    expect(advTs.cursor).toMatchObject({ column: 'updated_at' });
+  });
+});
+
+describe('watchQuery determinism', () => {
+  it('timestamp polls tiebreak on the primary key', () => {
+    const q = watchQuery(TS, emptyCursor(TS), ['id']);
+    expect(q.sort).toEqual([
+      { column: 'updated_at', direction: 'asc' },
+      { column: 'id', direction: 'asc' },
+    ]);
+  });
+
+  it('snapshot scans order by the primary key', () => {
+    const q = watchQuery(SNAP, emptyCursor(SNAP), ['a', 'b']);
+    expect(q.sort).toEqual([
+      { column: 'a', direction: 'asc' },
+      { column: 'b', direction: 'asc' },
+    ]);
+  });
+});

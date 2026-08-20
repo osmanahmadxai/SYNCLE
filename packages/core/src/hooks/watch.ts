@@ -30,6 +30,13 @@ export interface IncrementStrategy {
 export interface TimestampStrategy {
   strategy: 'timestamp';
   column: string;
+  /**
+   * re-scan this many ms behind the cursor each poll. covers transactions that
+   * set their timestamp early but commit late (their rows would otherwise land
+   * behind an already-advanced cursor and never be seen). the window's rows are
+   * deduped via `boundaryKeys`, so the overlap re-fetch never re-emits.
+   */
+  lookbackMs?: number;
 }
 export interface SnapshotStrategy {
   strategy: 'snapshot';
@@ -44,12 +51,19 @@ export type WatchStrategy =
 export interface IncrementCursor {
   strategy: 'increment';
   value: unknown;
+  /** the column this cursor value belongs to (guards against editing the strategy) */
+  column?: string;
 }
 export interface TimestampCursor {
   strategy: 'timestamp';
   ts: unknown;
-  /** row keys already emitted at exactly `ts` (dedupe on the `>=` re-fetch) */
+  /**
+   * row keys already emitted at `ts` — and, when a lookback window is
+   * configured, within the window behind it (dedupe on the `>=` re-fetch)
+   */
   boundaryKeys: string[];
+  /** the column this cursor value belongs to (guards against editing the strategy) */
+  column?: string;
 }
 export interface SnapshotCursor {
   strategy: 'snapshot';
@@ -101,6 +115,18 @@ function serializeTs(v: unknown): unknown {
   return v instanceof Date ? v.toISOString() : v;
 }
 
+/**
+ * `ts` shifted `ms` into the past, in a form comparable against the column
+ * (ISO string stays ISO, epoch number stays a number). values that don't
+ * normalize to a number are returned unchanged — no lookback is possible.
+ */
+function tsMinus(ts: unknown, ms: number): unknown {
+  const n = tsNorm(ts);
+  if (typeof n !== 'number') return ts;
+  if (typeof ts === 'number') return n - ms;
+  return new Date(n - ms).toISOString();
+}
+
 /* -------------------------------------------------------------------------- */
 /* engine                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -109,9 +135,9 @@ function serializeTs(v: unknown): unknown {
 export function emptyCursor(strategy: WatchStrategy): WatchCursor {
   switch (strategy.strategy) {
     case 'increment':
-      return { strategy: 'increment', value: null };
+      return { strategy: 'increment', value: null, column: strategy.column };
     case 'timestamp':
-      return { strategy: 'timestamp', ts: null, boundaryKeys: [] };
+      return { strategy: 'timestamp', ts: null, boundaryKeys: [], column: strategy.column };
     case 'snapshot':
       return { strategy: 'snapshot', seen: [] };
   }
@@ -143,10 +169,16 @@ export function watchQuery(
     const tiebreakers: SortSpec[] = pk
       .filter((c) => c !== strategy.column)
       .map((c) => ({ column: c, direction: 'asc' }));
+    // re-scan the lookback window behind the cursor so late-committing
+    // transactions (timestamp set early, commit after the cursor moved past
+    // it) are still picked up; boundaryKeys dedupes the overlap
+    const lookback = strategy.lookbackMs ?? 0;
+    const bound =
+      cursor.ts != null && lookback > 0 ? tsMinus(cursor.ts, lookback) : cursor.ts;
     return {
       filters:
         cursor.ts != null
-          ? [{ column: strategy.column, operator: 'gte', value: cursor.ts }]
+          ? [{ column: strategy.column, operator: 'gte', value: bound }]
           : [],
       sort: [{ column: strategy.column, direction: 'asc' }, ...tiebreakers],
     };
@@ -182,7 +214,7 @@ export function advanceCursor(
     }
     return {
       newRows: rows,
-      cursor: { strategy: 'increment', value },
+      cursor: { strategy: 'increment', value, column: strategy.column },
     };
   }
 
@@ -204,10 +236,22 @@ export function advanceCursor(
     if (maxTs == null) {
       return { newRows, cursor };
     }
-    // remember all rows at the boundary timestamp so the next `>=` poll can
-    // dedupe them
+    // remember all rows at the boundary timestamp — and, with a lookback
+    // window, every row inside the window behind it — so the next `>=` poll
+    // can dedupe the re-fetched overlap
+    const lookback = strategy.lookbackMs ?? 0;
+    const nMax = tsNorm(maxTs);
+    const inWindow = (v: unknown): boolean => {
+      if (v == null) return false;
+      if (tsEquals(v, maxTs)) return true;
+      if (lookback <= 0) return false;
+      const n = tsNorm(v);
+      return (
+        typeof n === 'number' && typeof nMax === 'number' && nMax - n <= lookback
+      );
+    };
     const boundaryKeys = rows
-      .filter((r) => tsEquals(r[strategy.column], maxTs))
+      .filter((r) => inWindow(r[strategy.column]))
       .map((r) => rowKey(r, pk));
     // when the boundary timestamp didn't move, this poll only saw a subset of
     // the rows at that instant — union with the keys already remembered so
@@ -221,6 +265,7 @@ export function advanceCursor(
         boundaryKeys: stalled
           ? [...new Set([...cursor.boundaryKeys, ...boundaryKeys])]
           : boundaryKeys,
+        column: strategy.column,
       },
     };
   }

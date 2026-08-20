@@ -595,7 +595,9 @@ export function HookBuilder() {
                 strategy:
                   watchStrategy === 'snapshot'
                     ? { strategy: 'snapshot', maxTracked: 50000 }
-                    : { strategy: watchStrategy, column: watchColumn },
+                    : watchStrategy === 'timestamp'
+                      ? { strategy: 'timestamp', column: watchColumn, lookbackMs: 3000 }
+                      : { strategy: 'increment', column: watchColumn },
                 pollIntervalMs: Math.max(1000, Math.round(pollSeconds * 1000)),
                 startFrom: watchStartFrom,
                 maxPerPoll: 500,
