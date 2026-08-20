@@ -41,7 +41,10 @@
       "usernameTooShort": "Username must be at least 3 characters.",
       "passwordTooShort": "Password must be at least 8 characters.",
       "passwordsNoMatch": "Passwords do not match.",
-      "couldNotCreate": "Could not create account"
+      "couldNotCreate": "Could not create account",
+      "token": "Setup token",
+      "tokenHint": "Printed in the server logs when Syncle starts — it proves you operate this server.",
+      "tokenMissing": "Enter the setup token from the server logs."
     }
   },
   "userMenu": {

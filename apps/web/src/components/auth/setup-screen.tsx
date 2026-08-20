@@ -25,6 +25,7 @@ export function SetupScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
@@ -42,9 +43,17 @@ export function SetupScreen() {
       setError(t('passwordsNoMatch'));
       return;
     }
+    if (!setupToken.trim()) {
+      setError(t('tokenMissing'));
+      return;
+    }
     setError(null);
     try {
-      await setup.mutateAsync({ username: username.trim(), password });
+      await setup.mutateAsync({
+        username: username.trim(),
+        password,
+        setupToken: setupToken.trim(),
+      });
     } catch (err) {
       const message =
         err instanceof ApiError ? err.message : tc('somethingWrong');
@@ -116,6 +125,16 @@ export function SetupScreen() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
               />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="setup-token">{t('token')}</Label>
+              <Input
+                id="setup-token"
+                autoComplete="off"
+                value={setupToken}
+                onChange={(e) => setSetupToken(e.target.value)}
+              />
+              <p className="text-muted-foreground text-xs">{t('tokenHint')}</p>
             </div>
             {error && <p className="text-destructive text-sm">{error}</p>}
             <Button type="submit" className="w-full" disabled={setup.isPending}>

@@ -41,7 +41,10 @@
       "usernameTooShort": "用户名至少 3 个字符。",
       "passwordTooShort": "密码至少 8 个字符。",
       "passwordsNoMatch": "两次输入的密码不一致。",
-      "couldNotCreate": "无法创建账号"
+      "couldNotCreate": "无法创建账号",
+      "token": "初始化令牌",
+      "tokenHint": "Syncle 启动时打印在服务器日志中——用于证明你是这台服务器的运维者。",
+      "tokenMissing": "请输入服务器日志中的初始化令牌。"
     }
   },
   "userMenu": {

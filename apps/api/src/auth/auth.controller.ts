@@ -46,9 +46,15 @@ export class AuthController {
   @Post('setup')
   async setup(
     @Body(new ZodValidationPipe(setupSchema)) dto: SetupDTO,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthUser> {
-    const user = await this.auth.setup(dto.username, dto.password);
+    const user = await this.auth.setup(
+      dto.username,
+      dto.password,
+      dto.setupToken,
+      req.ip ?? '',
+    );
     await this.auth.issueSession(res, user);
     return this.auth.toAuthUser(user);
   }
@@ -57,9 +63,10 @@ export class AuthController {
   @Post('login')
   async login(
     @Body(new ZodValidationPipe(loginSchema)) dto: LoginDTO,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthUser> {
-    const user = await this.auth.login(dto.username, dto.password);
+    const user = await this.auth.login(dto.username, dto.password, req.ip ?? '');
     await this.auth.issueSession(res, user);
     return this.auth.toAuthUser(user);
   }

@@ -30,6 +30,18 @@ export const runtimeConfig = {
   redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
   /** worker concurrency: how many hook runs may run in parallel */
   hookConcurrency: Number(process.env.SYNCLE_HOOK_CONCURRENCY ?? 5),
+  /**
+   * when true, HTTP destinations may not resolve to loopback/private/link-local
+   * addresses (SSRF guard for network-exposed deployments). off by default —
+   * Syncle is local-first and posting to localhost services is a primary use.
+   * cloud metadata endpoints are blocked regardless of this flag.
+   */
+  blockPrivateDestinations:
+    (process.env.SYNCLE_BLOCK_PRIVATE_DESTINATIONS ?? '') === 'true',
+  /** when set, SQLite connections may only open files under this directory */
+  sqliteBaseDir: process.env.SYNCLE_SQLITE_DIR
+    ? resolve(process.env.SYNCLE_SQLITE_DIR)
+    : null,
 } as const;
 
 /**
