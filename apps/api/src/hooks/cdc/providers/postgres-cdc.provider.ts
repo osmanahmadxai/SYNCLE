@@ -31,7 +31,7 @@ import {
 } from '../cdc-provider';
 
 /** compare Postgres LSNs ("H/L" hex). true if `a` is strictly after `b` */
-function lsnAfter(a: string, b: string | null): boolean {
+export function lsnAfter(a: string, b: string | null): boolean {
   if (!b) return true;
   try {
     const big = (l: string) => {
@@ -205,6 +205,10 @@ export class PostgresCdcProvider implements CdcProvider {
     let stopped = false;
     let current: LogicalReplicationService | null = null;
     let attempt = 0;
+    // highest LSN the orchestrator has durably checkpointed (seeded from the
+    // resume cursor). this is the ONLY position we ever confirm to the server,
+    // so the slot can never advance past a change that isn't persisted yet
+    let ackedLsn: string | null = ctx.fromCursor;
     // surface each distinct failure ONCE (a slot already in use, bad auth, …)
     // instead of spamming onError on every backoff retry
     let lastReported: string | null = null;
@@ -216,9 +220,23 @@ export class PostgresCdcProvider implements CdcProvider {
 
     const makeService = (): LogicalReplicationService => {
       const service = new LogicalReplicationService(this.clientConfig(conn, src.database), {
-        acknowledge: { auto: true, timeoutSeconds: 10 },
+        // manual acknowledge: auto-ack confirms an LSN on receipt, so a crash
+        // between receipt and the orchestrator persisting the cursor would
+        // silently lose that change (the slot had already moved past it).
+        // timeoutSeconds MUST be 0 too — the library's standby-status timer
+        // acks the last *received* LSN even with auto:false
+        acknowledge: { auto: false, timeoutSeconds: 0 },
         flowControl: { enabled: true }, // backpressure, await each delivery
       });
+
+      // messages we don't deliver are deterministically skippable (begin/
+      // commit/relation, disabled ops, other tables), and flow control has
+      // fully processed everything before them, so confirming their LSN is
+      // safe and keeps the slot from pinning WAL on a mostly-filtered stream
+      const ackSkipped = (lsn: string): void => {
+        ackedLsn = lsn;
+        void service.acknowledge(lsn).catch(() => undefined);
+      };
 
       service.on(
         'data',
@@ -235,9 +253,16 @@ export class PostgresCdcProvider implements CdcProvider {
           // data is flowing, so the subscription is healthy: reset the backoff
           attempt = 0;
           lastReported = null;
-          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') return;
-          if (!ops.has(msg.tag as CdcOperation)) return;
+          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') {
+            ackSkipped(lsn);
+            return;
+          }
+          if (!ops.has(msg.tag as CdcOperation)) {
+            ackSkipped(lsn);
+            return;
+          }
           if (!msg.relation || msg.relation.name !== src.table || msg.relation.schema !== schema) {
+            ackSkipped(lsn);
             return;
           }
           const row = msg.tag === 'delete' ? (msg.old ?? msg.key ?? {}) : (msg.new ?? {});
@@ -245,6 +270,15 @@ export class PostgresCdcProvider implements CdcProvider {
           await handlers.onChange(change);
         },
       );
+
+      // with the ack timer off, keepalive replies are our only standby-status
+      // traffic. reply with the last PERSISTED position (the server ignores
+      // stale ones) or wal_sender_timeout would kill an idle stream
+      service.on('heartbeat', (_lsn: string, _ts: number, shouldRespond: boolean) => {
+        if (shouldRespond && ackedLsn) {
+          void service.acknowledge(ackedLsn).catch(() => undefined);
+        }
+      });
 
       service.on('error', (err: Error) => report(err));
       return service;
@@ -275,6 +309,12 @@ export class PostgresCdcProvider implements CdcProvider {
     void loop().catch((err) => handlers.onError(err as Error));
 
     return {
+      // called by the orchestrator once the cursor for this change is durably
+      // persisted: only now may the slot's confirmed LSN move past the change
+      ack: async (cursor: string) => {
+        ackedLsn = cursor;
+        await current?.acknowledge(cursor).catch(() => undefined);
+      },
       stop: async () => {
         stopped = true;
         await current?.stop().catch(() => undefined);

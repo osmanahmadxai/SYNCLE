@@ -2,8 +2,9 @@
  * MySQL CDC via the binary log (row-based replication), read with
  * `@powersync/mysql-zongji`. Syncle registers as a replication client and
  * decodes Write/Update/Delete row events in real time. durable and resumable:
- * the cursor is the binlog `"file:position"`, so a restart resumes exactly
- * where it left off.
+ * the cursor is the binlog `"file:position:row"` (position of the statement's
+ * tablemap event), so a restart resumes exactly where it left off — even in
+ * the middle of a multi-row event.
  *
  * prereqs (checked by readiness): `log_bin=ON`, `binlog_format=ROW`,
  * `binlog_row_image=FULL`, and a user with `REPLICATION SLAVE` + `REPLICATION
@@ -38,6 +39,19 @@ interface ZongjiConn {
 /** row events we care about. `rotate`/`tablemap` are needed for bookkeeping */
 const ROW_EVENTS = new Set(['writerows', 'updaterows', 'deleterows']);
 
+/**
+ * byte offset where a binlog event STARTS. zongji's `size` is the payload
+ * length only — the on-disk event_length that `nextPosition` advances by also
+ * counts the 19-byte common header, plus a 4-byte CRC32 when the server runs
+ * with `binlog_checksum` (the default on modern MySQL).
+ */
+export function binlogEventStart(
+  evt: { nextPosition: number; size: number },
+  useChecksum: boolean,
+): number {
+  return evt.nextPosition - evt.size - (useChecksum ? 23 : 19);
+}
+
 @Injectable()
 export class MysqlCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'mysql';
@@ -45,33 +59,50 @@ export class MysqlCdcProvider implements CdcProvider {
 
   constructor(private readonly pool: AdapterPoolService) {}
 
-  /** compare "file:pos[:row]" cursors: filename, then position, then row index */
+  /**
+   * compare cursors: filename, then position, then row index. positions from
+   * the two formats can collide at one byte offset (an old cursor's END is
+   * where the next statement's tablemap STARTS), so a start-format cursor at
+   * the same offset as an end-format one is strictly after it.
+   */
   cursorAfter(a: string, b: string | null): boolean {
     if (!b) return true;
-    const [fa, pa, ra] = this.splitCursor(a);
-    const [fb, pb, rb] = this.splitCursor(b);
+    const [fa, pa, ra, sa] = this.splitCursor(a);
+    const [fb, pb, rb, sb] = this.splitCursor(b);
     if (fa !== fb) return fa > fb; // zero-padded binlog names compare lexically
     if (pa !== pb) return pa > pb;
+    if (sa !== sb) return sa;
     return ra > rb;
   }
 
   /**
-   * parse "file:pos:rowIdx" (or legacy "file:pos" persisted before per-row
-   * cursors existed — a missing row index compares as -1, so every row of the
-   * next multi-row event still counts as "after" the old watermark)
+   * parse a cursor into [file, pos, rowIdx, isStart]. three formats:
+   *  - "file:pos:rowIdx:s" (current) — pos is the START of the statement's
+   *    tablemap event, so a resume re-enters the statement and the row-index
+   *    watermark drops the already-delivered prefix
+   *  - "file:pos:rowIdx" (legacy) — pos is the END of the row event, which
+   *    on resume skipped the rest of a half-processed multi-row event
+   *  - "file:pos" (oldest) — no row index; compares as -1 so every row of the
+   *    next multi-row event still counts as "after" the old watermark
    */
-  private splitCursor(c: string): [string, number, number] {
-    const parts = c.split(':');
+  private splitCursor(c: string): [string, number, number, boolean] {
+    let rest = c;
+    let isStart = false;
+    if (rest.endsWith(':s')) {
+      rest = rest.slice(0, -2);
+      isStart = true;
+    }
+    const parts = rest.split(':');
     if (parts.length >= 3) {
       const row = Number(parts[parts.length - 1]);
       const pos = Number(parts[parts.length - 2]);
       if (Number.isFinite(row) && Number.isFinite(pos)) {
-        return [parts.slice(0, -2).join(':'), pos, row];
+        return [parts.slice(0, -2).join(':'), pos, row, isStart];
       }
     }
-    const idx = c.lastIndexOf(':');
-    if (idx < 0) return [c, 0, -1];
-    return [c.slice(0, idx), Number(c.slice(idx + 1)) || 0, -1];
+    const idx = rest.lastIndexOf(':');
+    if (idx < 0) return [rest, 0, -1, isStart];
+    return [rest.slice(0, idx), Number(rest.slice(idx + 1)) || 0, -1, isStart];
   }
 
   /* ----- connection details, zongji needs discrete fields ----- */
@@ -194,9 +225,19 @@ export class MysqlCdcProvider implements CdcProvider {
     let stopped = false;
     let zongji: ZongJi | null = null;
     let attempt = 0;
-    // resume bookkeeping: tracks the last processed binlog position so both the
+    // resume bookkeeping: tracks the last SAFE binlog position so both the
     // initial start AND every reconnect resume exactly where we left off
-    let [binlogName, position] = fromCursor ? this.splitCursor(fromCursor) : ['', 0, -1];
+    const resume = fromCursor ? this.splitCursor(fromCursor) : null;
+    let binlogName = resume?.[0] ?? '';
+    let position = resume?.[1] ?? 0;
+    // the statement group currently being decoded: `groupStart` is the byte
+    // offset of its tablemap event, `groupRow` a running row counter across
+    // the (possibly several) row events that follow it. cursors carry the
+    // tablemap start because a row event replayed WITHOUT its tablemap can't
+    // be decoded (zongji silently filters it) — resuming at the tablemap
+    // re-enters the statement and the row watermark drops the delivered prefix
+    let groupStart = -1;
+    let groupRow = 0;
 
     const onEvent = async (evt: BinLogEvent): Promise<void> => {
       const name = evt.getEventName();
@@ -208,6 +249,23 @@ export class MysqlCdcProvider implements CdcProvider {
           // rotate (binlogName still empty) must not fabricate a resume point
           if (binlogName) position = 4;
           binlogName = next;
+          groupStart = -1;
+          groupRow = 0;
+        }
+        return;
+      }
+      if (name === 'tablemap') {
+        // a new statement group begins. its tablemap is the safe re-entry
+        // point for every row event it covers, so it becomes the resume
+        // position until the next group starts
+        const start = binlogEventStart(
+          evt,
+          (zongji as unknown as { useChecksum?: boolean } | null)?.useChecksum === true,
+        );
+        if (start > 0) {
+          groupStart = start;
+          groupRow = 0;
+          position = start;
         }
         return;
       }
@@ -221,33 +279,42 @@ export class MysqlCdcProvider implements CdcProvider {
       };
       const meta = rowEvt.tableMap[rowEvt.tableId];
       if (!meta || meta.parentSchema !== db || meta.tableName !== src.table) {
-        position = rowEvt.nextPosition; // nothing to deliver, safe to skip on reconnect
-        return;
+        return; // nothing to deliver; the resume point stays on our last group
       }
 
       const op: CdcOperation =
         name === 'writerows' ? 'insert' : name === 'deleterows' ? 'delete' : 'update';
       if (!ops.has(op)) {
-        position = rowEvt.nextPosition;
+        // rows of a disabled operation still consume row indices, so the
+        // group counter stays aligned with the binlog on a replay
+        groupRow += rowEvt.rows.length;
         return;
       }
 
       // backpressure: pause the binlog socket while we deliver this batch
       if (zongji && !stopped) zongji.pause();
       try {
-        // per-ROW cursor: every row in a multi-row event needs its own position,
-        // otherwise the orchestrator's strict watermark drops rows 2..N
+        // per-ROW cursor: every row needs its own position, otherwise the
+        // orchestrator's strict watermark drops rows 2..N of a multi-row event
+        const startKnown = groupStart > 0;
         for (let i = 0; i < rowEvt.rows.length; i++) {
           const r = rowEvt.rows[i]!;
           const row =
             op === 'update'
               ? (r as { after: Record<string, unknown> }).after
               : (r as Record<string, unknown>);
-          await handlers.onChange({ op, row, cursor: `${binlogName}:${rowEvt.nextPosition}:${i}` });
+          const idx = groupRow++;
+          // defensive fallback: a row event with no seen tablemap (shouldn't
+          // happen) keeps the legacy end-position cursor format
+          const cursor = startKnown
+            ? `${binlogName}:${groupStart}:${idx}:s`
+            : `${binlogName}:${rowEvt.nextPosition}:${i}`;
+          await handlers.onChange({ op, row, cursor });
         }
-        // remember the resume point so a reconnect continues from here instead
-        // of silently jumping to the end of the binlog
-        position = rowEvt.nextPosition;
+        // the resume point stays at the group's tablemap: the statement may
+        // have more row events coming, and re-entering it mid-way is not
+        // decodable — replayed rows are dropped by the watermark instead
+        if (!startKnown) position = rowEvt.nextPosition;
       } finally {
         if (zongji && !stopped) zongji.resume();
       }
@@ -280,8 +347,9 @@ export class MysqlCdcProvider implements CdcProvider {
         serverId,
       };
       if (binlogName && position > 0) {
-        // resume from the last processed position — kept up to date by onEvent,
-        // so a mid-stream reconnect never loses the events in between
+        // resume from the last safe position — kept up to date by onEvent
+        // (the current statement's tablemap), so a mid-stream reconnect never
+        // loses the events in between and replayed rows still decode
         startOpts.filename = binlogName;
         startOpts.position = position;
       } else {

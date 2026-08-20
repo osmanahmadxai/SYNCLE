@@ -30,9 +30,9 @@ export interface CdcChange {
   row: Record<string, unknown>;
   /**
    * opaque engine-specific position string, used BOTH as the resume cursor and
-   * the idempotency seed. Postgres: LSN "H/L"; MySQL: "file:pos"; MongoDB:
-   * serialized resumeToken; Redis: synthetic, non-durable. orchestrator
-   * persists it verbatim and hands it back on resume.
+   * the idempotency seed. Postgres: LSN "H/L"; MySQL: "file:pos:row[:s]";
+   * MongoDB: serialized resumeToken; Redis: synthetic, non-durable.
+   * orchestrator persists it verbatim and hands it back on resume.
    */
   cursor: string;
 }
@@ -62,10 +62,27 @@ export interface CdcStreamContext {
 /** handle to a running stream so the orchestrator can stop it cleanly */
 export interface CdcStreamHandle {
   stop(): Promise<void>;
+  /**
+   * confirm to the SOURCE that everything up to and including `cursor` is
+   * durably checkpointed on our side. the orchestrator calls this only AFTER
+   * persisting the cursor, so engines with a server-side ack point (the
+   * Postgres slot's confirmed LSN) never advance it past unpersisted changes.
+   * best-effort: a missed ack just widens the at-least-once replay window,
+   * which the orchestrator's watermark dedupe absorbs. must not throw.
+   */
+  ack?(cursor: string): Promise<void>;
 }
 
 export interface CdcProvider {
   readonly engine: DatabaseEngine;
+
+  /**
+   * true when the provider applies the hook's source filters itself, with
+   * engine-native semantics (Redis: the `key` filter value is a glob applied
+   * at the subscription). the orchestrator then skips its own generic
+   * in-process filter evaluation for changes from this provider.
+   */
+  readonly handlesSourceFilters?: boolean;
 
   /**
    * can this engine/connection stream changes right now? drives the builder's
