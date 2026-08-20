@@ -236,33 +236,39 @@ export function advanceCursor(
     if (maxTs == null) {
       return { newRows, cursor };
     }
+    // the lookback window can hand back a page consisting purely of older,
+    // already-emitted rows — the cursor must never move backwards through them
+    const nextTs =
+      cursor.ts != null && !tsGreater(maxTs, cursor.ts) ? cursor.ts : maxTs;
     // remember all rows at the boundary timestamp — and, with a lookback
     // window, every row inside the window behind it — so the next `>=` poll
     // can dedupe the re-fetched overlap
     const lookback = strategy.lookbackMs ?? 0;
-    const nMax = tsNorm(maxTs);
+    const nNext = tsNorm(nextTs);
     const inWindow = (v: unknown): boolean => {
       if (v == null) return false;
-      if (tsEquals(v, maxTs)) return true;
+      if (tsEquals(v, nextTs)) return true;
       if (lookback <= 0) return false;
       const n = tsNorm(v);
       return (
-        typeof n === 'number' && typeof nMax === 'number' && nMax - n <= lookback
+        typeof n === 'number' && typeof nNext === 'number' && nNext - n <= lookback
       );
     };
     const boundaryKeys = rows
       .filter((r) => inWindow(r[strategy.column]))
       .map((r) => rowKey(r, pk));
-    // when the boundary timestamp didn't move, this poll only saw a subset of
-    // the rows at that instant — union with the keys already remembered so
-    // rows emitted by earlier polls at the same ts aren't re-delivered
-    const stalled = cursor.ts != null && tsEquals(maxTs, cursor.ts);
+    // keys remembered by earlier polls stay live for as long as their rows can
+    // still be re-fetched, i.e. until the cursor moves a full window past them.
+    // this poll may only have seen a subset of those rows (same-ts paging, a
+    // truncated page), so union — replacing would shed keys for overlap rows
+    // this page didn't contain and re-deliver them next poll
+    const carry = cursor.ts != null && inWindow(cursor.ts);
     return {
       newRows,
       cursor: {
         strategy: 'timestamp',
-        ts: serializeTs(maxTs),
-        boundaryKeys: stalled
+        ts: serializeTs(nextTs),
+        boundaryKeys: carry
           ? [...new Set([...cursor.boundaryKeys, ...boundaryKeys])]
           : boundaryKeys,
         column: strategy.column,

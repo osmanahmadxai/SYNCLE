@@ -9,7 +9,7 @@
  * (`watchQuery` / `advanceCursor`); this service is the I/O around it: fetch a
  * page, deliver the new rows, persist the advanced cursor.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
@@ -24,6 +24,7 @@ import {
   watchStrategySchema,
   type HookRun,
   type WatchCursor,
+  type WatchStrategyConfig,
 } from '@syncle/core';
 import { Queue } from 'bullmq';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
@@ -263,13 +264,10 @@ export class HookWatchService implements OnModuleInit {
           const now = new Date().toISOString();
           // idempotency keys on stable row identity, NOT the mutable sequence:
           // a crash that re-fetches this page redelivers under the same key so
-          // the receiver can dedupe. the tracked timestamp salts the key so a
-          // genuine later update of the same row still delivers fresh.
+          // the receiver can dedupe
           const idem =
             hook.destination.kind === 'http' && hook.destination.idempotency
-              ? strategy.strategy === 'timestamp'
-                ? `${run.id}:${rowKey(row, effPk)}:${String(row[strategy.column] ?? '')}`
-                : `${run.id}:${rowKey(row, effPk)}`
+              ? this.idempotencyKey(run.id, strategy, row, effPk)
               : undefined;
           const { outcome } = await this.sink.deliver(
             hook,
@@ -334,6 +332,27 @@ export class HookWatchService implements OnModuleInit {
     } finally {
       this.registry.release(run.id);
     }
+  }
+
+  /**
+   * idempotency key from stable row identity, salted with the tracked
+   * timestamp so a genuine later update of the same row still delivers fresh.
+   * hashed: raw pk values can carry characters that don't belong in an HTTP
+   * header (and composite keys can be arbitrarily long).
+   */
+  private idempotencyKey(
+    runId: string,
+    strategy: WatchStrategyConfig,
+    row: Record<string, unknown>,
+    pk: string[],
+  ): string {
+    const tracked = strategy.strategy === 'timestamp' ? row[strategy.column] : null;
+    const salt = tracked instanceof Date ? tracked.toISOString() : String(tracked ?? '');
+    const identity = createHash('sha256')
+      .update(`${rowKey(row, pk)} ${salt}`)
+      .digest('hex')
+      .slice(0, 32);
+    return `${runId}:${identity}`;
   }
 
   /** resolve (and cache) the source table's primary key for stable ordering */
@@ -421,7 +440,12 @@ export class HookWatchService implements OnModuleInit {
       if (maxTs == null) return emptyCursor(strategy);
       // remember every row already at the max timestamp so it isn't re-sent —
       // paged, because a bulk-loaded table can hold far more than one page of
-      // rows at a single timestamp
+      // rows at a single timestamp. pk tiebreakers keep the offset paging
+      // stable (rows sharing the timestamp would otherwise shuffle per page)
+      const pk = await this.resolvePk(hook.id, src);
+      const tiebreakers = pk
+        .filter((c) => c !== strategy.column)
+        .map((c) => ({ column: c, direction: 'asc' as const }));
       const boundaryKeys: string[] = [];
       for (let offset = 0; offset < 20_000; offset += 1000) {
         const at = await this.pool.withAdapter(cid, db, (a) =>
@@ -431,12 +455,12 @@ export class HookWatchService implements OnModuleInit {
             filters: withUser([
               { column: strategy.column, operator: 'gte', value: maxTs },
             ]),
-            sort: [{ column: strategy.column, direction: 'asc' }],
+            sort: [{ column: strategy.column, direction: 'asc' }, ...tiebreakers],
             limit: 1000,
             offset,
           }),
         );
-        boundaryKeys.push(...at.rows.map((r) => rowKey(r, at.primaryKey)));
+        boundaryKeys.push(...at.rows.map((r) => rowKey(r, pk.length ? pk : at.primaryKey)));
         if (at.rows.length < 1000) break;
       }
       return {

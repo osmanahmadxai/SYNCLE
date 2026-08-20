@@ -250,6 +250,71 @@ describe('timestamp lookback window', () => {
     expect(second.newRows.map((r) => r.id)).toEqual([4]);
   });
 
+  it('never moves the cursor backwards through already-seen window rows', () => {
+    // a page can consist purely of window rows BEHIND the cursor (e.g. a burst
+    // denser than one page): the cursor must hold its ground and keep its keys
+    const t9 = '2026-01-01T00:00:09.000Z';
+    const t10 = '2026-01-01T00:00:10.000Z';
+    const first = advanceCursor(
+      TSL,
+      emptyCursor(TSL),
+      [
+        { id: 1, updated_at: t9 },
+        { id: 2, updated_at: t10 },
+      ],
+      ['id'],
+    );
+    const replay = advanceCursor(TSL, first.cursor, [{ id: 1, updated_at: t9 }], ['id']);
+    expect(replay.newRows).toEqual([]);
+    expect(replay.cursor).toMatchObject({ ts: t10 });
+    // ...and the full-window re-fetch afterwards still re-emits nothing
+    const refetch = advanceCursor(
+      TSL,
+      replay.cursor,
+      [
+        { id: 1, updated_at: t9 },
+        { id: 2, updated_at: t10 },
+      ],
+      ['id'],
+    );
+    expect(refetch.newRows).toEqual([]);
+  });
+
+  it('keeps window keys a truncated page did not re-fetch', () => {
+    // poll 1 emitted ids 1+2; poll 2's page held only the newest row (the rest
+    // was cut off by the page limit). the keys for 1+2 are still inside the
+    // window and must survive the advance, or the next overlap re-fetch would
+    // re-deliver both rows
+    const first = advanceCursor(
+      TSL,
+      emptyCursor(TSL),
+      [
+        { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
+        { id: 2, updated_at: '2026-01-01T00:00:09.000Z' },
+      ],
+      ['id'],
+    );
+    const second = advanceCursor(
+      TSL,
+      first.cursor,
+      [{ id: 3, updated_at: '2026-01-01T00:00:10.000Z' }],
+      ['id'],
+    );
+    expect(second.newRows.map((r) => r.id)).toEqual([3]);
+
+    const third = advanceCursor(
+      TSL,
+      second.cursor,
+      [
+        { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
+        { id: 2, updated_at: '2026-01-01T00:00:09.000Z' },
+        { id: 3, updated_at: '2026-01-01T00:00:10.000Z' },
+      ],
+      ['id'],
+    );
+    expect(third.newRows).toEqual([]);
+  });
+
   it('without lookback only exact-boundary rows are keyed (legacy behavior)', () => {
     const rows = [
       { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
