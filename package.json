@@ -1,6 +1,6 @@
 {
   "name": "syncle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Syncle — keep any databases in sync, live and across engines (PostgreSQL, MySQL, SQLite, MongoDB, Redis), with HTTP endpoints as an extra destination.",
   "author": "Osman Ahmadzai",

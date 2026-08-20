@@ -64,7 +64,19 @@ case "$cmd" in
   logs)    shift || true; compose logs -f "$@" ;;
   open)    open_url "$WEB_URL" ;;
   update)
-    git -C "$APP_DIR" pull --ff-only
+    git -C "$APP_DIR" fetch --tags --quiet origin
+    if [ "${SYNCLE_CHANNEL:-release}" = "main" ]; then
+      git -C "$APP_DIR" checkout --quiet main
+      git -C "$APP_DIR" pull --ff-only
+    else
+      tag=$(git -C "$APP_DIR" tag --list 'v*' --sort=-v:refname | head -n 1)
+      if [ -n "$tag" ]; then
+        git -C "$APP_DIR" checkout --quiet "$tag"
+      else
+        git -C "$APP_DIR" checkout --quiet main
+        git -C "$APP_DIR" pull --ff-only
+      fi
+    fi
     compose up -d --build
     printf 'Updated. %s\n' "$WEB_URL"
     ;;
@@ -85,8 +97,10 @@ case "$cmd" in
     esac
     ;;
   version|-v|--version)
-    v=$(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo unknown)
-    printf 'Syncle %s\n' "$v"
+    # Parsed with sed so `syncle version` works on hosts without Node (the
+    # docker-only install is the normal case).
+    v=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$APP_DIR/package.json" 2>/dev/null)
+    printf 'Syncle %s\n' "${v:-unknown}"
     ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
