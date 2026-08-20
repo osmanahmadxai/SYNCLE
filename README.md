@@ -15,6 +15,25 @@ when you need them.
 
 <sub>A bridge is just: a source → one or more destinations → kept in sync.</sub>
 
+<br>
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Node](https://img.shields.io/badge/Node-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)
+![pnpm](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![NestJS](https://img.shields.io/badge/NestJS-API-E0234E?logo=nestjs&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
+
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL%20%2F%20MariaDB-4479A1?logo=mysql&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)
+
+<br>
+
+<img src="docs/assets/syncle-bridge-animation.svg" width="100%" alt="Animated: rows flowing live from a PostgreSQL source across a Syncle bridge into MongoDB, Redis and MySQL — insert, update and delete operations riding the lanes">
+
 </div>
 
 ---
@@ -29,6 +48,28 @@ A **bridge** reads rows from a source database and writes each one to its
   **several databases at once**, and bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C).
 - **an HTTP endpoint** — POST/PUT/PATCH each row to a URL with a payload you
   design, for the times you're feeding a service instead of a database.
+
+```mermaid
+flowchart LR
+    SRC[("source<br/>any engine")]
+    subgraph TRIGGER["how it fires"]
+        direction TB
+        REPLAY["replay — one-shot backfill"]
+        WATCH["watch — cursor polling"]
+        CDC["CDC — change log, real time"]
+    end
+    ROUTER{{"sink router"}}
+    DB1[("MongoDB")]
+    DB2[("MySQL")]
+    DB3[("Redis")]
+    HTTP["HTTP endpoint"]
+
+    SRC --> TRIGGER --> ROUTER
+    ROUTER -- "map columns · auto-create<br/>idempotent upsert / keyed delete" --> DB1
+    ROUTER --> DB2
+    ROUTER --> DB3
+    ROUTER -- "token template · retries" --> HTTP
+```
 
 What makes the database-to-database sync trustworthy:
 
@@ -122,7 +163,65 @@ Working on the code? `pnpm dev` is the same thing in watch mode.
 
 ---
 
+## How to use — your first bridge in five minutes
+
+A quick tour from zero to a live sync. All of it happens in the web app at
+`http://localhost:3002`.
+
+**1 · Connect your databases.** Open **Data sources** and add the source and
+destination connections (host, port, credentials — they're encrypted at rest).
+The connection form adapts to the engine you pick, and a connectivity check
+tells you immediately whether Syncle can reach it.
+
+**2 · Pick the table you want to sync.** Browse the source connection and open
+the table. You get the full workbench view — filter, sort, poke around. When it
+looks right, hit **Create bridge**: the builder opens pre-seeded with that table
+as the source.
+
+**3 · Shape what gets sent.** Toggle the columns to include, then add one or
+more destinations:
+
+- **Database destination** — pick a connection and either map columns onto an
+  existing table (rename, drop, choose the upsert keys) or let Syncle
+  auto-create the target table from the source's shape, types translated for
+  the target engine.
+- **HTTP destination** — set the URL/method and design the payload with tokens
+  like `{{column}}`, `{{$row}}`, `{{$op}}`, `{{$now}}`.
+
+The live preview shows exactly what will be written before anything runs.
+
+**4 · Choose the trigger.**
+
+| You want…                              | Pick       | What happens                                            |
+| -------------------------------------- | ---------- | ------------------------------------------------------- |
+| A one-time copy / initial backfill     | **Replay** | Streams all (or selected) rows once, then finishes      |
+| Ongoing sync, zero source config       | **Watch**  | Polls a cursor (id / `updated_at` / PK diff) for change |
+| Real-time sync straight from the log   | **CDC**    | Live change capture — inserts, updates, deletes         |
+
+For CDC, the builder runs a **readiness check** against the source and lists
+anything the database still needs (see [CDC prerequisites](#cdc-prerequisites)).
+
+**5 · Run it and watch.** Start the bridge and the timeline lights up cell by
+cell — green synced · red failed · amber skipped · slate queued. Click any cell
+to see the exact row, the result, and timing. Fix a destination and **retry just
+the failures**, skip rows you don't want, or cancel and resume later — runs
+survive restarts.
+
+> **Common first bridges:** Postgres → MongoDB (replay to backfill, then CDC to
+> stay live) · MySQL → SQLite (portable local copy) · MongoDB → Redis (hot
+> cache) · anything → HTTP (feed a webhook).
+
+---
+
 ## The bridge lifecycle
+
+```mermaid
+flowchart LR
+    A["Connect<br/>credentials encrypted"] --> B["Create bridge<br/>columns · destinations · trigger"]
+    B --> C["Run / listen<br/>replay once, or stay live"]
+    C --> D["React<br/>skip · cancel · resume · retry failures"]
+    D -- "edits apply on next run" --> C
+```
 
 1. **Connect** your databases (credentials encrypted at rest) from the Data
    sources workbench, or inline while building a bridge.
