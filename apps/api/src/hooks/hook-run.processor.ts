@@ -63,7 +63,14 @@ export class HookRunProcessor extends WorkerHost {
 
     const controller = this.registry.register(runId);
     try {
-      await this.execute(runId, row.cursorOffset, row.configSnapshotJson, controller.signal);
+      // 'resend' jobs re-POST the captured payloads of failed deliveries; a
+      // normal run streams rows from the source. both share the registry's
+      // abort machinery so cancel works identically for either mode.
+      if (job.data.mode === 'resend') {
+        await this.runs.executeResend(runId, controller.signal);
+      } else {
+        await this.execute(runId, row.cursorOffset, row.configSnapshotJson, controller.signal);
+      }
     } finally {
       this.registry.release(runId);
     }
@@ -86,6 +93,9 @@ export class HookRunProcessor extends WorkerHost {
       hook.source.kind === 'table' ? await this.resolvePk(hook.source) : null;
     // sequences we must not (re)send: already delivered, or skipped
     const done = await this.runs.settledSequences(runId);
+    // database targets that already committed inside failed deliveries: a
+    // retry must skip those targets or insert mode would duplicate their rows
+    const priorTargets = await this.runs.succeededTargetsBySequence(runId);
 
     // control polling is throttled to keep DB load negligible on big runs. it
     // serves two cross-process signals: cancellation (any worker may own the
@@ -115,7 +125,7 @@ export class HookRunProcessor extends WorkerHost {
         }
         buffer.push(item.row);
         if (buffer.length === batchSize) {
-          const stop = await this.flush(runId, table, buffer, bufferStart, done, hook, pkColumn, signal);
+          const stop = await this.flush(runId, table, buffer, bufferStart, done, priorTargets, hook, pkColumn, signal);
           buffer = [];
           bufferStart = item.index + 1;
           await this.runs.setCursor(runId, bufferStart);
@@ -132,7 +142,7 @@ export class HookRunProcessor extends WorkerHost {
           await this.runs.finalize(runId, 'canceled');
           return;
         }
-        const stop = await this.flush(runId, table, buffer, bufferStart, done, hook, pkColumn, signal);
+        const stop = await this.flush(runId, table, buffer, bufferStart, done, priorTargets, hook, pkColumn, signal);
         if (stop) {
           await this.runs.finalize(runId, 'failed', 'Stopped after a failed delivery (onError=abort).');
           return;
@@ -158,6 +168,7 @@ export class HookRunProcessor extends WorkerHost {
     rows: Record<string, unknown>[],
     startIndex: number,
     done: Set<number>,
+    priorTargets: Map<number, string[]>,
     hook: ResolvedHook,
     pkColumn: string | null,
     signal: AbortSignal,
@@ -170,7 +181,7 @@ export class HookRunProcessor extends WorkerHost {
     const { outcome } = await this.sink.deliver(
       hook,
       rows,
-      { table, now, startIndex },
+      { table, now, startIndex, skipTargets: priorTargets.get(sequence) },
       signal,
       `${runId}:${sequence}`,
     );

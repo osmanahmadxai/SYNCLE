@@ -29,6 +29,12 @@ export interface DeliverContext {
   startIndex: number;
   /** CDC operation, when rows came from a change stream */
   op?: CdcOperation;
+  /**
+   * database targets that already committed on a previous attempt of this same
+   * delivery (persisted target keys); the sink skips them on a retry so a
+   * partial fan-out failure can't double-write the targets that succeeded
+   */
+  skipTargets?: string[];
 }
 
 @Injectable()
@@ -54,6 +60,7 @@ export class HookSinkService {
         dest.targets,
         rows,
         ctx.op,
+        ctx.skipTargets ? new Set(ctx.skipTargets) : undefined,
       );
       return { outcome, warnings: [] };
     }
@@ -78,6 +85,8 @@ export class HookSinkService {
       signal,
       idempotencyKey,
     );
-    return { outcome, warnings };
+    // stamp the operation so it persists with the delivery row: a later resend
+    // must know e.g. that this batch was a CDC delete
+    return { outcome: { ...outcome, op: ctx.op ?? null }, warnings };
   }
 }

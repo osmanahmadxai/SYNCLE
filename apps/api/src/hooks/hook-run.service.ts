@@ -14,6 +14,7 @@ import {
   AppError,
   BadRequestError,
   ConflictError,
+  type CdcOperation,
   type DeliveryStatus,
   type HookDelivery,
   type HookRun,
@@ -60,10 +61,19 @@ export class HookRunService implements OnModuleInit {
   ) {}
 
   /**
-   * re-send the failed deliveries of a run by re-POSTing their captured request
-   * bodies to the hook's CURRENT destination. works for every hook type
+   * queue a RESEND of a run's failed deliveries: their captured request bodies
+   * are re-POSTed to the hook's CURRENT destination, works for every hook type
    * (replay / watch / cdc), ideal after fixing a bad URL or a down endpoint.
    * a delivery that succeeds flips from failed to success (counters adjust).
+   *
+   * two retry flavors exist, keep them straight:
+   *  - resend (this): re-send the CAPTURED payloads as-is, no source access.
+   *  - retryFailed (`start({retryFailedOf})`): re-STREAM the failed rows from
+   *    the source and re-render them (fresh data, fresh config).
+   *
+   * the loop itself runs on the BullMQ worker ({@link executeResend}) so this
+   * endpoint returns immediately and the operation is cancelable through the
+   * run registry, exactly like a normal run.
    */
   async resendFailed(hookId: string, runId: string): Promise<HookRun> {
     const run = await this.getRunRow(runId);
@@ -75,51 +85,164 @@ export class HookRunService implements OnModuleInit {
         'This run is still active. Stop it (or wait for it to finish) before retrying failed deliveries.',
       );
     }
-    const hook = await this.store.resolve(hookId);
+    await this.store.get(hookId); // 404s if the hook is gone
+    const failedCount = await this.prisma.hookDelivery.count({
+      where: { runId, status: 'failed' },
+    });
+    if (failedCount === 0) throw new BadRequestError('No failed deliveries to retry.');
+
+    await this.ensureQueueReady();
+    await this.clearSettledJob(runId);
+    const row = await this.prisma.hookRun.update({
+      where: { id: runId },
+      data: { status: 'queued', error: null, finishedAt: null },
+    });
+    await this.enqueue(runId, hookId, 'resend');
+    return this.toRun(row);
+  }
+
+  /**
+   * worker-side body of a resend (see {@link resendFailed}), invoked by the
+   * processor with the run registry's abort signal so a cancel stops it
+   * between deliveries. deliveries that cannot be replayed faithfully — the
+   * captured body was truncated at the storage cap, or no rows can be
+   * recovered from it — are refused with a per-delivery error and stay
+   * failed; they must be retried from the source instead. a database delivery
+   * is NEVER flipped to success unless rows were actually written.
+   */
+  async executeResend(runId: string, signal: AbortSignal): Promise<void> {
+    const run = await this.getRunRow(runId);
+    await this.markRunning(runId);
+    const hook = await this.store.resolve(run.hookId);
     const failed = await this.prisma.hookDelivery.findMany({
       where: { runId, status: 'failed' },
       orderBy: { sequence: 'asc' },
       take: 2000,
     });
-    if (failed.length === 0) throw new BadRequestError('No failed deliveries to retry.');
-
     const dest = hook.destination;
-    const signal = new AbortController().signal;
-    for (const d of failed) {
-      let body: unknown = null;
-      if (d.requestBody) {
-        try {
-          body = JSON.parse(d.requestBody);
-        } catch {
-          body = d.requestBody;
+
+    // cross-process control polling, throttled like the run processor's.
+    // 'canceled' = a cancel was requested; 'detached' = something else already
+    // re-statused the run (e.g. watch/cdc stop() paused it out from under us),
+    // so stand down WITHOUT overwriting that externally-set status.
+    let lastControlCheck = 0;
+    const stopRequested = async (): Promise<'canceled' | 'detached' | null> => {
+      if (signal.aborted) return 'canceled';
+      const now = Date.now();
+      if (now - lastControlCheck < 750) return null;
+      lastControlCheck = now;
+      const r = await this.prisma.hookRun.findUnique({
+        where: { id: runId },
+        select: { status: true },
+      });
+      if (!r || r.status === 'canceling' || r.status === 'canceled') return 'canceled';
+      return r.status === 'running' ? null : 'detached';
+    };
+
+    try {
+      for (const d of failed) {
+        const stop = await stopRequested();
+        if (stop) {
+          if (stop === 'canceled') await this.finalize(runId, 'canceled');
+          return;
         }
-      }
-      let outcome: DeliveryOutcome;
-      if (dest.kind === 'database') {
-        // the captured requestBody is the already-mapped target row(s); replay
-        // it through the sink with identity mapping (the upsert is idempotent)
-        const rows = (Array.isArray(body) ? body : [body]).filter(
-          (r): r is Record<string, unknown> => !!r && typeof r === 'object',
+
+        // a failed delivery keeps its existing (failed) status and context,
+        // only the error text changes to say why the resend refused it
+        const refuse = (why: string): DeliveryOutcome => ({
+          status: 'failed',
+          httpStatus: d.httpStatus,
+          attempts: d.attempts,
+          error: why,
+          requestBody: d.requestBody,
+          responseBody: d.responseBody,
+          durationMs: d.durationMs ?? 0,
+        });
+
+        let outcome: DeliveryOutcome;
+        if (d.bodyTruncated) {
+          // the capture was cut at the storage cap: re-sending it would push
+          // truncated garbage (HTTP) or write nothing at all (database)
+          outcome = refuse(
+            'The captured payload was truncated at the storage cap, so it cannot be re-sent faithfully. Retry the failed rows from the source instead.',
+          );
+        } else {
+          let body: unknown = null;
+          if (d.requestBody) {
+            try {
+              body = JSON.parse(d.requestBody);
+            } catch {
+              body = d.requestBody;
+            }
+          }
+          if (dest.kind === 'database') {
+            // the captured requestBody is the already-mapped target row(s);
+            // replay it through the sink with identity mapping, preserving the
+            // persisted operation so a CDC delete retries as a keyed delete —
+            // not as an upsert that would resurrect the deleted row
+            const rows = (Array.isArray(body) ? body : [body]).filter(
+              (r): r is Record<string, unknown> => !!r && typeof r === 'object',
+            );
+            if (rows.length === 0 && d.rowCount > 0) {
+              // nothing recoverable to write: succeeding here would flip the
+              // cell green while zero rows actually landed in the target
+              outcome = refuse(
+                'No rows could be recovered from the captured payload, so nothing would be written. Retry the failed rows from the source instead.',
+              );
+            } else {
+              const retryTargets = dest.targets.map((t) => ({ ...t, mapping: [] }));
+              const skip = d.succeededTargetsJson
+                ? new Set(JSON.parse(d.succeededTargetsJson) as string[])
+                : undefined;
+              outcome = await this.databaseSink.deliver(
+                hook,
+                retryTargets,
+                rows,
+                (d.op ?? undefined) as CdcOperation | undefined,
+                skip,
+              );
+            }
+          } else {
+            const idem = dest.idempotency ? `${runId}:${d.sequence}` : undefined;
+            outcome = await this.delivery.send(body, dest, hook.delivery, signal, idem);
+          }
+        }
+        await this.recordDelivery(
+          runId,
+          {
+            sequence: d.sequence,
+            rowIndex: d.rowIndex,
+            rowCount: d.rowCount,
+            rowKeys: d.rowKeysJson ? (JSON.parse(d.rowKeysJson) as unknown[]) : null,
+          },
+          outcome,
         );
-        const retryTargets = dest.targets.map((t) => ({ ...t, mapping: [] }));
-        outcome = await this.databaseSink.deliver(hook, retryTargets, rows, undefined);
-      } else {
-        const idem = dest.idempotency ? `${runId}:${d.sequence}` : undefined;
-        outcome = await this.delivery.send(body, dest, hook.delivery, signal, idem);
+        if (hook.delivery.minDelayMs) await sleep(hook.delivery.minDelayMs, signal);
       }
-      await this.recordDelivery(
+
+      const remaining = await this.prisma.hookDelivery.count({
+        where: { runId, status: 'failed' },
+      });
+      lastControlCheck = 0; // force a real status check before finalizing
+      const stop = await stopRequested();
+      if (stop) {
+        if (stop === 'canceled') await this.finalize(runId, 'canceled');
+        return;
+      }
+      await this.finalize(
         runId,
-        {
-          sequence: d.sequence,
-          rowIndex: d.rowIndex,
-          rowCount: d.rowCount,
-          rowKeys: d.rowKeysJson ? (JSON.parse(d.rowKeysJson) as unknown[]) : null,
-        },
-        outcome,
+        remaining === 0 ? 'completed' : 'failed',
+        remaining === 0
+          ? null
+          : `${remaining} deliver${remaining === 1 ? 'y is' : 'ies are'} still failing after the retry.`,
       );
-      if (hook.delivery.minDelayMs) await sleep(hook.delivery.minDelayMs);
+    } catch (err) {
+      if (signal.aborted || (await this.cancelRequested(runId))) {
+        await this.finalize(runId, 'canceled');
+        return;
+      }
+      await this.finalize(runId, 'failed', err instanceof Error ? err.message : String(err));
     }
-    return this.getRun(hookId, runId);
   }
 
   /* ----- prepare (queue without sending) ----- */
@@ -169,7 +292,15 @@ export class HookRunService implements OnModuleInit {
     hookId: string,
     opts: { resumeRunId?: string; runId?: string; retryFailedOf?: string } = {},
   ): Promise<HookRun> {
-    await this.store.get(hookId); // 404s if the hook is gone
+    const hook = await this.store.get(hookId); // 404s if the hook is gone
+    // replay-only: watch/CDC hooks are live listeners with their own start
+    // endpoint. pushing one through the replay queue would re-stream (and
+    // re-deliver) the WHOLE table instead of its changes.
+    if (hook.trigger.kind !== 'replay') {
+      throw new BadRequestError(
+        'This hook is event-driven, not replayable. Start listening with POST /hooks/:id/watch/start instead.',
+      );
+    }
 
     if (opts.retryFailedOf) return this.retryFailed(hookId, opts.retryFailedOf);
     if (opts.resumeRunId) return this.resume(hookId, opts.resumeRunId);
@@ -313,12 +444,36 @@ export class HookRunService implements OnModuleInit {
     return this.toRun(reset);
   }
 
-  private async enqueue(runId: string, hookId: string): Promise<void> {
+  private async enqueue(
+    runId: string,
+    hookId: string,
+    mode?: 'resend',
+  ): Promise<void> {
     await this.queue.add(
-      'run',
-      { runId, hookId },
+      mode ?? 'run',
+      { runId, hookId, ...(mode ? { mode } : {}) },
       { jobId: runId, removeOnComplete: true, removeOnFail: 500, attempts: 1 },
     );
+  }
+
+  /**
+   * deterministic jobId (= runId) means `add` is a no-op if a job with that id
+   * already exists — including a LINGERING failed/completed one (removeOnFail
+   * keeps 500) — so clear those out first or the add silently does nothing.
+   * returns the lingering job's resend mode (if any) so boot recovery can
+   * re-enqueue an interrupted resend as a resend, not a fresh stream.
+   */
+  private async clearSettledJob(runId: string): Promise<'resend' | undefined> {
+    try {
+      const existing = await this.queue.getJob(runId);
+      if (!existing) return undefined;
+      const state = await existing.getState();
+      if (state === 'failed' || state === 'completed') await existing.remove();
+      return (existing.data as HookRunJob).mode;
+    } catch {
+      /* best-effort, the add that follows still surfaces real queue failures */
+      return undefined;
+    }
   }
 
   /** fail fast with a friendly message when Redis is unreachable */
@@ -552,6 +707,28 @@ export class HookRunService implements OnModuleInit {
     return new Set(rows.map((r) => r.sequence));
   }
 
+  /**
+   * per-sequence database-target keys that already committed inside a FAILED
+   * delivery (partial fan-out). the worker feeds these back to the sink on a
+   * retry so the targets that succeeded aren't written twice.
+   */
+  async succeededTargetsBySequence(runId: string): Promise<Map<number, string[]>> {
+    const rows = await this.prisma.hookDelivery.findMany({
+      where: { runId, status: 'failed', succeededTargetsJson: { not: null } },
+      select: { sequence: true, succeededTargetsJson: true },
+    });
+    const map = new Map<number, string[]>();
+    for (const r of rows) {
+      try {
+        const keys = JSON.parse(r.succeededTargetsJson!) as string[];
+        if (Array.isArray(keys) && keys.length > 0) map.set(r.sequence, keys);
+      } catch {
+        /* unreadable checkpoint: retry every target (safe for upsert/delete) */
+      }
+    }
+    return map;
+  }
+
   /** persist one delivery and advance the run's counters atomically */
   async recordDelivery(
     runId: string,
@@ -588,6 +765,25 @@ export class HookRunService implements OnModuleInit {
     if (failed !== 0) counters.failedCount = { increment: failed };
     if (skipped !== 0) counters.skippedCount = { increment: skipped };
 
+    // retry-integrity fields: `undefined` means "the outcome doesn't know",
+    // which preserves the stored value on a re-record (e.g. a refused resend
+    // must keep the original op and truncation flag intact)
+    const succeededTargetsJson =
+      outcome.succeededTargets !== undefined
+        ? {
+            succeededTargetsJson: outcome.succeededTargets?.length
+              ? JSON.stringify(outcome.succeededTargets)
+              : null,
+          }
+        : {};
+    const integrity = {
+      ...(outcome.op !== undefined ? { op: outcome.op } : {}),
+      ...(outcome.bodyTruncated !== undefined
+        ? { bodyTruncated: outcome.bodyTruncated }
+        : {}),
+      ...succeededTargetsJson,
+    };
+
     await this.prisma.$transaction([
       this.prisma.hookDelivery.upsert({
         where: { runId_sequence: { runId, sequence: meta.sequence } },
@@ -605,6 +801,7 @@ export class HookRunService implements OnModuleInit {
           requestBody: outcome.requestBody,
           responseBody: outcome.responseBody,
           durationMs: outcome.durationMs,
+          ...integrity,
         },
         update: {
           rowKeysJson,
@@ -615,6 +812,7 @@ export class HookRunService implements OnModuleInit {
           requestBody: outcome.requestBody,
           responseBody: outcome.responseBody,
           durationMs: outcome.durationMs,
+          ...integrity,
         },
       }),
       this.prisma.hookRun.update({ where: { id: runId }, data: counters }),
@@ -651,19 +849,10 @@ export class HookRunService implements OnModuleInit {
       // but are owned by their own services, never re-enqueue those here
       const hook = await this.store.get(r.hookId).catch(() => null);
       if (!hook || hook.trigger.kind !== 'replay') continue;
-      // deterministic jobId means adding is a no-op if the job already exists —
-      // including a LINGERING failed/completed one (removeOnFail keeps 500), so
-      // clear those out first or the recovery silently does nothing
-      try {
-        const existing = await this.queue.getJob(r.id);
-        if (existing) {
-          const state = await existing.getState();
-          if (state === 'failed' || state === 'completed') await existing.remove();
-        }
-      } catch {
-        /* best-effort, the add below still surfaces real queue failures */
-      }
-      await this.enqueue(r.id, r.hookId).catch((err) =>
+      // an interrupted resend must recover as a resend: re-streaming it would
+      // deliver nothing (its cursor sits at the end of the source)
+      const mode = await this.clearSettledJob(r.id);
+      await this.enqueue(r.id, r.hookId, mode).catch((err) =>
         this.logger.warn(
           `Could not re-enqueue run ${r.id}: ${(err as Error).message}`,
         ),

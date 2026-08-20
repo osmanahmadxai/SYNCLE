@@ -20,12 +20,12 @@
  * per-row upsert/delete instead, which is equally retry-safe.
  *
  * cross-target retry: the delivery is still reported failed if ANY target
- * fails (the monitor depends on that single-outcome contract). there is no
- * per-target retry checkpoint here, so a full-delivery retry re-runs every
- * target — that is safe because every write path is either transactionally
- * atomic or an idempotent upsert/delete; the only non-idempotent path is
- * `insert` mode, whose batch is now atomic so a retry re-applies the whole
- * batch cleanly rather than duplicating a committed prefix.
+ * fails (the monitor depends on that single-outcome contract), but the outcome
+ * carries the keys of the targets that DID commit ({@link DeliveryOutcome}'s
+ * `succeededTargets`, persisted with the delivery row). a retry passes those
+ * back as `skipTargets` so already-committed targets are skipped, not re-run —
+ * without that checkpoint, `insert` mode would duplicate target A's atomic
+ * batch on every retry that only target B needs.
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
@@ -67,22 +67,35 @@ export class DatabaseSinkService {
    * write a batch of rows to every target. `op` is the CDC operation when the
    * rows came from a change stream (`delete` removes by key); for replay/watch
    * it's undefined and rows are inserted/upserted per the target's writeMode.
+   * `skipTargets` are target keys that already committed on a previous attempt
+   * (from the persisted delivery); those are skipped, never re-written.
    */
   async deliver(
     hook: ResolvedHook,
     targets: DatabaseTarget[],
     rows: Row[],
     op: CdcOperation | undefined,
+    skipTargets?: ReadonlySet<string>,
   ): Promise<DeliveryOutcome> {
     const started = performance.now();
     const summaries: string[] = [];
+    const succeeded: string[] = [];
     let firstError: string | null = null;
 
     for (const target of targets) {
       const label = targetLabel(target);
+      const key = targetKey(target);
+      // committed on an earlier attempt of this same delivery: skip, but keep
+      // it in the succeeded set so the checkpoint survives another failure
+      if (skipTargets?.has(key)) {
+        succeeded.push(key);
+        summaries.push(`${label}: skipped (already written by a previous attempt)`);
+        continue;
+      }
       try {
         await this.ensureTarget(hook, target, rows[0] ?? {});
         const affected = await this.writeRows(target, rows, op);
+        succeeded.push(key);
         summaries.push(`${label}: ${op === 'delete' ? 'deleted' : 'wrote'} ${affected}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -94,9 +107,10 @@ export class DatabaseSinkService {
     // requestBody mirrors what we attempted to write (mapped to the first
     // target's columns), so the monitor can show the exact payload
     const mappedPreview = rows.map((r) => mapRow(r, targets[0]?.mapping ?? []));
-    const requestBody = JSON.stringify(
+    const serialized = JSON.stringify(
       mappedPreview.length === 1 ? mappedPreview[0] : mappedPreview,
-    ).slice(0, SUMMARY_LIMIT);
+    );
+    const requestBody = serialized.slice(0, SUMMARY_LIMIT);
 
     return {
       status: firstError ? 'failed' : 'success',
@@ -106,6 +120,11 @@ export class DatabaseSinkService {
       requestBody,
       responseBody: summaries.join('\n').slice(0, SUMMARY_LIMIT) || null,
       durationMs: Math.round(performance.now() - started),
+      op: op ?? null,
+      // a capped capture can't be replayed faithfully; the resend path refuses it
+      bodyTruncated: serialized.length > SUMMARY_LIMIT,
+      // checkpoint only matters while the delivery is failed; a success clears it
+      succeededTargets: firstError ? succeeded : null,
     };
   }
 
@@ -219,7 +238,7 @@ export class DatabaseSinkService {
     }
 
     const engine = (await this.connections.resolve(target.connectionId)).engine;
-    const columns = this.targetColumns(hook, target, sampleRow);
+    const columns = await this.targetColumns(hook, target, sampleRow);
     if (columns.length === 0) {
       throw new Error('Cannot create target table: no columns to derive');
     }
@@ -242,19 +261,75 @@ export class DatabaseSinkService {
 
   /**
    * the target's columns to create: the mapped target names, typed from the
-   * source schema where known, otherwise inferred from a sample row's values.
+   * source table's REAL column types (schema introspection, cached per hook)
+   * so bridge.ts's normalizeType/engineColumnType translation gets a proper
+   * dataType string — a pg BIGINT/NUMERIC arrives as a string at runtime and
+   * would otherwise decay to TEXT. only when no schema is available (query
+   * source, introspection failure, renamed column) do we fall back to
+   * inferring a column's type from the sample row's runtime value.
    */
-  private targetColumns(
+  private async targetColumns(
     hook: ResolvedHook,
     target: DatabaseTarget,
     sampleRow: Row,
-  ): TargetColumnShape[] {
-    const mapped = mapRow(sampleRow, target.mapping);
-    return Object.entries(mapped).map(([name, value]) => ({
-      name,
-      sourceType: inferType(value),
-      nullable: !target.keyColumns.includes(name),
-    }));
+  ): Promise<TargetColumnShape[]> {
+    const source = await this.resolveSourceCols(hook);
+    const byName = new Map((source ?? []).map((c) => [c.name, c]));
+    const mappedSample = mapRow(sampleRow, target.mapping);
+
+    // which target columns to create: the explicit mapping, else identity over
+    // the source schema when known, else whatever the sample row carries
+    const pairs: { name: string; source: string }[] =
+      target.mapping.length > 0
+        ? target.mapping.map((m) => ({ name: m.target, source: m.source }))
+        : source
+          ? source.map((c) => ({ name: c.name, source: c.name }))
+          : Object.keys(mappedSample).map((name) => ({ name, source: name }));
+
+    return pairs.map(({ name, source: sourceName }) => {
+      const known = byName.get(sourceName);
+      return {
+        name,
+        sourceType: known ? known.sourceType : inferType(mappedSample[name]),
+        nullable: known ? known.nullable : !target.keyColumns.includes(name),
+      };
+    });
+  }
+
+  /**
+   * the source table's column shapes (name / dataType / nullable), resolved
+   * once per hook via schema introspection and cached in {@link sourceCols}.
+   * a cached `null` means the shape is unknowable (query source, or
+   * introspection failed) and callers fall back to sample-row inference.
+   */
+  private async resolveSourceCols(hook: ResolvedHook): Promise<TargetColumnShape[] | null> {
+    const cached = this.sourceCols.get(hook.id);
+    if (cached !== undefined) return cached;
+
+    let cols: TargetColumnShape[] | null = null;
+    if (hook.source.kind === 'table') {
+      const src = hook.source;
+      try {
+        const schema = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+          a.getSchema(src.database),
+        );
+        const table = schema.namespaces
+          .filter((ns) => !src.schema || ns.name === src.schema)
+          .flatMap((ns) => ns.tables)
+          .find((t) => t.name === src.table);
+        if (table) {
+          cols = table.columns.map((c) => ({
+            name: c.name,
+            sourceType: c.dataType,
+            nullable: c.nullable,
+          }));
+        }
+      } catch {
+        /* introspection unavailable (engine/permissions), fall back to inference */
+      }
+    }
+    this.sourceCols.set(hook.id, cols);
+    return cols;
   }
 }
 
