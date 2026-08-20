@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // import fresh with a pinned master key so the test never touches a real data dir
-async function loadService() {
+async function loadService(masterKey = randomBytes(32).toString('base64')) {
   vi.resetModules();
   vi.stubEnv('SYNCLE_DATA_DIR', mkdtempSync(join(tmpdir(), 'syncle-test-')));
-  vi.stubEnv('SYNCLE_MASTER_KEY', randomBytes(32).toString('base64'));
+  vi.stubEnv('SYNCLE_MASTER_KEY', masterKey);
   const { CryptoService } = await import('./crypto.service.js');
   return new CryptoService();
 }
@@ -29,5 +29,18 @@ describe('CryptoService', () => {
     expect(() => svc.decrypt(`${iv}:${shortTag}:${data}`)).toThrow(/Malformed/);
     // the untampered ciphertext still decrypts
     expect(svc.decrypt(`${iv}:${tag}:${data}`)).toBe('payload');
+  });
+
+  it('derives a stable HKDF signing key from the master key', async () => {
+    // the derivation must be deterministic: a session minted before a restart
+    // (fresh service instance, same master key) still verifies after it
+    const key = randomBytes(32).toString('base64');
+    const before = await loadService(key);
+    const token = before.signToken({ uid: 'u1' });
+    const after = await loadService(key);
+    expect(after.verifyToken(token)).toMatchObject({ uid: 'u1' });
+    // ...while a different master key derives a different signing key
+    const other = await loadService();
+    expect(other.verifyToken(token)).toBeNull();
   });
 });
