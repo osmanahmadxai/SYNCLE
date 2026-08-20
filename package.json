@@ -30,6 +30,7 @@
     "dev": "node scripts/setup-env.mjs && pnpm --filter @syncle/core build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api dev\" \"pnpm --filter @syncle/web dev\"",
     "dev:api": "pnpm --filter @syncle/api dev",
     "dev:web": "pnpm --filter @syncle/web dev",
+    "dev:receiver": "node scripts/dev-receiver.js",
     "start": "node scripts/setup-env.mjs && pnpm build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api start\" \"pnpm --filter @syncle/web start\"",
     "build": "pnpm --filter @syncle/core build && pnpm --filter @syncle/api build && pnpm --filter @syncle/web build",
     "build:core": "pnpm --filter @syncle/core build",

@@ -54,8 +54,15 @@ services:
       WEB_ORIGIN: http://localhost:3002
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/syncle?schema=public
       REDIS_URL: redis://redis:6379
-      # Persist the generated master key + local state in a named volume so
-      # stored credentials and sessions survive restarts.
+      # ⚠ SET THIS. Encrypts stored connection credentials and signs session
+      # cookies. Generate one with `openssl rand -base64 32` and export it
+      # before `docker compose up`. Left empty, the API auto-generates a key
+      # inside the data volume — i.e. stored right next to the data it
+      # protects, and lost with it if the volume is removed.
+      SYNCLE_MASTER_KEY: ${SYNCLE_MASTER_KEY:-}
+      # Persist local state (and the auto-generated key, if you skipped setting
+      # one) in a named volume so stored credentials and sessions survive
+      # restarts.
       SYNCLE_DATA_DIR: /app/apps/api/.syncle
     volumes:
       - syncle-api-data:/app/apps/api/.syncle

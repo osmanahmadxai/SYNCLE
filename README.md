@@ -374,9 +374,14 @@ React Flow · Zod · Vitest.
 - All user values are passed as bound parameters; identifiers are dialect-quoted.
 - Hook payloads are built by structured token substitution — no string injection,
   no code execution.
-- Syncle runs locally with no auth layer. Add authentication, and restrict
-  which destinations (database connections / endpoint URLs) a bridge may write
-  to, before exposing it to an untrusted network.
+- Every API route sits behind a single-operator auth layer: the first run
+  creates the admin account, after which a scrypt-hashed password and an
+  httpOnly session cookie guard the app. Changing the password invalidates
+  existing sessions.
+- Syncle is still designed for local / trusted-network use. Before exposing it
+  further, complete first-run setup before the port is reachable, put it behind
+  TLS, and restrict which destinations (database connections / endpoint URLs)
+  a bridge may write to.
 
 ## License
 

@@ -1,5 +1,5 @@
 /**
- * persistent store for automation hooks (Prisma / SQLite). nested config is kept
+ * persistent store for automation hooks (Prisma / PostgreSQL). nested config is kept
  * as JSON strings; the destination's auth secret is the only sensitive field and
  * is encrypted at rest in `auth_enc`, same as how `ConnectionStoreService`
  * handles passwords. callers get a redacted view unless they explicitly resolve.
