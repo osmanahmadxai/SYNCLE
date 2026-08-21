@@ -43,6 +43,7 @@ import {
   type CdcProvider,
   type CdcStreamHandle,
 } from './cdc/cdc-provider';
+import { rowMatchesFilters } from './cdc/filter-match';
 
 /** live runtime state for one active CDC stream */
 interface Stream {
@@ -308,7 +309,7 @@ export class HookCdcService implements OnModuleInit, OnModuleDestroy {
     return stream.pending;
   }
 
-  /** for one change: dedupe, render, deliver, record, persist cursor */
+  /** for one change: dedupe, filter, render, deliver, record, persist cursor, ack */
   private async processChange(
     hookId: string,
     hook: ResolvedHook,
@@ -320,6 +321,30 @@ export class HookCdcService implements OnModuleInit, OnModuleDestroy {
     // strict exactly-once: never re-process a position we've already done
     // (durable engines replay from the last acked cursor after a reconnect)
     if (!stream.provider.cursorAfter(change.cursor, stream.watermark)) return;
+
+    // source filters: replay pushes them into SQL, but a CDC stream sees every
+    // row of the table, so evaluate them in-process here. skipped rows still
+    // advance the durable cursor (and the provider's server-side ack point) so
+    // a filtered-out backlog never replays on resume or pins WAL on the source.
+    // delete images may carry only the key columns, hence passMissingColumns
+    if (
+      !stream.provider.handlesSourceFilters &&
+      !rowMatchesFilters(change.row, hook.source.filters, {
+        passMissingColumns: change.op === 'delete',
+      })
+    ) {
+      stream.watermark = change.cursor;
+      try {
+        await this.prisma.hookRun.update({
+          where: { id: stream.runId },
+          data: { cursorJson: JSON.stringify({ cursor: change.cursor }) },
+        });
+        await stream.handle.ack?.(change.cursor);
+      } catch {
+        /* a replay after a restart just re-evaluates the filter and skips again */
+      }
+      return;
+    }
 
     const seq = stream.seq;
     const now = new Date().toISOString();
@@ -353,6 +378,14 @@ export class HookCdcService implements OnModuleInit, OnModuleDestroy {
         where: { id: stream.runId },
         data: { cursorOffset: stream.seq, cursorJson: JSON.stringify({ cursor: change.cursor }) },
       });
+      // the checkpoint is durable, so the provider may now advance its
+      // server-side ack point (the Postgres slot's confirmed LSN). a missed
+      // ack only widens the replay window the watermark dedupe absorbs
+      try {
+        await stream.handle.ack?.(change.cursor);
+      } catch {
+        /* best-effort by contract */
+      }
     } catch (err) {
       // a transient pipeline error (Prisma/pool hiccup) must leave a trace: the
       // event becomes a FAILED delivery row, visible in the timeline + retryable

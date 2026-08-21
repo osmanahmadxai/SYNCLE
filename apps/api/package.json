@@ -8,7 +8,7 @@
     "dev": "prisma generate && prisma migrate deploy && nest start --watch",
     "start": "prisma generate && prisma migrate deploy && node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",

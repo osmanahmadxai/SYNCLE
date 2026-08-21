@@ -42,6 +42,10 @@ export class RedisCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'redis';
   private readonly logger = new Logger('HookCdc:redis');
 
+  // the `key` filter is a glob applied at the subscription (see keyPattern),
+  // so the orchestrator must not ALSO evaluate it as a literal equality
+  readonly handlesSourceFilters = true;
+
   // no durable position, every delivered event is "new"
   cursorAfter(): boolean {
     return true;
@@ -169,6 +173,12 @@ export class RedisCdcProvider implements CdcProvider {
     let seq = 0;
     sub.on('error', (err: Error) => handlers.onError(err));
 
+    // admission chain: events must enter the pipeline in pmessage arrival
+    // order. buildRow awaits TYPE+GET for writes but resolves instantly for
+    // deletes, so firing them unchained lets a DEL overtake the SET before it
+    // and the destination applies delete-then-upsert, resurrecting the key
+    let chain: Promise<void> = Promise.resolve();
+
     sub.on('pmessage', (_pattern: string, channel: string, key: string) => {
       // channel: __keyevent@<db>__:<event>   message: <key>
       const event = channel.slice(channel.indexOf(':') + 1);
@@ -179,9 +189,13 @@ export class RedisCdcProvider implements CdcProvider {
       const op: CdcOperation = isDelete ? 'delete' : 'update';
       const cursor = `${Date.now()}:${seq++}`; // synthetic, non-durable
 
-      // resolve value out-of-band, never block the subscriber socket on it
-      void this.buildRow(reader, key, event, isDelete)
-        .then((row) => handlers.onChange({ op, row, cursor }))
+      // resolve the value off the subscriber socket, but chained: each event's
+      // read AND delivery complete before the next event's read begins
+      chain = chain
+        .then(async () => {
+          const row = await this.buildRow(reader, key, event, isDelete);
+          await handlers.onChange({ op, row, cursor });
+        })
         .catch((err) => handlers.onError(err as Error));
     });
 
