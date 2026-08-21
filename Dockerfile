@@ -31,25 +31,36 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
 RUN pnpm install --frozen-lockfile
 
-# 2) Build everything. NEXT_PUBLIC_API_URL is baked into the browser bundle at
-#    build time, so it must point at wherever the browser reaches the API
-#    (the host-exposed API port, default http://localhost:4002/api).
+# 2) Build everything.
+#    NEXT_PUBLIC_API_URL is deliberately NOT set: anything NEXT_PUBLIC_* is
+#    inlined into the browser bundle at build time, so baking an API address
+#    here would pin this published image to one host. Instead the browser calls
+#    a relative /api and the web server proxies it (see the web app's
+#    app/api/[...path]/route.ts), with the target read at runtime from
+#    SYNCLE_API_ORIGIN. One image, works on localhost, a LAN box or behind a
+#    reverse proxy.
 #    NEXT_OUTPUT=standalone makes `next build` emit the self-contained server
 #    used by the runtime stage (plain `next start` keeps working outside Docker).
 COPY . .
-ARG NEXT_PUBLIC_API_URL=http://localhost:4002/api
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_OUTPUT=standalone
 RUN pnpm --filter @syncle/core build \
  && pnpm --filter @syncle/api build \
  && pnpm --filter @syncle/web build
 
 # 3) Prune the API to production dependencies only (dist + prisma + prod
-#    node_modules, including the generated client and the prisma CLI for
-#    `migrate deploy` at boot).
+#    node_modules, including the prisma CLI for `migrate deploy` at boot).
 # --legacy: copy workspace deps into node_modules rather than requiring the
 # repo-wide inject-workspace-packages setting (pnpm v10 default changed)
-RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api
+#
+# `prisma generate` has to run AGAIN inside the pruned tree. The client that
+# `prisma generate` produces lives in node_modules/.prisma/client, which
+# belongs to no package in the store — so `pnpm deploy`, which copies packages
+# from the store, leaves it behind. Without this the image starts, applies its
+# migrations, and only then dies on MODULE_NOT_FOUND for .prisma/client.
+RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api \
+ && cd /out/api \
+ && ./node_modules/.bin/prisma generate \
+ && node -e "require('@prisma/client')"
 
 # ---------------------------------------------------------------------------
 

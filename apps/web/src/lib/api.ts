@@ -33,8 +33,14 @@ import type {
   WorkspaceInputDTO,
 } from '@syncle/core';
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
+/**
+ * Relative by default: calls go to the page's own origin and are proxied to
+ * the API by src/app/api/[...path]/route.ts. Keeping the API's address out of
+ * the bundle is what lets one published image run anywhere — NEXT_PUBLIC_*
+ * values are inlined at build time. Set NEXT_PUBLIC_API_URL to an absolute URL
+ * to bypass the proxy and call the API directly (then CORS applies).
+ */
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
 export class ApiError extends Error {
   constructor(
@@ -53,8 +59,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...init,
-      // send/receive the httpOnly session cookie on every call (web and api
-      // are different origins; CORS allows credentials)
+      // send/receive the httpOnly session cookie on every call. same-origin
+      // through the proxy, but kept explicit so an absolute
+      // NEXT_PUBLIC_API_URL (direct, cross-origin) still authenticates
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',

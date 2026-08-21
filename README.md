@@ -117,6 +117,52 @@ The rest is the same whichever destination and trigger you pick:
 
 ## Get started
 
+### Install and run — one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh | sh -s -- up
+```
+
+That's the whole thing. It downloads the newest release, starts Syncle, and
+opens it at **http://localhost:3002**. Docker is the only requirement — Node,
+Postgres and Redis all run in containers, and the app image is pulled prebuilt,
+so nothing is compiled on your machine.
+
+On first run the API prints a **setup token** to the console; enter it in the
+web UI to create your admin account. Grab it with `syncle logs api` if you miss
+it.
+
+After that, the `syncle` command manages the stack:
+
+```bash
+syncle up        # start (and open the GUI)
+syncle down      # stop, keeping your data
+syncle logs      # follow the logs
+syncle update    # move to the newest release
+syncle uninstall # remove everything, including data
+```
+
+Run the GUI on a different port with `SYNCLE_PORT=8080 syncle up`. Config and
+your encryption key live in `~/.syncle`.
+
+<details>
+<summary>Prefer plain Docker Compose?</summary>
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/docker-compose.app.yml
+docker compose -f docker-compose.app.yml up -d
+```
+
+Set `SYNCLE_MASTER_KEY` first (`openssl rand -base64 32`) — it encrypts stored
+database credentials. Without it the API generates one inside the data volume,
+where it is lost if the volume is removed.
+
+</details>
+
+---
+
+### Run from source (for development)
+
 You'll need **Node 22+**, **pnpm 10+**, and **Docker**. The repo pins both via
 `.nvmrc` and `packageManager`, so the easiest setup is:
 

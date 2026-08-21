@@ -33,6 +33,10 @@ async function bootstrap(): Promise<void> {
   });
 
   app.useBodyParser('json', { limit: '50mb' });
+  // the web app proxies /api to here, so X-Forwarded-Proto is what tells us
+  // the scheme the *browser* used — which decides whether the session cookie
+  // is marked Secure. without this every request looks like plain HTTP
+  app.set('trust proxy', true);
   app.setGlobalPrefix('api');
   app.enableCors({ origin: runtimeConfig.webOrigin, credentials: true });
   app.useGlobalFilters(new AppExceptionFilter());

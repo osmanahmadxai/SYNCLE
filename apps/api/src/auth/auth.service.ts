@@ -32,6 +32,27 @@ const scrypt = promisify(scryptCb);
 /** the session cookie name; cookies aren't port-scoped, so this is host-wide */
 export const SESSION_COOKIE = 'db_session';
 
+/**
+ * Mark the session cookie Secure only when the browser actually used HTTPS.
+ *
+ * Keying this off NODE_ENV would lock out most self-hosted installs: the
+ * Docker image runs with NODE_ENV=production, and browsers silently discard a
+ * Secure cookie sent over plain HTTP — so logging in at http://<lan-ip>:3002
+ * would appear to succeed and then bounce straight back to the login screen.
+ * (localhost is exempt, which is why it only breaks once you leave your own
+ * machine.) `req.secure` reads X-Forwarded-Proto via Express's trust-proxy
+ * setting, so an HTTPS reverse proxy still gets Secure cookies.
+ *
+ * SYNCLE_SECURE_COOKIES=true|false forces it, for a proxy that doesn't
+ * forward the header.
+ */
+function useSecureCookie(res: Response): boolean {
+  const override = process.env.SYNCLE_SECURE_COOKIES;
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+  return res.req?.secure === true;
+}
+
 const SCRYPT_KEYLEN = 64;
 const SALT_BYTES = 16;
 
@@ -74,7 +95,7 @@ export class AuthService implements OnModuleInit {
       this.logger.warn(`Skipped setup-token mint: ${(err as Error).message}`);
       return;
     }
-    this.logger.log(this.setupBanner(this.mintSetupToken()));
+    this.printSetupBanner(this.mintSetupToken());
   }
 
   async hasAccount(): Promise<boolean> {
@@ -95,7 +116,7 @@ export class AuthService implements OnModuleInit {
     if (this.setupToken == null) {
       // boot couldn't reach the DB (or the token was consumed by a failed
       // race) — mint now so the console always shows a usable token
-      this.logger.log(this.setupBanner(this.mintSetupToken()));
+      this.printSetupBanner(this.mintSetupToken());
     }
     if (!tokensEqual(setupToken, this.setupToken!)) {
       this.setupLimiter.fail(`setup:${ip}`);
@@ -149,6 +170,16 @@ export class AuthService implements OnModuleInit {
     return this.setupToken;
   }
 
+  /**
+   * Written straight to stdout, not through the Nest logger: main.ts boots the
+   * app with `logger: ['error','warn']` to keep startup quiet, which would
+   * swallow a `logger.log` and leave a fresh install with no way to finish
+   * setup. Same reasoning as the ready banner in main.ts.
+   */
+  private printSetupBanner(token: string): void {
+    console.log(this.setupBanner(token));
+  }
+
   private setupBanner(token: string): string {
     return [
       '',
@@ -192,14 +223,20 @@ export class AuthService implements OnModuleInit {
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: useSecureCookie(res),
       path: '/',
       maxAge: ttlMinutes * 60_000,
     });
   }
 
   clearSession(res: Response): void {
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    // attributes must mirror issueSession's, or the browser keeps the original
+    res.clearCookie(SESSION_COOKIE, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: useSecureCookie(res),
+    });
   }
 
   /**

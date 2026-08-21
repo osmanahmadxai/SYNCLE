@@ -1,21 +1,35 @@
 #!/usr/bin/env bash
 # Syncle launcher — controls the bundled Docker stack (web GUI + API + Postgres
-# + Redis). Installed to your PATH by install.sh; the app itself lives under
-# ${SYNCLE_HOME:-~/.syncle}/app.
+# + Redis). Installed to your PATH by install.sh.
+#
+# Everything it needs lives in ${SYNCLE_HOME:-~/.syncle}: the compose file, and
+# an .env holding the encryption key and the pinned image tag. The app image is
+# pulled prebuilt from GHCR — nothing is compiled on this machine.
 set -euo pipefail
 
-SYNCLE_HOME="${SYNCLE_HOME:-$HOME/.syncle}"
-APP_DIR="$SYNCLE_HOME/app"
-COMPOSE_FILE="$APP_DIR/docker-compose.app.yml"
-WEB_URL="http://localhost:3002"
+# exported so `syncle update` (which re-runs the installer in a child shell)
+# writes back to the same place a custom SYNCLE_HOME points at
+export SYNCLE_HOME="${SYNCLE_HOME:-$HOME/.syncle}"
+COMPOSE_FILE="$SYNCLE_HOME/docker-compose.app.yml"
+ENV_FILE="$SYNCLE_HOME/.env"
+INSTALLER="https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh"
+WEB_URL="http://localhost:${SYNCLE_PORT:-3002}"
 
 die() { printf 'syncle: %s\n' "$1" >&2; exit 1; }
 
-[ -f "$COMPOSE_FILE" ] || die "app not found at $APP_DIR. Re-run the installer."
+[ -f "$COMPOSE_FILE" ] || die "not installed — no compose file at $COMPOSE_FILE. Re-run the installer."
 command -v docker >/dev/null 2>&1 || die "Docker is not installed. See https://docs.docker.com/get-docker/"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (comes with Docker Desktop / the compose plugin)."
 
-compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+# --env-file is explicit rather than relying on compose picking up .env from the
+# working directory — `syncle` is run from wherever the user happens to be
+compose() {
+  if [ -f "$ENV_FILE" ]; then
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  else
+    docker compose -f "$COMPOSE_FILE" "$@"
+  fi
+}
 
 open_url() {
   if command -v open >/dev/null 2>&1; then open "$1"
@@ -29,7 +43,8 @@ wait_for_web() {
     if curl -fsS -o /dev/null "$WEB_URL" 2>/dev/null; then printf ' ready.\n'; return 0; fi
     printf '.'; sleep 2
   done
-  printf '\n'; printf 'Still starting — check `syncle logs`.\n'
+  printf '\n'
+  printf 'Still starting — check `syncle logs`.\n'
 }
 
 usage() {
@@ -38,22 +53,29 @@ Syncle — keep any databases in sync, with a web GUI.
 
 Usage: syncle <command>
 
-  up          Build (first run) and start everything, then open the GUI
+  up          Download (first run) and start everything, then open the GUI
   down        Stop and remove the containers (data is kept)
   restart     Restart the running containers
   status      Show container status
   logs [svc]  Follow logs (optionally: api | web | postgres | redis)
   open        Open the web GUI in your browser
-  update      Pull the latest Syncle and rebuild
+  update      Fetch the newest release and restart
   uninstall   Stop everything and delete all data (asks first)
   version     Show the installed Syncle version
+
+Environment:
+  SYNCLE_PORT   port for the web GUI (default 3002)
+  SYNCLE_HOME   where config lives   (default ~/.syncle)
 EOF
 }
 
 cmd="${1:-up}"
 case "$cmd" in
   up)
-    compose up -d --build
+    # pull first so a slow download isn't mistaken for a hung startup
+    printf 'Downloading images (first run takes a minute)...\n'
+    compose pull --quiet
+    compose up -d
     wait_for_web
     open_url "$WEB_URL"
     printf 'Syncle is running at %s\n' "$WEB_URL"
@@ -64,20 +86,12 @@ case "$cmd" in
   logs)    shift || true; compose logs -f "$@" ;;
   open)    open_url "$WEB_URL" ;;
   update)
-    git -C "$APP_DIR" fetch --tags --quiet origin
-    if [ "${SYNCLE_CHANNEL:-release}" = "main" ]; then
-      git -C "$APP_DIR" checkout --quiet main
-      git -C "$APP_DIR" pull --ff-only
-    else
-      tag=$(git -C "$APP_DIR" tag --list 'v*' --sort=-v:refname | head -n 1)
-      if [ -n "$tag" ]; then
-        git -C "$APP_DIR" checkout --quiet "$tag"
-      else
-        git -C "$APP_DIR" checkout --quiet main
-        git -C "$APP_DIR" pull --ff-only
-      fi
-    fi
-    compose up -d --build
+    # re-runs the installer, which refreshes the compose file and launcher and
+    # re-pins the image to the newest release. the encryption key is preserved.
+    command -v curl >/dev/null 2>&1 || die "curl is required to update."
+    curl -fsSL "$INSTALLER" | sh
+    compose pull --quiet
+    compose up -d
     printf 'Updated. %s\n' "$WEB_URL"
     ;;
   uninstall)
@@ -85,7 +99,7 @@ case "$cmd" in
     read -r ans
     case "$ans" in
       y|Y)
-        compose down -v --rmi local || true
+        compose down -v --rmi all || true
         rm -rf "$SYNCLE_HOME"
         # Best-effort removal of the launcher from common locations.
         for d in /usr/local/bin "$HOME/.local/bin"; do
@@ -97,10 +111,7 @@ case "$cmd" in
     esac
     ;;
   version|-v|--version)
-    # Parsed with sed so `syncle version` works on hosts without Node (the
-    # docker-only install is the normal case).
-    v=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$APP_DIR/package.json" 2>/dev/null)
-    printf 'Syncle %s\n' "${v:-unknown}"
+    printf 'Syncle %s\n' "$(cat "$SYNCLE_HOME/version" 2>/dev/null || echo unknown)"
     ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
