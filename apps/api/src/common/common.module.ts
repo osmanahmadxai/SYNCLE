@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { CryptoService } from './crypto.service';
+import { HealthController } from './health.controller';
 import { PrismaService } from './prisma.service';
 
 /**
@@ -9,6 +10,7 @@ import { PrismaService } from './prisma.service';
  */
 @Global()
 @Module({
+  controllers: [HealthController],
   providers: [PrismaService, CryptoService],
   exports: [PrismaService, CryptoService],
 })

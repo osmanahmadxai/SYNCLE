@@ -19,7 +19,8 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -33,6 +34,7 @@
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",
+    "@vitest/coverage-v8": "^2.1.4",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }

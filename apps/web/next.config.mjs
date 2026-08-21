@@ -11,6 +11,9 @@ const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // The Docker build sets NEXT_OUTPUT=standalone to emit the self-contained
+  // server the runtime image ships; plain `next start` keeps working otherwise.
+  ...(process.env.NEXT_OUTPUT === 'standalone' ? { output: 'standalone' } : {}),
   // The web app is a pure frontend; all data access goes through the NestJS
   // API. `@syncle/core` is consumed for shared types and Zod schemas only.
   transpilePackages: ['@syncle/core'],

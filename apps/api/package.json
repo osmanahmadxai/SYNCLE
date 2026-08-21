@@ -12,7 +12,8 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:coverage": "vitest run --passWithNoTests --coverage"
   },
   "dependencies": {
     "@nestjs/bullmq": "^10.2.3",
@@ -28,6 +29,7 @@
     "mongodb": "^6.21.0",
     "pg": "^8.13.1",
     "pg-logical-replication": "^2.0.3",
+    "prisma": "^5.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^3.23.8"
@@ -37,7 +39,7 @@
     "@nestjs/schematics": "^10.2.3",
     "@types/express": "^5.0.0",
     "@types/node": "^22.9.0",
-    "prisma": "^5.22.0",
+    "@vitest/coverage-v8": "^2.1.4",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }
