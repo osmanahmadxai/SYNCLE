@@ -74,6 +74,11 @@ model Connection {
   ssl                 Boolean  @default(false)
   connectionStringEnc String?  @map("connection_string_enc")
   optionsJson         String?  @map("options_json")
+  // SSH tunnel: non-secret fields as JSON (secrets blanked out), secret
+  // material (password / private key / passphrase) encrypted separately —
+  // the same split Hook uses for destinationJson / authEnc
+  sshJson             String?  @map("ssh_json")
+  sshSecretsEnc       String?  @map("ssh_secrets_enc")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 

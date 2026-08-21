@@ -331,6 +331,17 @@ If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
 `apps/api/.syncle/` on first run — set it explicitly in production
 (generate one with `openssl rand -base64 32`).
 
+### Remote databases (SSH tunnels)
+
+A connection can reach its database through an SSH jump host: toggle **SSH
+tunnel** in the connection dialog and give it the SSH host, user, and either a
+password or a PEM private key (plus its passphrase, if it has one). Syncle
+opens the tunnel server-side and port-forwards to the database, so only the
+SSH port needs to be reachable — the database itself stays private. SSH
+credentials are encrypted at rest and returned redacted, exactly like
+connection passwords. Tunnels apply to the network engines (PostgreSQL, MySQL,
+MongoDB, Redis); SQLite is a local file and never tunnels.
+
 ## CDC prerequisites
 
 Replay and watch bridges work anywhere. CDC needs the **source** database
