@@ -44,7 +44,8 @@
       "couldNotCreate": "Could not create account",
       "token": "Setup token",
       "tokenHint": "Printed in the server logs when Syncle starts — it proves you operate this server.",
-      "tokenMissing": "Enter the setup token from the server logs."
+      "tokenMissing": "Enter the setup token from the server logs.",
+      "tokenAuto": "Verified as this server's operator — the setup token came from the machine running Syncle."
     }
   },
   "userMenu": {

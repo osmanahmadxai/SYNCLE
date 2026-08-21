@@ -11,6 +11,7 @@ import {
   scrypt as scryptCb,
   timingSafeEqual,
 } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { Request, Response } from 'express';
@@ -25,6 +26,7 @@ import { AttemptLimiter } from '../common/attempt-limiter';
 import type { AppUser } from '@prisma/client';
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
+import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
 
 const scrypt = promisify(scryptCb);
@@ -89,7 +91,12 @@ export class AuthService implements OnModuleInit {
    */
   async onModuleInit(): Promise<void> {
     try {
-      if (await this.hasAccount()) return;
+      if (await this.hasAccount()) {
+        // an account already exists — clear any token file left behind by an
+        // earlier boot (e.g. the process was killed mid-setup)
+        this.clearSetupTokenFile();
+        return;
+      }
     } catch (err) {
       // DB not up yet — the token is minted lazily on the first setup attempt
       this.logger.warn(`Skipped setup-token mint: ${(err as Error).message}`);
@@ -132,6 +139,7 @@ export class AuthService implements OnModuleInit {
       },
     });
     this.setupToken = null;
+    this.clearSetupTokenFile();
     this.setupLimiter.succeed(`setup:${ip}`);
     return user;
   }
@@ -167,7 +175,38 @@ export class AuthService implements OnModuleInit {
 
   private mintSetupToken(): string {
     this.setupToken = randomBytes(9).toString('base64url');
+    this.persistSetupToken(this.setupToken);
     return this.setupToken;
+  }
+
+  /**
+   * Mirror the token to the data dir so `syncle up` can read it back and open
+   * the browser with the setup form already filled in. Reading that file needs
+   * host or container access — the same thing the token is proof of — so this
+   * changes how the operator receives it, not who can.
+   *
+   * Written 0600, and removed as soon as an account exists so a stale file can
+   * never hand out a token that no longer works.
+   */
+  private persistSetupToken(token: string): void {
+    try {
+      writeFileSync(runtimeConfig.setupTokenFile, `${token}\n`, { mode: 0o600 });
+    } catch (err) {
+      // non-fatal: the token is still printed to the console
+      this.logger.warn(
+        `Could not write the setup-token file: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private clearSetupTokenFile(): void {
+    try {
+      rmSync(runtimeConfig.setupTokenFile, { force: true });
+    } catch (err) {
+      this.logger.warn(
+        `Could not remove the setup-token file: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**

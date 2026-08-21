@@ -44,7 +44,8 @@
       "couldNotCreate": "无法创建账号",
       "token": "初始化令牌",
       "tokenHint": "Syncle 启动时打印在服务器日志中——用于证明你是这台服务器的运维者。",
-      "tokenMissing": "请输入服务器日志中的初始化令牌。"
+      "tokenMissing": "请输入服务器日志中的初始化令牌。",
+      "tokenAuto": "已验证为本服务器的操作者 — 设置令牌来自运行 Syncle 的主机。"
     }
   },
   "userMenu": {
