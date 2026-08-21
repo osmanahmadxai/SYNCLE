@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# Single image that builds the whole Syncle monorepo (core + api + web).
-# The same image runs both the API and the web GUI — docker-compose.app.yml
+# Single image that runs both the API and the web GUI — docker-compose.app.yml
 # starts two containers from it with different commands. See `bin/syncle`.
+#
+# Two stages: `build` compiles the monorepo with the full toolchain, `runtime`
+# ships only production artifacts — the API's pruned prod install (via
+# `pnpm deploy`) and the web app's Next standalone output. No compilers, no
+# git, no dev dependencies, and it runs as the unprivileged `node` user.
 
 FROM node:22-bookworm-slim AS build
 ENV PNPM_HOME=/pnpm
@@ -30,13 +34,46 @@ RUN pnpm install --frozen-lockfile
 # 2) Build everything. NEXT_PUBLIC_API_URL is baked into the browser bundle at
 #    build time, so it must point at wherever the browser reaches the API
 #    (the host-exposed API port, default http://localhost:4002/api).
+#    NEXT_OUTPUT=standalone makes `next build` emit the self-contained server
+#    used by the runtime stage (plain `next start` keeps working outside Docker).
 COPY . .
 ARG NEXT_PUBLIC_API_URL=http://localhost:4002/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_OUTPUT=standalone
 RUN pnpm --filter @syncle/core build \
  && pnpm --filter @syncle/api build \
  && pnpm --filter @syncle/web build
 
+# 3) Prune the API to production dependencies only (dist + prisma + prod
+#    node_modules, including the generated client and the prisma CLI for
+#    `migrate deploy` at boot).
+# --legacy: copy workspace deps into node_modules rather than requiring the
+# repo-wide inject-workspace-packages setting (pnpm v10 default changed)
+RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api
+
+# ---------------------------------------------------------------------------
+
+FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
+WORKDIR /app
+
+# openssl for Prisma's engines; nothing else from the build toolchain.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# API: pruned production install.
+COPY --from=build /out/api /app/apps/api
+# Web: Next standalone server (nested under apps/web because the monorepo root
+# is the file-tracing root) plus its static assets.
+COPY --from=build /app/apps/web/.next/standalone /app/web
+COPY --from=build /app/apps/web/.next/static /app/web/apps/web/.next/static
+COPY --from=build /app/apps/web/public /app/web/apps/web/public
+
+# The api data dir must exist before the named volume mounts over it, and the
+# whole tree must be writable by the unprivileged user.
+RUN mkdir -p /app/apps/api/.syncle && chown -R node:node /app
+USER node
+
 # API 4002, Web 3002 — the actual command per container comes from compose.
 EXPOSE 4002 3002

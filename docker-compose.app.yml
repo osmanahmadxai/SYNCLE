@@ -68,6 +68,18 @@ services:
       - syncle-api-data:/app/apps/api/.syncle
     ports:
       - '4002:4002'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4002/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,15 +93,18 @@ services:
       dockerfile: Dockerfile
     container_name: syncle-web
     restart: unless-stopped
-    working_dir: /app/apps/web
-    command: ['node', 'scripts/next-with-port.mjs', 'start']
+    working_dir: /app/web/apps/web
+    # the Next standalone server produced by the image's build stage
+    command: ['node', 'server.js']
     environment:
       NODE_ENV: production
-      WEB_PORT: '3002'
+      PORT: '3002'
+      HOSTNAME: 0.0.0.0
     ports:
       - '3002:3002'
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   syncle-postgres-data:
