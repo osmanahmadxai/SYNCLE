@@ -34,11 +34,11 @@ protections:
   after which a scrypt-hashed password and a signed httpOnly session cookie
   protect the whole API. Password changes invalidate all outstanding sessions,
   and the login/setup endpoints rate-limit repeated failures.
-- **Secrets encrypted at rest.** Connection credentials and hook auth secrets
+- **Secrets encrypted at rest.** Connection credentials and bridge auth secrets
   are AES-256-GCM encrypted under `SYNCLE_MASTER_KEY` (session cookies are
   signed with an HKDF-derived sub-key, so encryption and signing stay
   independent). Set the key explicitly in production.
-- **Outbound destination guard.** Hook deliveries never follow redirects and
+- **Outbound destination guard.** Bridge deliveries never follow redirects and
   always refuse cloud metadata endpoints (169.254.169.254 and friends). On a
   network-exposed deployment, set `SYNCLE_BLOCK_PRIVATE_DESTINATIONS=true` to
   also refuse loopback/private/link-local destinations — it is off by default

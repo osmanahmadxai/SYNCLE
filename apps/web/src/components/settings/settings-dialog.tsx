@@ -38,7 +38,7 @@ const RANGES = {
   defaultMaxPerPoll: { min: 1, max: 5000 },
   maxQueryRows: { min: 1, max: 1_000_000 },
   poolIdleMs: { min: 10_000, max: 86_400_000 },
-  hookConcurrency: { min: 1, max: 100 },
+  jobConcurrency: { min: 1, max: 100 },
   sessionTtlMinutes: { min: 15, max: 43_200 },
 } as const;
 
@@ -253,7 +253,7 @@ function SaveBar({ saving, onSave }: { saving: boolean; onSave: () => void }) {
   );
 }
 
-/** clamped numeric field (mirrors hook-builder's NumField) */
+/** clamped numeric field (mirrors bridge-builder's NumField) */
 function NumField({
   id,
   label,
@@ -372,13 +372,13 @@ function EngineTab({ settings }: { settings: AppSettings }) {
         onChange={(v) => set('poolIdleMs', v)}
       />
       <NumField
-        id="hook-concurrency"
-        label="Bridge concurrency"
-        hint="How many replay runs may execute at once. Applies after an API restart."
-        value={form.hookConcurrency}
-        min={RANGES.hookConcurrency.min}
-        max={RANGES.hookConcurrency.max}
-        onChange={(v) => set('hookConcurrency', v)}
+        id="job-concurrency"
+        label="Job concurrency"
+        hint="How many jobs may execute at once. Applies after an API restart."
+        value={form.jobConcurrency}
+        min={RANGES.jobConcurrency.min}
+        max={RANGES.jobConcurrency.max}
+        onChange={(v) => set('jobConcurrency', v)}
       />
       <SaveBar saving={saving} onSave={save} />
     </div>

@@ -5,7 +5,7 @@ import { CommonModule } from './common/common.module';
 import { redisConnectionOptions } from './common/runtime-config';
 import { ConnectionsModule } from './connections/connections.module';
 import { DriversModule } from './drivers/drivers.module';
-import { HooksModule } from './hooks/hooks.module';
+import { BridgesModule } from './bridges/bridges.module';
 import { SettingsModule } from './settings/settings.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 
@@ -19,7 +19,7 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
     BullModule.forRoot({ connection: redisConnectionOptions() }),
     ConnectionsModule,
     DriversModule,
-    HooksModule,
+    BridgesModule,
     WorkspacesModule,
   ],
 })

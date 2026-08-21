@@ -1,5 +1,5 @@
 /**
- * outbound-destination guard for hook HTTP deliveries (SSRF).
+ * outbound-destination guard for bridge HTTP deliveries (SSRF).
  *
  * two tiers:
  *  - cloud metadata endpoints (169.254.169.254 and friends) are ALWAYS

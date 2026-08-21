@@ -33,6 +33,16 @@ apps/web        @syncle/web  — Next.js frontend
 The dependency direction is one-way: `core` never imports from `api`/`web`, and
 `api` never imports from `web`. Keep it that way.
 
+## Terminology
+
+A **bridge** is the domain entity: the saved sync path — a source (table or
+query), its columns/mapping, and one or more destinations — plus the trigger
+that fires it. A **job** is one execution of a bridge: a one-time replay
+transfer is the purest job, while starting a watch or CDC bridge creates a
+long-lived live job. A **delivery** is one row or batch delivered within a job.
+(Bridges used to be called "hooks" and jobs "runs"; `@syncle/core` still
+exports deprecated aliases under the old names for the transition.)
+
 ## Before you open a PR
 
 Run the full quality gate locally — CI runs the same thing:
@@ -65,7 +75,7 @@ form, schema browser, and feature gating are all derived from that one
 registration — no UI wiring needed.
 
 For event-based delivery on a new engine, add a `CdcProvider` under
-`apps/api/src/hooks/cdc/providers/` and register it in `hooks.module.ts`.
+`apps/api/src/bridges/cdc/providers/` and register it in `bridges.module.ts`.
 
 ## Commit style
 

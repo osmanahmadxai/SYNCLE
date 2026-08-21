@@ -109,7 +109,7 @@ The rest is the same whichever destination and trigger you pick:
 - **Watch it happen.** A live timeline colours every delivery green (synced) ·
   red (failed) · amber (skipped) · slate (queued). Click any cell for the exact
   row written, the result, timing, and any error.
-- **Stay in control.** Runs survive restarts, resume where they stopped, and can
+- **Stay in control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
   place — failed cells flip green.
 
@@ -155,10 +155,10 @@ Working on the code? `pnpm dev` is the same thing in watch mode.
 > system package manager, then `pnpm install` again.
 
 > The two services back different things. **Postgres** holds Syncle's own
-> metadata (saved connections, hooks, runs, deliveries) through Prisma.
-> **Redis** backs the BullMQ queue that runs hooks durably. Connecting
-> databases, browsing data, and building/previewing hooks all work without
-> Redis — only _running_ a hook needs it. Point `DATABASE_URL` / `REDIS_URL` at
+> metadata (saved connections, bridges, jobs, deliveries) through Prisma.
+> **Redis** backs the BullMQ queue that runs bridge jobs durably. Connecting
+> databases, browsing data, and building/previewing bridges all work without
+> Redis — only _running_ a job needs it. Point `DATABASE_URL` / `REDIS_URL` at
 > your own instances if you'd rather not use the bundled containers.
 
 ---
@@ -204,7 +204,7 @@ anything the database still needs (see [CDC prerequisites](#cdc-prerequisites)).
 **5 · Run it and watch.** Start the bridge and the timeline lights up cell by
 cell — green synced · red failed · amber skipped · slate queued. Click any cell
 to see the exact row, the result, and timing. Fix a destination and **retry just
-the failures**, skip rows you don't want, or cancel and resume later — runs
+the failures**, skip rows you don't want, or cancel and resume later — jobs
 survive restarts.
 
 > **Common first bridges:** Postgres → MongoDB (replay to backfill, then CDC to
@@ -264,17 +264,17 @@ syncle/
 │  └─ core/            @syncle/core — framework-agnostic domain (pure TS)
 │     ├─ adapters/       DatabaseAdapter interface + one file per engine
 │     │                  (raw drivers: pg, mysql2, better-sqlite3, mongodb, ioredis)
-│     └─ hooks/          column mapping + cross-engine table translation,
+│     └─ bridges/        column mapping + cross-engine table translation,
 │                        payload transform, shared bridge schemas (Zod)
 ├─ apps/
 │  ├─ api/             @syncle/api — NestJS backend
-│  │  ├─ hooks/          bridge store · run processor · CDC providers ·
+│  │  ├─ bridges/        bridge store · job processor · CDC providers ·
 │  │  │                  sink router → database sink + HTTP delivery
 │  │  ├─ connections/    Prisma-backed store · live adapter pool · controllers
 │  │  ├─ common/         crypto · Zod validation · exception filter
 │  │  └─ prisma/         metadata-store schema + migrations
 │  └─ web/             @syncle/web — Next.js 15 frontend (shadcn/ui, TanStack)
-└─ docker-compose.yml  Postgres (metadata) + Redis (run queue)
+└─ docker-compose.yml  Postgres (metadata) + Redis (job queue)
 ```
 
 **One sink, two destination kinds.** Every trigger (replay, watch, CDC) funnels
@@ -290,14 +290,15 @@ atomic upsert — Postgres/SQLite `ON CONFLICT`, MySQL `ON DUPLICATE KEY`, Mongo
 idempotent: replays and at-least-once CDC redeliveries land a row once. Deletes
 route to a keyed delete on each target.
 
-**Durable runs.** A replay run is one BullMQ job (`jobId = runId`). It streams
+**Durable jobs.** A replay job is one BullMQ queue entry (the queue id is the
+job's id). It streams
 the source a page at a time (keyset pagination for millions of rows), syncs
 sequentially (natural backpressure), and checkpoints progress — so a crash
 auto-resumes from where it left off.
 
 **CDC behind one interface.** Each engine captures changes its own way, but they
 all implement the same small `CdcProvider` contract (readiness, provision,
-stream, cursor). The service around them handles the run lifecycle and the
+stream, cursor). The service around them handles the job lifecycle and the
 shared dedupe → map → write → record → checkpoint pipeline, so adding a new
 engine's CDC is a single file.
 
@@ -322,9 +323,9 @@ Env files are created automatically on first run from the committed
 | `WEB_PORT`                    | web   | Web port (default `3002`)                    |
 | `NEXT_PUBLIC_API_URL`         | web   | Base URL of the API                          |
 | `DATABASE_URL`                | api   | Postgres datasource for the metadata store   |
-| `REDIS_URL`                   | api   | Redis backing the bridge-run queue           |
+| `REDIS_URL`                   | api   | Redis backing the bridge-job queue           |
 | `SYNCLE_MASTER_KEY`       | api   | base64 32-byte key for secret encryption     |
-| `SYNCLE_HOOK_CONCURRENCY` | api   | How many bridge runs may execute in parallel |
+| `SYNCLE_JOB_CONCURRENCY` | api   | How many bridge jobs may execute in parallel |
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
@@ -354,10 +355,10 @@ for you and spells out what's missing.
 | MySQL      | binary log             | `log_bin=ON`, `binlog_format=ROW`, `binlog_row_image=FULL`, REPLICATION grants                              |
 | MongoDB    | change streams         | a replica set (a single-node one is fine for dev); pre-images auto-enabled so deletes propagate by your key |
 | Redis      | keyspace notifications | `notify-keyspace-events` (Syncle enables it when it can)                                               |
-| SQLite     | —                      | not supported; use a watch hook instead                                                                     |
+| SQLite     | —                      | not supported; use a watch bridge instead                                                                     |
 
 > Redis CDC is real-time only and non-durable — events that happen while Syncle
-> is offline can't be recovered, so prefer a watch hook there if you need
+> is offline can't be recovered, so prefer a watch bridge there if you need
 > guarantees.
 
 ## Scripts
@@ -381,10 +382,10 @@ React Flow · Zod · Vitest.
 
 ## Security
 
-- Connection passwords and hook auth secrets are encrypted at rest (AES-256-GCM)
+- Connection passwords and bridge auth secrets are encrypted at rest (AES-256-GCM)
   and only ever returned to the browser redacted.
 - All user values are passed as bound parameters; identifiers are dialect-quoted.
-- Hook payloads are built by structured token substitution — no string injection,
+- Bridge payloads are built by structured token substitution — no string injection,
   no code execution.
 - Every API route sits behind a single-operator auth layer: the first run
   creates the admin account, after which a scrypt-hashed password and an

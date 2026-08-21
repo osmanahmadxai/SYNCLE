@@ -12,8 +12,8 @@ import type {
   BrowseParams,
   ChangePasswordDTO,
   ConnectionInputDTO,
-  HookInputDTO,
-  HookRun,
+  BridgeInputDTO,
+  BridgeJob,
   LoginDTO,
   SetupDTO,
   WorkspaceInputDTO,
@@ -33,12 +33,12 @@ export const queryKeys = {
     ['connections', id, 'schema', database ?? 'default'] as const,
   browse: (id: string, database: string | undefined, params: BrowseParams) =>
     ['connections', id, 'browse', database ?? 'default', params] as const,
-  hooks: ['hooks'] as const,
-  hook: (id: string) => ['hooks', id] as const,
-  hookRuns: (id: string) => ['hooks', id, 'runs'] as const,
-  hookRun: (id: string, runId: string) => ['hooks', id, 'runs', runId] as const,
-  hookDeliveries: (id: string, runId: string) =>
-    ['hooks', id, 'runs', runId, 'deliveries'] as const,
+  bridges: ['bridges'] as const,
+  bridge: (id: string) => ['bridges', id] as const,
+  bridgeJobs: (id: string) => ['bridges', id, 'jobs'] as const,
+  bridgeJob: (id: string, jobId: string) => ['bridges', id, 'jobs', jobId] as const,
+  bridgeDeliveries: (id: string, jobId: string) =>
+    ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
 
 /* ----- auth ----- */
@@ -147,10 +147,10 @@ export function useDeleteWorkspace() {
   return useMutation({
     mutationFn: (id: string) => api.deleteWorkspace(id),
     onSuccess: () => {
-      // a workspace delete cascades to its connections + hooks
+      // a workspace delete cascades to its connections + bridges
       qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       qc.invalidateQueries({ queryKey: queryKeys.connections });
-      qc.invalidateQueries({ queryKey: queryKeys.hooks });
+      qc.invalidateQueries({ queryKey: queryKeys.bridges });
     },
   });
 }
@@ -225,169 +225,169 @@ export function useBrowse(
   });
 }
 
-/* ----- automation hooks ----- */
+/* ----- automation bridges ----- */
 
-/** bridges (hooks) in the active workspace */
-export function useHooks() {
+/** bridges in the active workspace */
+export function useBridges() {
   const workspaceId = useStudio((s) => s.activeWorkspaceId);
   return useQuery({
-    queryKey: [...queryKeys.hooks, workspaceId],
-    queryFn: () => api.listHooks(workspaceId ?? undefined),
+    queryKey: [...queryKeys.bridges, workspaceId],
+    queryFn: () => api.listBridges(workspaceId ?? undefined),
     enabled: !!workspaceId,
   });
 }
 
-/** latest run status per bridge — polled so the map colors stay live */
-export function useHookStatuses() {
+/** latest job status per bridge — polled so the map colors stay live */
+export function useBridgeStatuses() {
   const workspaceId = useStudio((s) => s.activeWorkspaceId);
   return useQuery({
-    queryKey: ['hookStatuses', workspaceId],
-    queryFn: () => api.listHookStatuses(workspaceId as string),
+    queryKey: ['bridgeStatuses', workspaceId],
+    queryFn: () => api.listBridgeStatuses(workspaceId as string),
     enabled: !!workspaceId,
     refetchInterval: 3000,
   });
 }
 
-export function useCreateHook() {
+export function useCreateBridge() {
   const qc = useQueryClient();
   const workspaceId = useStudio((s) => s.activeWorkspaceId);
   return useMutation({
     // stamp the active workspace so a new bridge belongs to the current one
-    mutationFn: (input: HookInputDTO) =>
-      api.createHook({ ...input, workspaceId: input.workspaceId ?? workspaceId ?? undefined }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.hooks }),
+    mutationFn: (input: BridgeInputDTO) =>
+      api.createBridge({ ...input, workspaceId: input.workspaceId ?? workspaceId ?? undefined }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.bridges }),
   });
 }
 
-export function useUpdateHook() {
+export function useUpdateBridge() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: HookInputDTO }) =>
-      api.updateHook(id, input),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.hooks }),
+    mutationFn: ({ id, input }: { id: string; input: BridgeInputDTO }) =>
+      api.updateBridge(id, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.bridges }),
   });
 }
 
-export function useDeleteHook() {
+export function useDeleteBridge() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.deleteHook(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.hooks }),
+    mutationFn: (id: string) => api.deleteBridge(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.bridges }),
   });
 }
 
-/** the element shape of the polled `['hookStatuses', workspaceId]` lists */
-interface HookStatus {
-  hookId: string;
+/** the element shape of the polled `['bridgeStatuses', workspaceId]` lists */
+interface BridgeStatus {
+  bridgeId: string;
   active: boolean;
   lastStatus: string;
 }
 
-/** upsert the authoritative run into the runs list so the UI updates instantly */
-function upsertHookRun(qc: QueryClient, hookId: string, run: HookRun) {
-  qc.setQueryData<HookRun[]>(queryKeys.hookRuns(hookId), (old = []) => [
-    run,
-    ...old.filter((r) => r.id !== run.id),
+/** upsert the authoritative job into the jobs list so the UI updates instantly */
+function upsertBridgeJob(qc: QueryClient, bridgeId: string, job: BridgeJob) {
+  qc.setQueryData<BridgeJob[]>(queryKeys.bridgeJobs(bridgeId), (old = []) => [
+    job,
+    ...old.filter((r) => r.id !== job.id),
   ]);
 }
 
 /** patch a bridge's status across every workspace's status list */
-function patchHookStatus(
+function patchBridgeStatus(
   qc: QueryClient,
-  hookId: string,
+  bridgeId: string,
   patch: { active: boolean; lastStatus: string },
 ) {
-  qc.setQueriesData<HookStatus[]>({ queryKey: ['hookStatuses'] }, (old) =>
-    old?.map((s) => (s.hookId === hookId ? { ...s, ...patch } : s)),
+  qc.setQueriesData<BridgeStatus[]>({ queryKey: ['bridgeStatuses'] }, (old) =>
+    old?.map((s) => (s.bridgeId === bridgeId ? { ...s, ...patch } : s)),
   );
 }
 
-export function useStartHookRun(hookId: string) {
+export function useStartBridgeJob(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (
       opts: {
-        resumeRunId?: string;
-        runId?: string;
+        resumeJobId?: string;
+        jobId?: string;
         retryFailedOf?: string;
       } = {},
-    ) => api.startHookRun(hookId, opts),
-    // write the returned run into the cache first so the sidebar badge and run
+    ) => api.startBridgeJob(bridgeId, opts),
+    // write the returned job into the cache first so the sidebar badge and job
     // list update instantly, then invalidate to reconcile with the server
-    onSuccess: (run) => {
-      upsertHookRun(qc, hookId, run);
-      patchHookStatus(qc, hookId, { active: true, lastStatus: run.status });
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
-      qc.invalidateQueries({ queryKey: ['hookStatuses'] });
+    onSuccess: (job) => {
+      upsertBridgeJob(qc, bridgeId, job);
+      patchBridgeStatus(qc, bridgeId, { active: true, lastStatus: job.status });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
   });
 }
 
-export function useStartWatch(hookId: string) {
+export function useStartWatch(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.startWatch(hookId),
-    onSuccess: (run) => {
-      upsertHookRun(qc, hookId, run);
-      patchHookStatus(qc, hookId, { active: true, lastStatus: run.status });
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
-      qc.invalidateQueries({ queryKey: ['hookStatuses'] });
+    mutationFn: () => api.startWatch(bridgeId),
+    onSuccess: (job) => {
+      upsertBridgeJob(qc, bridgeId, job);
+      patchBridgeStatus(qc, bridgeId, { active: true, lastStatus: job.status });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
   });
 }
 
-export function useStopWatch(hookId: string) {
+export function useStopWatch(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.stopWatch(hookId),
+    mutationFn: () => api.stopWatch(bridgeId),
     // stop returns null when nothing was watching — nothing to write then
-    onSuccess: (run) => {
-      if (run) {
-        upsertHookRun(qc, hookId, run);
-        patchHookStatus(qc, hookId, { active: false, lastStatus: run.status });
+    onSuccess: (job) => {
+      if (job) {
+        upsertBridgeJob(qc, bridgeId, job);
+        patchBridgeStatus(qc, bridgeId, { active: false, lastStatus: job.status });
       }
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
-      qc.invalidateQueries({ queryKey: ['hookStatuses'] });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
   });
 }
 
-export function useRetryFailed(hookId: string) {
+export function useRetryFailed(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (runId: string) => api.retryFailedDeliveries(hookId, runId),
-    onSuccess: (_d, runId) => {
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
+    mutationFn: (jobId: string) => api.retryFailedDeliveries(bridgeId, jobId),
+    onSuccess: (_d, jobId) => {
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
       qc.invalidateQueries({
-        queryKey: queryKeys.hookDeliveries(hookId, runId),
+        queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId),
       });
-      qc.invalidateQueries({ queryKey: ['hookStatuses'] });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
   });
 }
 
-export function useCancelHookRun(hookId: string) {
+export function useCancelBridgeJob(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (runId: string) => api.cancelHookRun(hookId, runId),
-    onSuccess: (run) => {
-      upsertHookRun(qc, hookId, run);
-      patchHookStatus(qc, hookId, { active: false, lastStatus: run.status });
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
-      qc.invalidateQueries({ queryKey: ['hookStatuses'] });
+    mutationFn: (jobId: string) => api.cancelBridgeJob(bridgeId, jobId),
+    onSuccess: (job) => {
+      upsertBridgeJob(qc, bridgeId, job);
+      patchBridgeStatus(qc, bridgeId, { active: false, lastStatus: job.status });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
   });
 }
 
-/** live-polls while any run is still active */
-export function useHookRuns(hookId: string | null) {
+/** live-polls while any job is still active */
+export function useBridgeJobs(bridgeId: string | null) {
   return useQuery({
-    queryKey: hookId ? queryKeys.hookRuns(hookId) : ['hookRuns', 'none'],
-    queryFn: () => api.listHookRuns(hookId as string),
-    enabled: !!hookId,
+    queryKey: bridgeId ? queryKeys.bridgeJobs(bridgeId) : ['bridgeJobs', 'none'],
+    queryFn: () => api.listBridgeJobs(bridgeId as string),
+    enabled: !!bridgeId,
     refetchInterval: (query) => {
-      const runs = query.state.data as HookRun[] | undefined;
-      const active = runs?.some((r) =>
+      const jobs = query.state.data as BridgeJob[] | undefined;
+      const active = jobs?.some((r) =>
         ['queued', 'running', 'canceling'].includes(r.status),
       );
       return active ? 1500 : false;
@@ -395,9 +395,9 @@ export function useHookRuns(hookId: string | null) {
   });
 }
 
-export function useHookDeliveries(
-  hookId: string | null,
-  runId: string | null,
+export function useBridgeDeliveries(
+  bridgeId: string | null,
+  jobId: string | null,
   live: boolean,
   opts: {
     status?: 'success' | 'failed' | 'skipped';
@@ -412,46 +412,46 @@ export function useHookDeliveries(
 
   const query = useQuery({
     queryKey:
-      hookId && runId
-        ? [...queryKeys.hookDeliveries(hookId, runId), opts]
-        : ['hookDeliveries', 'none'],
+      bridgeId && jobId
+        ? [...queryKeys.bridgeDeliveries(bridgeId, jobId), opts]
+        : ['bridgeDeliveries', 'none'],
     queryFn: () =>
-      api.listHookDeliveries(hookId as string, runId as string, {
+      api.listBridgeDeliveries(bridgeId as string, jobId as string, {
         // default cap for range (from/to) windows; offset windows pass their
         // own page-size limit
         limit: 2000,
         ...opts,
       }),
-    enabled: !!hookId && !!runId,
+    enabled: !!bridgeId && !!jobId,
     refetchInterval: live ? 1500 : false,
     staleTime: 0,
   });
 
-  // when a run goes from active to terminal, invalidate every window so
+  // when a job goes from active to terminal, invalidate every window so
   // deliveries written between the last poll and completion show up (the
   // active query refetches immediately, siblings on next mount)
   useEffect(() => {
-    if (prevLiveRef.current && !live && hookId && runId) {
+    if (prevLiveRef.current && !live && bridgeId && jobId) {
       void qc.invalidateQueries({
-        queryKey: queryKeys.hookDeliveries(hookId, runId),
+        queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId),
       });
     }
     prevLiveRef.current = live;
-  }, [live, hookId, runId, qc]);
+  }, [live, bridgeId, jobId, qc]);
 
   return query;
 }
 
-export function useSkipDeliveries(hookId: string, runId: string) {
+export function useSkipDeliveries(bridgeId: string, jobId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (sequences: number[]) =>
-      api.skipHookRun(hookId, runId, sequences),
+      api.skipBridgeJob(bridgeId, jobId, sequences),
     onSuccess: () => {
       qc.invalidateQueries({
-        queryKey: queryKeys.hookDeliveries(hookId, runId),
+        queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId),
       });
-      qc.invalidateQueries({ queryKey: queryKeys.hookRuns(hookId) });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
     },
   });
 }

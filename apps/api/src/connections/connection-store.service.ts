@@ -43,12 +43,12 @@ export class ConnectionStoreService {
     }
   }
 
-  /* ----- ssh secret split / merge (same pattern as the hook auth secret) ----- */
+  /* ----- ssh secret split / merge (same pattern as the bridge auth secret) ----- */
 
   /**
    * split the secret material out of an ssh block. secrets are blanked to ""
    * in the sanitized copy so their presence survives without their value —
-   * mirroring how HookStoreService blanks the destination auth secret
+   * mirroring how BridgeStoreService blanks the destination auth secret
    */
   private splitSsh(ssh: SshTunnelConfig | undefined): {
     sanitized: SshTunnelConfig | null;

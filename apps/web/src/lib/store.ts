@@ -11,8 +11,8 @@ export interface SelectedRelation {
   kind: RelationKind;
 }
 
-/** prefill payload when opening the hook editor (e.g. from the schema tree) */
-export interface HookEditorSeed {
+/** prefill payload when opening the bridge editor (e.g. from the schema tree) */
+export interface BridgeEditorSeed {
   connectionId: string;
   database?: string;
   schema?: string;
@@ -45,13 +45,13 @@ interface StudioState {
   /** connection editor dialog state */
   dialog: { open: boolean; editingId: string | null };
 
-  /** the bridge (hook) currently open in the main panel */
-  selectedHookId: string | null;
-  /** hook editor dialog: open + which hook (null = new) + optional prefill */
-  hookEditor: {
+  /** the bridge currently open in the main panel */
+  selectedBridgeId: string | null;
+  /** bridge editor dialog: open + which bridge (null = new) + optional prefill */
+  bridgeEditor: {
     open: boolean;
     editingId: string | null;
-    seed: HookEditorSeed | null;
+    seed: BridgeEditorSeed | null;
   };
   /** the full DB/table management surface (connections, schema, browse, DDL) */
   dataSourcesOpen: boolean;
@@ -68,12 +68,12 @@ interface StudioState {
   clearSelection: () => void;
   setTab: (tab: StudioTab) => void;
 
-  selectHook: (id: string | null) => void;
-  openHookEditor: (opts?: {
+  selectBridge: (id: string | null) => void;
+  openBridgeEditor: (opts?: {
     editingId?: string | null;
-    seed?: HookEditorSeed;
+    seed?: BridgeEditorSeed;
   }) => void;
-  closeHookEditor: () => void;
+  closeBridgeEditor: () => void;
   openDataSources: () => void;
   closeDataSources: () => void;
 
@@ -111,25 +111,25 @@ export const useStudio = create<StudioState>((set) => ({
   selected: null,
   tab: 'data',
   dialog: { open: false, editingId: null },
-  selectedHookId: null,
-  hookEditor: { open: false, editingId: null, seed: null },
+  selectedBridgeId: null,
+  bridgeEditor: { open: false, editingId: null, seed: null },
   dataSourcesOpen: false,
   queryTabs: initial.tabs,
   activeQueryTabId: initial.activeId,
 
   // selecting a bridge and browsing a table are mutually exclusive. the main
   // view shows the table preview when one is picked, else the workspace map
-  selectHook: (id) => set({ selectedHookId: id, selected: null }),
-  openHookEditor: (opts) =>
+  selectBridge: (id) => set({ selectedBridgeId: id, selected: null }),
+  openBridgeEditor: (opts) =>
     set({
-      hookEditor: {
+      bridgeEditor: {
         open: true,
         editingId: opts?.editingId ?? null,
         seed: opts?.seed ?? null,
       },
     }),
-  closeHookEditor: () =>
-    set({ hookEditor: { open: false, editingId: null, seed: null } }),
+  closeBridgeEditor: () =>
+    set({ bridgeEditor: { open: false, editingId: null, seed: null } }),
   openDataSources: () => set({ dataSourcesOpen: true }),
   closeDataSources: () => set({ dataSourcesOpen: false }),
 
@@ -142,7 +142,7 @@ export const useStudio = create<StudioState>((set) => ({
       if (s.activeWorkspaceId === id) return {};
       return {
         activeWorkspaceId: id,
-        selectedHookId: null,
+        selectedBridgeId: null,
         selected: null,
         activeConnectionId: null,
         activeDatabase: undefined,
@@ -162,7 +162,7 @@ export const useStudio = create<StudioState>((set) => ({
   },
   setActiveDatabase: (db) => set({ activeDatabase: db, selected: null }),
   selectRelation: (rel) =>
-    set({ selected: rel, tab: 'data', selectedHookId: null }),
+    set({ selected: rel, tab: 'data', selectedBridgeId: null }),
   clearSelection: () => set({ selected: null }),
   setTab: (tab) => set({ tab }),
 

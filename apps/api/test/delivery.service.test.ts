@@ -1,7 +1,7 @@
 /**
  * DeliveryService transport tests against a throwaway node:http server: retry
  * classification (retryable vs terminal status), Retry-After honored and
- * clamped, run-abort propagation, and the truncated-capture flag that keeps
+ * clamped, job-abort propagation, and the truncated-capture flag that keeps
  * the resend path from replaying garbage.
  */
 import 'reflect-metadata';
@@ -13,8 +13,8 @@ import {
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HookDeliveryConfig, HttpDestination } from '@syncle/core';
-import { DeliveryService } from '../src/hooks/delivery.service';
+import type { BridgeDeliveryConfig, HttpDestination } from '@syncle/core';
+import { DeliveryService } from '../src/bridges/delivery.service';
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -25,7 +25,7 @@ async function listen(handler: Handler): Promise<string> {
   server = createServer(handler);
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   const { port } = server!.address() as AddressInfo;
-  return `http://127.0.0.1:${port}/hook`;
+  return `http://127.0.0.1:${port}/bridge`;
 }
 
 afterEach(async () => {
@@ -36,7 +36,7 @@ afterEach(async () => {
   }
 });
 
-function config(overrides: Partial<HookDeliveryConfig> = {}): HookDeliveryConfig {
+function config(overrides: Partial<BridgeDeliveryConfig> = {}): BridgeDeliveryConfig {
   return {
     batchSize: 1,
     maxAttempts: 3,
@@ -149,7 +149,7 @@ describe('DeliveryService.send', () => {
     expect(times[1]! - times[0]!).toBeLessThan(1000); // ~50ms + jitter, not 1h
   });
 
-  it('propagates a run-level abort as a rejection', async () => {
+  it('propagates a job-level abort as a rejection', async () => {
     const url = await listen(() => {
       /* never respond, the abort must cut the in-flight request */
     });
