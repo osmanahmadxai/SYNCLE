@@ -1,16 +1,22 @@
 /**
  * live adapter cache. opening a database connection is expensive, so one
  * adapter instance per saved connection is kept alive across requests and
- * evicted after a period of inactivity
+ * evicted after a period of inactivity. connections that tunnel through SSH
+ * keep their tunnel alongside the adapter: it opens before the adapter
+ * connects and closes with it
  */
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { createAdapter } from '@syncle/core/adapters';
+import { runtimeConfig } from '../common/runtime-config';
 import type { ConnectionConfig, DatabaseAdapter } from '@syncle/core';
 import { SettingsStoreService } from '../settings/settings-store.service';
 import { ConnectionStoreService } from './connection-store.service';
+import { SshTunnelService, type SshTunnel } from './ssh-tunnel.service';
 
 interface PoolEntry {
   adapter: DatabaseAdapter;
+  /** the SSH tunnel the adapter dials through, when the config asks for one */
+  tunnel?: SshTunnel;
   revision: string;
   lastUsedAt: number;
 }
@@ -25,6 +31,7 @@ export class AdapterPoolService implements OnModuleDestroy {
   constructor(
     private readonly store: ConnectionStoreService,
     private readonly settings: SettingsStoreService,
+    private readonly tunnels: SshTunnelService,
   ) {
     // fixed sweep cadence; the idle threshold itself is read live from settings
     // each sweep, so changing it in the UI takes effect without a restart
@@ -35,9 +42,15 @@ export class AdapterPoolService implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     clearInterval(this.sweepTimer);
     await Promise.all(
-      [...this.entries.values()].map((e) => e.adapter.close().catch(() => {})),
+      [...this.entries.values()].map((e) => this.closeEntry(e)),
     );
     this.entries.clear();
+  }
+
+  /** close an entry's adapter, then the tunnel it was dialing through */
+  private async closeEntry(entry: PoolEntry): Promise<void> {
+    await entry.adapter.close().catch(() => {});
+    await entry.tunnel?.close().catch(() => {});
   }
 
   private sweep(): void {
@@ -45,7 +58,7 @@ export class AdapterPoolService implements OnModuleDestroy {
     const idleMs = this.settings.snapshot().poolIdleMs;
     for (const [id, entry] of this.entries) {
       if (now - entry.lastUsedAt > idleMs) {
-        void entry.adapter.close().catch(() => {});
+        void this.closeEntry(entry);
         this.entries.delete(id);
       }
     }
@@ -90,12 +103,31 @@ export class AdapterPoolService implements OnModuleDestroy {
     const stale = this.entries.get(key);
     if (stale) {
       this.entries.delete(key);
-      await stale.adapter.close().catch(() => {});
+      await this.closeEntry(stale);
     }
-    const adapter = createAdapter(config);
-    await adapter.connect();
+    const restricted = withServerRestrictions(config);
+    const tunnel = await this.tunnels.openFor(restricted);
+    const adapter = createAdapter(this.tunnels.reroute(restricted, tunnel));
+    try {
+      await adapter.connect();
+    } catch (err) {
+      // a refused forward reaches the adapter as a bare socket reset; the
+      // ssh-level failure recorded on the tunnel is the real story
+      const sshErr = tunnel?.takeError();
+      await adapter.close().catch(() => {});
+      await tunnel?.close().catch(() => {});
+      throw sshErr ?? err;
+    }
+    // if the ssh connection drops mid-use, evict so the next use redials
+    tunnel?.onClose(() => {
+      const entry = this.entries.get(key);
+      if (entry?.tunnel !== tunnel) return;
+      this.entries.delete(key);
+      void entry.adapter.close().catch(() => {});
+    });
     this.entries.set(key, {
       adapter,
+      tunnel,
       revision: config.updatedAt,
       lastUsedAt: Date.now(),
     });
@@ -116,12 +148,19 @@ export class AdapterPoolService implements OnModuleDestroy {
 
   /** build a one-off adapter from a raw config (used by "test connection") */
   async test(config: ConnectionConfig): Promise<void> {
-    const adapter = createAdapter(config);
+    const restricted = withServerRestrictions(config);
+    const tunnel = await this.tunnels.openFor(restricted);
+    const adapter = createAdapter(this.tunnels.reroute(restricted, tunnel));
     try {
       await adapter.connect();
       await adapter.ping();
+    } catch (err) {
+      // surface the ssh-level failure (e.g. refused forward) over the bare
+      // socket error the adapter saw
+      throw tunnel?.takeError() ?? err;
     } finally {
       await adapter.close().catch(() => {});
+      await tunnel?.close().catch(() => {});
     }
   }
 
@@ -141,8 +180,18 @@ export class AdapterPoolService implements OnModuleDestroy {
       key.startsWith(prefix),
     );
     for (const [key] of targets) this.entries.delete(key);
-    await Promise.all(
-      targets.map(([, entry]) => entry.adapter.close().catch(() => {})),
-    );
+    await Promise.all(targets.map(([, entry]) => this.closeEntry(entry)));
   }
+}
+
+/**
+ * server-side config restrictions applied to every adapter, whatever store
+ * the config came from: the SQLite path jail (SYNCLE_SQLITE_DIR) must not be
+ * bypassable by anything a client can persist.
+ */
+function withServerRestrictions<T extends { engine: string }>(config: T): T {
+  if (config.engine === 'sqlite' && runtimeConfig.sqliteBaseDir) {
+    return { ...config, fileBaseDir: runtimeConfig.sqliteBaseDir };
+  }
+  return config;
 }

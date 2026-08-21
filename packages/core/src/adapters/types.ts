@@ -54,6 +54,31 @@ export interface AdapterCapabilities {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * optional SSH tunnel in front of a network engine: the server dials the SSH
+ * host and port-forwards to the database, so the adapter connects to a local
+ * loopback port instead of the (unreachable) database host directly. sqlite is
+ * file-based and never tunnels. like `password`, the secret fields
+ * (`password` / `privateKey` / `passphrase`) are encrypted at rest and only
+ * ever decrypted inside the server process — this module carries the shape
+ * only, the tunnel runtime lives in the API server
+ */
+export interface SshTunnelConfig {
+  enabled: boolean;
+  /** SSH server (jump host) to dial */
+  host: string;
+  /** SSH port, default 22 */
+  port?: number;
+  username: string;
+  authMethod: 'password' | 'privateKey';
+  /** for authMethod "password" */
+  password?: string;
+  /** PEM-encoded private key, for authMethod "privateKey" */
+  privateKey?: string;
+  /** passphrase protecting the private key, if any */
+  passphrase?: string;
+}
+
+/**
  * a saved connection. engine-specific validation happens in each adapter; the
  * shared shape keeps the store and UI uniform. `password` is only ever present
  * in decrypted form inside the server process, it's encrypted at rest
@@ -78,6 +103,13 @@ export interface ConnectionConfig {
   connectionString?: string;
   /** free-form engine-specific options (e.g. Mongo authSource, Redis db index) */
   options?: Record<string, unknown>;
+  /**
+   * server-set restriction (never user input): when present, file-backed
+   * engines (SQLite) may only open paths under this directory
+   */
+  fileBaseDir?: string;
+  /** reach the database through an SSH tunnel (network engines only) */
+  ssh?: SshTunnelConfig;
   createdAt: string;
   updatedAt: string;
 }

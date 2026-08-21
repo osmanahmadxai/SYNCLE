@@ -1,6 +1,6 @@
 /**
  * workspaces are the top-level container, an ecosystem that owns connections and
- * bridges (hooks). everything a user creates lives inside one. there's always a
+ * bridges. everything a user creates lives inside one. there's always a
  * default workspace so the concept stays invisible until you want a second one.
  */
 import { z } from 'zod';

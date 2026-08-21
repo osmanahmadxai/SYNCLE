@@ -1,6 +1,10 @@
 /** shared Zod schemas for connection payloads (used on client and server) */
 import { z } from 'zod';
 
+// mirrors the DatabaseEngine union, including forward declarations that have
+// no adapter yet (mssql). the API re-validates the engine against the actual
+// driver registry before persisting, so a declared-but-unimplemented engine is
+// rejected there instead of being saved and 501ing on every later operation.
 export const engineSchema = z.enum([
   'postgres',
   'mysql',
@@ -10,23 +14,61 @@ export const engineSchema = z.enum([
   'mssql',
 ]);
 
-export const connectionInputSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(120),
-  // which workspace this connection lives in; server defaults it when omitted
-  workspaceId: z.string().optional(),
-  engine: engineSchema,
-  color: z.string().optional(),
-  host: z.string().optional(),
-  port: z.coerce.number().int().positive().optional(),
-  user: z.string().optional(),
+/**
+ * SSH tunnel in front of a network engine. secrets follow the same lifecycle
+ * as the connection password: encrypted at rest, redacted in API responses
+ */
+export const sshConfigSchema = z.object({
+  enabled: z.boolean(),
+  host: z.string().min(1, 'SSH host is required'),
+  port: z.coerce.number().int().positive().default(22),
+  username: z.string().min(1, 'SSH username is required'),
+  authMethod: z.enum(['password', 'privateKey']),
   password: z.string().optional(),
-  database: z.string().optional(),
-  ssl: z.boolean().optional(),
-  connectionString: z.string().optional(),
-  options: z.record(z.string(), z.unknown()).optional(),
+  privateKey: z.string().optional(),
+  passphrase: z.string().optional(),
 });
 
+export const connectionInputSchema = z
+  .object({
+    name: z.string().min(1, 'Name is required').max(120),
+    // which workspace this connection lives in; server defaults it when omitted
+    workspaceId: z.string().optional(),
+    engine: engineSchema,
+    color: z.string().optional(),
+    host: z.string().optional(),
+    port: z.coerce.number().int().positive().optional(),
+    user: z.string().optional(),
+    password: z.string().optional(),
+    database: z.string().optional(),
+    ssl: z.boolean().optional(),
+    connectionString: z.string().optional(),
+    options: z.record(z.string(), z.unknown()).optional(),
+    ssh: sshConfigSchema.optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (!val.ssh?.enabled) return;
+    // sqlite is a local file — there is no network hop to tunnel
+    if (val.engine === 'sqlite') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ssh'],
+        message: 'SSH tunnels are not supported for SQLite connections',
+      });
+    }
+    // the tunnel rewrites the discrete host/port; a full URI would bypass it
+    if (val.connectionString) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ssh'],
+        message:
+          'SSH tunnels require discrete host/port fields, not a connection string',
+      });
+    }
+  });
+
 export type ConnectionInputDTO = z.infer<typeof connectionInputSchema>;
+export type SshConfigDTO = z.infer<typeof sshConfigSchema>;
 
 export const filterSchema = z.object({
   column: z.string(),

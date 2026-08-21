@@ -1,4 +1,4 @@
-// Prisma schema for Syncle's OWN metadata store (saved connections, hooks, runs).
+// Prisma schema for Syncle's OWN metadata store (saved connections, bridges, jobs).
 //
 // NOTE: This models only the application's internal database. The databases
 // users connect TO are accessed through the raw driver adapters in
@@ -14,7 +14,7 @@ datasource db {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Workspace — the top-level container. Owns connections and hooks (bridges).
+//  Workspace — the top-level container. Owns connections and bridges.
 //  Every install has a default workspace so the concept stays invisible until
 //  someone wants a second one.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ model Workspace {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   connections Connection[]
-  hooks       Hook[]
+  bridges     Bridge[]
 
   @@map("workspaces")
 }
@@ -74,6 +74,11 @@ model Connection {
   ssl                 Boolean  @default(false)
   connectionStringEnc String?  @map("connection_string_enc")
   optionsJson         String?  @map("options_json")
+  // SSH tunnel: non-secret fields as JSON (secrets blanked out), secret
+  // material (password / private key / passphrase) encrypted separately —
+  // the same split Bridge uses for destinationJson / authEnc
+  sshJson             String?  @map("ssh_json")
+  sshSecretsEnc       String?  @map("ssh_secrets_enc")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
@@ -84,16 +89,17 @@ model Connection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Automation hooks
+//  Bridges
 //
-//  A Hook reads rows from a connected database (table or query) and POSTs each
-//  one to an HTTP endpoint with a templated payload. Nested config objects are
-//  stored as JSON strings (SQLite has no JSON columns), mirroring `optionsJson`.
-//  The destination's auth secret is the only sensitive field and is encrypted at
-//  rest in `authEnc`, exactly like a connection password.
+//  A Bridge reads rows from a connected database (table or query) and writes
+//  each one to its destinations (databases and/or an HTTP endpoint) with a
+//  templated payload. Nested config objects are stored as JSON strings (SQLite
+//  has no JSON columns), mirroring `optionsJson`. The destination's auth secret
+//  is the only sensitive field and is encrypted at rest in `authEnc`, exactly
+//  like a connection password.
 // ─────────────────────────────────────────────────────────────────────────────
 
-model Hook {
+model Bridge {
   id              String   @id
   name            String
   workspaceId     String   @map("workspace_id")
@@ -108,17 +114,17 @@ model Hook {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  runs      HookRun[]
+  jobs      BridgeJob[]
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([connectionId])
   @@index([workspaceId])
-  @@map("hooks")
+  @@map("bridges")
 }
 
-model HookRun {
-  id     String @id
-  hookId String @map("hook_id")
+model BridgeJob {
+  id       String @id
+  bridgeId String @map("bridge_id")
   // 'queued' | 'running' | 'completed' | 'failed' | 'canceling' | 'canceled' | 'interrupted'
   status String
 
@@ -130,26 +136,26 @@ model HookRun {
   totalCount   Int? @map("total_count") // best-effort; may be null
 
   // Resolved config captured at start (auth still encrypted) so editing/deleting
-  // the Hook mid-run cannot corrupt or leak the in-flight run.
+  // the Bridge mid-job cannot corrupt or leak the in-flight job.
   configSnapshotJson String  @map("config_snapshot_json")
-  cursorJson         String? @map("cursor_json") // watch-run change-detection cursor
+  cursorJson         String? @map("cursor_json") // live-job change-detection cursor
   error              String?
 
   startedAt  DateTime  @default(now()) @map("started_at")
   finishedAt DateTime? @map("finished_at")
 
-  hook       Hook           @relation(fields: [hookId], references: [id], onDelete: Cascade)
-  deliveries HookDelivery[]
+  bridge     Bridge           @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+  deliveries BridgeDelivery[]
 
-  @@index([hookId])
+  @@index([bridgeId])
   @@index([status])
-  @@map("hook_runs")
+  @@map("bridge_jobs")
 }
 
-model HookDelivery {
+model BridgeDelivery {
   id              String   @id
-  runId           String   @map("run_id")
-  sequence        Int // monotonic per run — also the idempotency key
+  jobId           String   @map("job_id")
+  sequence        Int // monotonic per job — also the idempotency key
   rowIndex        Int      @map("row_index") // first row index in this delivery
   rowCount        Int      @map("row_count") // 1, or batchSize
   status          String // 'success' | 'failed'
@@ -160,11 +166,14 @@ model HookDelivery {
   requestBody     String?  @map("request_body")     // exact JSON body sent (capped)
   responseBody    String?  @map("response_body")     // full response text (capped)
   durationMs      Int?     @map("duration_ms")
+  op              String?  // CDC operation ('insert' | 'update' | 'delete') — a resend must replay a delete as a delete
+  bodyTruncated   Boolean  @default(false) @map("body_truncated") // requestBody was cut at the storage cap; resends refuse it
+  succeededTargetsJson String? @map("succeeded_targets_json") // database sink: target keys already written (skipped on retry)
   createdAt       DateTime @default(now()) @map("created_at")
 
-  run HookRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  job BridgeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  @@unique([runId, sequence]) // idempotency guard for resume / stalled-job recovery
-  @@index([runId])
-  @@map("hook_deliveries")
+  @@unique([jobId, sequence]) // idempotency guard for resume / stalled-job recovery
+  @@index([jobId])
+  @@map("bridge_deliveries")
 }

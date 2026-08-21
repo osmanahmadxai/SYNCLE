@@ -12,14 +12,16 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { promisify } from 'node:util';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
+  AppError,
   BadRequestError,
   ConflictError,
   UnauthorizedError,
   type AuthUser,
 } from '@syncle/core';
+import { AttemptLimiter } from '../common/attempt-limiter';
 import type { AppUser } from '@prisma/client';
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
@@ -42,8 +44,14 @@ interface SessionPayload {
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   private readonly logger = new Logger('Auth');
+  /** one-time first-run token; null once an account exists */
+  private setupToken: string | null = null;
+  /** per-ip:username lockout against online password guessing */
+  private readonly loginLimiter = new AttemptLimiter();
+  /** per-ip lockout against setup-token guessing */
+  private readonly setupLimiter = new AttemptLimiter(5, 60_000);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -53,25 +61,63 @@ export class AuthService {
 
   /* ----- account lifecycle ----- */
 
+  /**
+   * first-run guard: whoever reaches an un-set-up instance first would own it
+   * (trust-on-first-use). mint a one-time token at boot and print it to the
+   * server console — setup then requires something only the operator has.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      if (await this.hasAccount()) return;
+    } catch (err) {
+      // DB not up yet — the token is minted lazily on the first setup attempt
+      this.logger.warn(`Skipped setup-token mint: ${(err as Error).message}`);
+      return;
+    }
+    this.logger.log(this.setupBanner(this.mintSetupToken()));
+  }
+
   async hasAccount(): Promise<boolean> {
     return (await this.prisma.appUser.count()) > 0;
   }
 
   /** create the one admin account; refuses if an account already exists */
-  async setup(username: string, password: string): Promise<AppUser> {
+  async setup(
+    username: string,
+    password: string,
+    setupToken: string,
+    ip: string,
+  ): Promise<AppUser> {
     if (await this.hasAccount()) {
       throw new ConflictError('An account already exists. Sign in instead.');
     }
-    return this.prisma.appUser.create({
+    this.assertNotLocked(this.setupLimiter, `setup:${ip}`);
+    if (this.setupToken == null) {
+      // boot couldn't reach the DB (or the token was consumed by a failed
+      // race) — mint now so the console always shows a usable token
+      this.logger.log(this.setupBanner(this.mintSetupToken()));
+    }
+    if (!tokensEqual(setupToken, this.setupToken!)) {
+      this.setupLimiter.fail(`setup:${ip}`);
+      throw new UnauthorizedError(
+        'Invalid setup token. It is printed in the server logs at startup.',
+      );
+    }
+    const user = await this.prisma.appUser.create({
       data: {
         id: randomUUID(),
         username,
         passwordHash: await this.hashPassword(password),
       },
     });
+    this.setupToken = null;
+    this.setupLimiter.succeed(`setup:${ip}`);
+    return user;
   }
 
-  async login(username: string, password: string): Promise<AppUser> {
+  async login(username: string, password: string, ip: string): Promise<AppUser> {
+    const key = `${ip}:${username}`;
+    this.assertNotLocked(this.loginLimiter, key);
     const user = await this.prisma.appUser.findUnique({ where: { username } });
     // verify against a decoy hash even when the user is missing, so a wrong
     // username and a wrong password take the same time (no user enumeration)
@@ -80,9 +126,37 @@ export class AuthService {
       user?.passwordHash ?? DECOY_HASH,
     );
     if (!user || !ok) {
+      this.loginLimiter.fail(key);
       throw new UnauthorizedError('Incorrect username or password.');
     }
+    this.loginLimiter.succeed(key);
     return user;
+  }
+
+  private assertNotLocked(limiter: AttemptLimiter, key: string): void {
+    const waitMs = limiter.retryAfterMs(key);
+    if (waitMs > 0) {
+      throw new AppError(
+        'RATE_LIMITED',
+        `Too many attempts. Try again in ${Math.ceil(waitMs / 1000)}s.`,
+        429,
+      );
+    }
+  }
+
+  private mintSetupToken(): string {
+    this.setupToken = randomBytes(9).toString('base64url');
+    return this.setupToken;
+  }
+
+  private setupBanner(token: string): string {
+    return [
+      '',
+      '  ┌──────────────────────────────────────────────────┐',
+      '  │  First-run setup token (enter it in the web UI)  │',
+      `  │      ${token.padEnd(44)}│`,
+      '  └──────────────────────────────────────────────────┘',
+    ].join('\n');
   }
 
   async changePassword(
@@ -188,6 +262,14 @@ export class AuthService {
 
 function nowMs(): number {
   return new Date().getTime();
+}
+
+/** constant-time string compare (padded so length mismatches don't throw) */
+function tokensEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
 }
 
 /** parse a single cookie value out of the raw Cookie header (no cookie-parser dep) */

@@ -2,11 +2,11 @@
 #
 #   docker compose up -d           # start postgres + redis
 #
-# - postgres backs Syncle's OWN metadata store (saved connections, hooks, runs,
+# - postgres backs Syncle's OWN metadata store (saved connections, bridges, jobs,
 #   deliveries) via Prisma — see apps/api/.env DATABASE_URL.
-# - redis backs the BullMQ queue that executes hook runs durably (jobs survive an
-#   API restart and auto-resume). The database studio, hook CRUD and payload
-#   preview do not need Redis — only *running* a hook does.
+# - redis backs the BullMQ queue that executes bridge jobs durably (jobs survive
+#   an API restart and auto-resume). The database studio, bridge CRUD and payload
+#   preview do not need Redis — only *running* a job does.
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,11 +14,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Admin_Osman
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: syncle
     ports:
       # Host 5433 avoids clashing with any local/other Postgres on 5432.
-      - '5433:5432'
+      # Bound to loopback so the metadata store is never exposed on the LAN.
+      - '127.0.0.1:5433:5432'
     volumes:
       - syncle-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +33,8 @@ services:
     container_name: syncle-redis
     restart: unless-stopped
     ports:
-      - '6379:6379'
+      # Loopback-only, same reasoning as postgres above.
+      - '127.0.0.1:6379:6379'
     command: ['redis-server', '--save', '60', '1', '--appendonly', 'yes']
     volumes:
       - syncle-redis-data:/data

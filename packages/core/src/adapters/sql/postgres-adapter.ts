@@ -17,6 +17,7 @@ import type {
   TableSchema,
 } from '../types';
 import { ConnectionError, QueryError } from '../../errors';
+import { quoteIdent } from '../../sql';
 import {
   BaseSqlAdapter,
   type SqlTransactionConnection,
@@ -100,7 +101,7 @@ export class PostgresAdapter extends BaseSqlAdapter {
   }
 
   protected override quoteIdent(identifier: string): string {
-    return `"${identifier.replace(/"/g, '""')}"`;
+    return quoteIdent('postgres', identifier);
   }
 
   protected override placeholder(index: number): string {
@@ -117,6 +118,10 @@ export class PostgresAdapter extends BaseSqlAdapter {
 
   protected override booleanLiteral(value: boolean): string {
     return value ? 'TRUE' : 'FALSE';
+  }
+
+  protected override hexLiteral(buf: Buffer): string {
+    return `'\\x${buf.toString('hex')}'`;
   }
 
   protected override async execPooled(

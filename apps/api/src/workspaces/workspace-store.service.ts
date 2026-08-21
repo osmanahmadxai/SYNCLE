@@ -81,7 +81,7 @@ export class WorkspaceStoreService implements OnModuleInit {
     }
   }
 
-  // deleting cascades to the workspace's connections and hooks (and their runs).
+  // deleting cascades to the workspace's connections and bridges (and their runs).
   // we keep the default workspace undeletable so there's always somewhere to land.
   async remove(id: string): Promise<void> {
     if (id === DEFAULT_WORKSPACE_ID) {

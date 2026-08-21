@@ -16,58 +16,58 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { LangToggle } from '@/components/lang-toggle';
 import { UserMenu } from '@/components/settings/user-menu';
 import { ConnectionDialog } from '@/components/connections/connection-dialog';
-import { AutomationsView } from '@/components/automations/automations-view';
-import { HookList } from '@/components/automations/hook-list';
-import { HookBuilder } from '@/components/automations/hook-builder';
+import { BridgesView } from '@/components/bridges/bridges-view';
+import { BridgeList } from '@/components/bridges/bridge-list';
+import { BridgeBuilder } from '@/components/bridges/bridge-builder';
 import { DataSourcesManager } from '@/components/data-sources-manager';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 /**
- * the app is a hooks workspace. sidebar lists hooks, main panel shows the
- * selected hook's runs. connecting, browsing tables and DDL live in the Data
- * Sources surface and the Hook Builder. data sources exist to feed hooks.
+ * the app is a bridges workspace. sidebar lists bridges, main panel shows the
+ * selected bridge's jobs. connecting, browsing tables and DDL live in the Data
+ * Sources surface and the Bridge Builder. data sources exist to feed bridges.
  */
 export function Studio() {
   const t = useTranslations('nav');
   const {
-    selectedHookId,
-    selectHook,
+    selectedBridgeId,
+    selectBridge,
     dataSourcesOpen,
     openDataSources,
-    hookEditor,
-    openHookEditor,
+    bridgeEditor,
+    openBridgeEditor,
   } = useStudio();
 
   // restore UI state from the URL on load and keep the URL in sync, so a
-  // refresh keeps you on the same hook/surface instead of bouncing to root
+  // refresh keeps you on the same bridge/surface instead of bouncing to root
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    const hook = p.get('hook');
-    if (hook) selectHook(hook);
+    const bridge = p.get('bridge');
+    if (bridge) selectBridge(bridge);
     if (p.get('data') === '1') openDataSources();
     const edit = p.get('edit');
-    if (edit) openHookEditor({ editingId: edit });
+    if (edit) openBridgeEditor({ editingId: edit });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const p = new URLSearchParams();
-    if (selectedHookId) p.set('hook', selectedHookId);
+    if (selectedBridgeId) p.set('bridge', selectedBridgeId);
     if (dataSourcesOpen) p.set('data', '1');
-    if (hookEditor.open && hookEditor.editingId)
-      p.set('edit', hookEditor.editingId);
+    if (bridgeEditor.open && bridgeEditor.editingId)
+      p.set('edit', bridgeEditor.editingId);
     const qs = p.toString();
     window.history.replaceState(
       null,
       '',
       qs ? `?${qs}` : window.location.pathname,
     );
-  }, [selectedHookId, dataSourcesOpen, hookEditor.open, hookEditor.editingId]);
+  }, [selectedBridgeId, dataSourcesOpen, bridgeEditor.open, bridgeEditor.editingId]);
 
   return (
     <>
       <ResizablePanelGroup direction="horizontal" className="h-screen">
-        {/* sidebar, hooks only */}
+        {/* sidebar, bridges only */}
         <ResizablePanel defaultSize={22} minSize={16} maxSize={32}>
           <div className="flex h-full flex-col border-r">
             <div className="flex items-center justify-between px-3 py-2.5">
@@ -111,20 +111,20 @@ export function Studio() {
               <WorkspaceSwitcher />
             </div>
             <Separator />
-            <HookList />
+            <BridgeList />
           </div>
         </ResizablePanel>
 
         <ResizableHandle />
 
-        {/* main, the hooks workspace */}
+        {/* main, the bridges workspace */}
         <ResizablePanel defaultSize={78}>
-          <AutomationsView />
+          <BridgesView />
         </ResizablePanel>
       </ResizablePanelGroup>
 
       <ConnectionDialog />
-      <HookBuilder />
+      <BridgeBuilder />
       <DataSourcesManager />
     </>
   );

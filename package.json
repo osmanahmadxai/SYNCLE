@@ -1,6 +1,6 @@
 {
   "name": "syncle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Syncle — keep any databases in sync, live and across engines (PostgreSQL, MySQL, SQLite, MongoDB, Redis), with HTTP endpoints as an extra destination.",
   "author": "Osman Ahmadzai",
@@ -30,6 +30,7 @@
     "dev": "node scripts/setup-env.mjs && pnpm --filter @syncle/core build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api dev\" \"pnpm --filter @syncle/web dev\"",
     "dev:api": "pnpm --filter @syncle/api dev",
     "dev:web": "pnpm --filter @syncle/web dev",
+    "dev:receiver": "node scripts/dev-receiver.js",
     "start": "node scripts/setup-env.mjs && pnpm build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api start\" \"pnpm --filter @syncle/web start\"",
     "build": "pnpm --filter @syncle/core build && pnpm --filter @syncle/api build && pnpm --filter @syncle/web build",
     "build:core": "pnpm --filter @syncle/core build",
@@ -39,6 +40,7 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
+    "test:coverage": "pnpm -r --workspace-concurrency=1 test:coverage",
     "format": "prettier --write \"**/*.{ts,tsx,css,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,css,md}\"",
     "clean": "rm -rf packages/core/dist apps/api/dist apps/web/.next packages/core/tsconfig.tsbuildinfo apps/api/tsconfig.tsbuildinfo",

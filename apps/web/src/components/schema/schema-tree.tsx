@@ -74,7 +74,7 @@ export function SchemaTree() {
     selectRelation,
     clearSelection,
     openInQuery,
-    openHookEditor,
+    openBridgeEditor,
   } = useStudio();
   const [filter, setFilter] = useState('');
   const [createTableOpen, setCreateTableOpen] = useState(false);
@@ -472,7 +472,7 @@ export function SchemaTree() {
                         {activeConnectionId && (
                           <DropdownMenuItem
                             onClick={() =>
-                              openHookEditor({
+                              openBridgeEditor({
                                 seed: {
                                   connectionId: activeConnectionId,
                                   database: activeDatabase,
@@ -483,7 +483,7 @@ export function SchemaTree() {
                             }
                           >
                             <Webhook className="mr-2 h-4 w-4" />
-                            Create hook
+                            Create bridge
                           </DropdownMenuItem>
                         )}
                         {backupFormats.length > 0 && (

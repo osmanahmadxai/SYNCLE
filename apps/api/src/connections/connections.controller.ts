@@ -101,16 +101,16 @@ export class ConnectionsController {
   @Delete(':id')
   async remove(@Param('id') id: string): Promise<{ id: string }> {
     await this.store.get(id); // 404s if missing
-    // Hook.connectionId has no FK, so enforce the reference here: deleting a
+    // Bridge.connectionId has no FK, so enforce the reference here: deleting a
     // connection out from under its bridges would leave zombie listeners and
     // runs that can only fail. destinations embed connection ids in their
     // JSON, so a contains-check on the uuid covers that side too
     const [asSource, asDest] = await Promise.all([
-      this.prisma.hook.findMany({
+      this.prisma.bridge.findMany({
         where: { connectionId: id },
         select: { id: true },
       }),
-      this.prisma.hook.findMany({
+      this.prisma.bridge.findMany({
         where: { destinationJson: { contains: id } },
         select: { id: true },
       }),

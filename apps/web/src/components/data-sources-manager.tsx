@@ -34,7 +34,7 @@ const TABS: { id: StudioTab; label: string; icon: typeof Table2 }[] = [
 
 /**
  * full database workbench (connections, schema, data browser, DDL) shown as an
- * overlay in the hooks app. data sources feed hooks, so it's one click away
+ * overlay in the bridges app. data sources feed bridges, so it's one click away
  * rather than in the main chrome.
  */
 export function DataSourcesManager() {
@@ -51,7 +51,7 @@ export function DataSourcesManager() {
         <Database className="text-primary h-5 w-5" />
         <span className="font-semibold tracking-tight">Data sources</span>
         <span className="text-muted-foreground text-xs">
-          Connect databases, browse tables &amp; manage schema — then build hooks from them.
+          Connect databases, browse tables &amp; manage schema — then build bridges from them.
         </span>
         <Button
           variant="ghost"

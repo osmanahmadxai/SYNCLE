@@ -1,4 +1,5 @@
 /** SQLite adapter backed by `better-sqlite3` (synchronous, single file) */
+import { isAbsolute, resolve, sep } from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   AdapterCapabilities,
@@ -16,6 +17,7 @@ import {
   QueryError,
   UnsupportedError,
 } from '../../errors';
+import { quoteIdent } from '../../sql';
 import {
   assertSafeDefaultValue,
   assertSafeIdentifier,
@@ -59,9 +61,21 @@ export class SqliteAdapter extends BaseSqlAdapter {
 
   private getDb(): Database.Database {
     if (this.db) return this.db;
-    const file = this.config.database ?? this.config.connectionString;
+    let file = this.config.database ?? this.config.connectionString;
     if (!file) {
       throw new ConnectionError('SQLite requires a database file path');
+    }
+    // honor the server-configured jail: resolve relative paths under it and
+    // refuse anything (including ../ traversal) that escapes it
+    if (this.config.fileBaseDir) {
+      const base = resolve(this.config.fileBaseDir);
+      const resolved = isAbsolute(file) ? resolve(file) : resolve(base, file);
+      if (resolved !== base && !resolved.startsWith(base + sep)) {
+        throw new ConnectionError(
+          `SQLite files are restricted to ${base} on this server`,
+        );
+      }
+      file = resolved;
     }
     try {
       this.db = new Database(file, { fileMustExist: false });
@@ -89,7 +103,7 @@ export class SqliteAdapter extends BaseSqlAdapter {
   }
 
   protected override quoteIdent(identifier: string): string {
-    return `"${identifier.replace(/"/g, '""')}"`;
+    return quoteIdent('sqlite', identifier);
   }
 
   protected override placeholder(): string {

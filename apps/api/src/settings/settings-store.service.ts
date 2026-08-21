@@ -44,7 +44,7 @@ export class SettingsStoreService implements OnModuleInit {
       defaultCdcOperations: ['insert', 'update', 'delete'],
       maxQueryRows: runtimeConfig.maxQueryRows,
       poolIdleMs: runtimeConfig.poolIdleMs,
-      hookConcurrency: runtimeConfig.hookConcurrency,
+      jobConcurrency: runtimeConfig.jobConcurrency,
       sessionTtlMinutes: 60 * 24 * 7, // one week
     };
   }

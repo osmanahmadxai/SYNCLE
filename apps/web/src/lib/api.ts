@@ -18,12 +18,12 @@ import type {
   CdcReadiness,
   CdcReadinessDTO,
   DriverInfo,
-  Hook,
-  HookDelivery,
-  HookInputDTO,
-  HookPreview,
-  HookPreviewDTO,
-  HookRun,
+  Bridge,
+  BridgeDelivery,
+  BridgeInputDTO,
+  BridgePreview,
+  BridgePreviewDTO,
+  BridgeJob,
   InsertRowParams,
   LoginDTO,
   QueryResult,
@@ -236,44 +236,44 @@ export const api = {
       { method: 'POST', ...jsonBody(body) },
     ),
 
-  /* ----- automation hooks ----- */
+  /* ----- bridges ----- */
 
-  listHooks: (workspaceId?: string) =>
-    request<Hook[]>(
-      workspaceId ? `/hooks?workspaceId=${encodeURIComponent(workspaceId)}` : '/hooks',
+  listBridges: (workspaceId?: string) =>
+    request<Bridge[]>(
+      workspaceId ? `/bridges?workspaceId=${encodeURIComponent(workspaceId)}` : '/bridges',
     ),
-  listHookStatuses: (workspaceId: string) =>
-    request<{ hookId: string; active: boolean; lastStatus: string }[]>(
-      `/hooks/statuses?workspaceId=${encodeURIComponent(workspaceId)}`,
+  listBridgeStatuses: (workspaceId: string) =>
+    request<{ bridgeId: string; active: boolean; lastStatus: string }[]>(
+      `/bridges/statuses?workspaceId=${encodeURIComponent(workspaceId)}`,
     ),
-  getHook: (id: string) => request<Hook>(`/hooks/${id}`),
-  createHook: (input: HookInputDTO) =>
-    request<Hook>('/hooks', { method: 'POST', ...jsonBody(input) }),
-  updateHook: (id: string, input: HookInputDTO) =>
-    request<Hook>(`/hooks/${id}`, { method: 'PUT', ...jsonBody(input) }),
-  deleteHook: (id: string) =>
-    request<{ id: string }>(`/hooks/${id}`, { method: 'DELETE' }),
-  previewHook: (id: string, body: HookPreviewDTO) =>
-    request<HookPreview>(`/hooks/${id}/preview`, {
+  getBridge: (id: string) => request<Bridge>(`/bridges/${id}`),
+  createBridge: (input: BridgeInputDTO) =>
+    request<Bridge>('/bridges', { method: 'POST', ...jsonBody(input) }),
+  updateBridge: (id: string, input: BridgeInputDTO) =>
+    request<Bridge>(`/bridges/${id}`, { method: 'PUT', ...jsonBody(input) }),
+  deleteBridge: (id: string) =>
+    request<{ id: string }>(`/bridges/${id}`, { method: 'DELETE' }),
+  previewBridge: (id: string, body: BridgePreviewDTO) =>
+    request<BridgePreview>(`/bridges/${id}/preview`, {
       method: 'POST',
       ...jsonBody(body),
     }),
-  startHookRun: (
+  startBridgeJob: (
     id: string,
-    opts: { resumeRunId?: string; runId?: string; retryFailedOf?: string } = {},
+    opts: { resumeJobId?: string; jobId?: string; retryFailedOf?: string } = {},
   ) =>
-    request<HookRun>(`/hooks/${id}/runs`, {
+    request<BridgeJob>(`/bridges/${id}/jobs`, {
       method: 'POST',
       ...jsonBody(opts),
     }),
-  listHookRuns: (id: string) => request<HookRun[]>(`/hooks/${id}/runs`),
-  getHookRun: (id: string, runId: string) =>
-    request<HookRun>(`/hooks/${id}/runs/${runId}`),
-  cancelHookRun: (id: string, runId: string) =>
-    request<HookRun>(`/hooks/${id}/runs/${runId}/cancel`, { method: 'POST' }),
-  listHookDeliveries: (
+  listBridgeJobs: (id: string) => request<BridgeJob[]>(`/bridges/${id}/jobs`),
+  getBridgeJob: (id: string, jobId: string) =>
+    request<BridgeJob>(`/bridges/${id}/jobs/${jobId}`),
+  cancelBridgeJob: (id: string, jobId: string) =>
+    request<BridgeJob>(`/bridges/${id}/jobs/${jobId}/cancel`, { method: 'POST' }),
+  listBridgeDeliveries: (
     id: string,
-    runId: string,
+    jobId: string,
     opts: {
       status?: 'success' | 'failed' | 'skipped';
       from?: number;
@@ -289,23 +289,23 @@ export const api = {
     if (opts.offset != null) q.set('offset', String(opts.offset));
     if (opts.limit != null) q.set('limit', String(opts.limit));
     const qs = q.toString();
-    return request<HookDelivery[]>(
-      `/hooks/${id}/runs/${runId}/deliveries${qs ? `?${qs}` : ''}`,
+    return request<BridgeDelivery[]>(
+      `/bridges/${id}/jobs/${jobId}/deliveries${qs ? `?${qs}` : ''}`,
     );
   },
-  skipHookRun: (id: string, runId: string, sequences: number[]) =>
-    request<{ skipped: number }>(`/hooks/${id}/runs/${runId}/skip`, {
+  skipBridgeJob: (id: string, jobId: string, sequences: number[]) =>
+    request<{ skipped: number }>(`/bridges/${id}/jobs/${jobId}/skip`, {
       method: 'POST',
       ...jsonBody({ sequences }),
     }),
   startWatch: (id: string) =>
-    request<HookRun>(`/hooks/${id}/watch/start`, { method: 'POST' }),
+    request<BridgeJob>(`/bridges/${id}/watch/start`, { method: 'POST' }),
   stopWatch: (id: string) =>
-    request<HookRun | null>(`/hooks/${id}/watch/stop`, { method: 'POST' }),
+    request<BridgeJob | null>(`/bridges/${id}/watch/stop`, { method: 'POST' }),
   cdcReadiness: (body: CdcReadinessDTO) =>
-    request<CdcReadiness>('/hooks/cdc/readiness', { method: 'POST', ...jsonBody(body) }),
-  retryFailedDeliveries: (id: string, runId: string) =>
-    request<HookRun>(`/hooks/${id}/runs/${runId}/retry-failed`, { method: 'POST' }),
+    request<CdcReadiness>('/bridges/cdc/readiness', { method: 'POST', ...jsonBody(body) }),
+  retryFailedDeliveries: (id: string, jobId: string) =>
+    request<BridgeJob>(`/bridges/${id}/jobs/${jobId}/retry-failed`, { method: 'POST' }),
 };
 
 function dbQuery(database?: string): string {
