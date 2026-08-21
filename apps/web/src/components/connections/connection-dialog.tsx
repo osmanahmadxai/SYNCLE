@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -46,6 +47,10 @@ export function ConnectionDialog() {
   const [engine, setEngine] = useState<DatabaseEngine>('postgres');
   const [form, setForm] = useState<FormState>({ name: '' });
   const [ssl, setSsl] = useState(false);
+  const [sshEnabled, setSshEnabled] = useState(false);
+  const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'privateKey'>(
+    'password',
+  );
   const [testing, setTesting] = useState(false);
 
   const editing = dialog.editingId;
@@ -58,11 +63,15 @@ export function ConnectionDialog() {
     setForm({ name: '' });
     setEngine('postgres');
     setSsl(false);
+    setSshEnabled(false);
+    setSshAuthMethod('password');
     if (!editing) return;
     void api.getConnection(editing).then(
       (c) => {
         setEngine(c.engine);
         setSsl(!!c.ssl);
+        setSshEnabled(!!c.ssh?.enabled);
+        setSshAuthMethod(c.ssh?.authMethod ?? 'password');
         setForm({
           name: c.name,
           host: c.host ?? '',
@@ -71,6 +80,14 @@ export function ConnectionDialog() {
           password: c.password ?? '',
           database: c.database ?? '',
           connectionString: c.connectionString ?? '',
+          sshHost: c.ssh?.host ?? '',
+          sshPort: c.ssh?.port != null ? String(c.ssh.port) : '',
+          sshUsername: c.ssh?.username ?? '',
+          // secrets arrive redacted; sending them back unchanged keeps the
+          // stored values, exactly like the database password
+          sshPassword: c.ssh?.password ?? '',
+          sshPrivateKey: c.ssh?.privateKey ?? '',
+          sshPassphrase: c.ssh?.passphrase ?? '',
         });
       },
       (err) => {
@@ -100,6 +117,21 @@ export function ConnectionDialog() {
       if (!raw) continue;
       if (field.key === 'port') payload.port = Number(raw);
       else (payload as Record<string, unknown>)[field.key] = raw;
+    }
+    if (engine !== 'sqlite' && sshEnabled) {
+      payload.ssh = {
+        enabled: true,
+        host: form.sshHost?.trim() ?? '',
+        port: form.sshPort?.trim() ? Number(form.sshPort.trim()) : 22,
+        username: form.sshUsername?.trim() ?? '',
+        authMethod: sshAuthMethod,
+        ...(sshAuthMethod === 'password'
+          ? { password: form.sshPassword || undefined }
+          : {
+              privateKey: form.sshPrivateKey || undefined,
+              passphrase: form.sshPassphrase || undefined,
+            }),
+      };
     }
     return payload;
   }
@@ -222,6 +254,147 @@ export function ConnectionDialog() {
                 </p>
               </div>
               <Switch id="ssl" checked={ssl} onCheckedChange={setSsl} />
+            </div>
+          )}
+
+          {engine !== 'sqlite' && (
+            <div className="rounded-md border">
+              <div className="flex items-center justify-between p-3">
+                <div>
+                  <Label htmlFor="ssh-enabled">{t('sshTunnel')}</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('sshTunnelHint')}
+                  </p>
+                </div>
+                <Switch
+                  id="ssh-enabled"
+                  checked={sshEnabled}
+                  onCheckedChange={setSshEnabled}
+                />
+              </div>
+
+              {sshEnabled && (
+                <div className="grid gap-4 border-t p-3">
+                  <div className="grid grid-cols-[1fr_110px] gap-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="sshHost">
+                        {t('sshHost')}
+                        <span className="ml-1 text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="sshHost"
+                        value={form.sshHost ?? ''}
+                        placeholder="bastion.example.com"
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, sshHost: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="sshPort">{t('sshPort')}</Label>
+                      <Input
+                        id="sshPort"
+                        inputMode="numeric"
+                        value={form.sshPort ?? ''}
+                        placeholder="22"
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, sshPort: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="sshUsername">
+                      {t('sshUsername')}
+                      <span className="ml-1 text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="sshUsername"
+                      value={form.sshUsername ?? ''}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, sshUsername: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label>{t('sshAuthMethod')}</Label>
+                    <Select
+                      value={sshAuthMethod}
+                      onValueChange={(v) =>
+                        setSshAuthMethod(v as 'password' | 'privateKey')
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="password">
+                          {t('sshAuthPassword')}
+                        </SelectItem>
+                        <SelectItem value="privateKey">
+                          {t('sshAuthPrivateKey')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {sshAuthMethod === 'password' ? (
+                    <div className="grid gap-2">
+                      <Label htmlFor="sshPassword">{t('sshPassword')}</Label>
+                      <Input
+                        id="sshPassword"
+                        type="password"
+                        value={form.sshPassword ?? ''}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, sshPassword: e.target.value }))
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-2">
+                        <Label htmlFor="sshPrivateKey">
+                          {t('sshPrivateKey')}
+                        </Label>
+                        <Textarea
+                          id="sshPrivateKey"
+                          rows={4}
+                          className="font-mono text-xs"
+                          value={form.sshPrivateKey ?? ''}
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              sshPrivateKey: e.target.value,
+                            }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {t('sshPrivateKeyHint')}
+                        </p>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="sshPassphrase">
+                          {t('sshPassphrase')}
+                        </Label>
+                        <Input
+                          id="sshPassphrase"
+                          type="password"
+                          value={form.sshPassphrase ?? ''}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              sshPassphrase: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
