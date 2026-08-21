@@ -149,7 +149,16 @@ export const watchStrategySchema = z.discriminatedUnion('strategy', [
   // track a strictly-increasing column (auto-increment id / sequence)
   z.object({ strategy: z.literal('increment'), column: z.string().min(1) }),
   // track a created_at / updated_at column
-  z.object({ strategy: z.literal('timestamp'), column: z.string().min(1) }),
+  z.object({
+    strategy: z.literal('timestamp'),
+    column: z.string().min(1),
+    /**
+     * re-scan this many ms behind the cursor each poll so late-committing
+     * transactions aren't lost (overlap rows are deduped by the cursor's
+     * boundary keys). 0 disables the window.
+     */
+    lookbackMs: z.coerce.number().int().min(0).max(600_000).default(3000),
+  }),
   // diff the set of seen primary keys (for UUID / non-monotonic keys)
   z.object({
     strategy: z.literal('snapshot'),
