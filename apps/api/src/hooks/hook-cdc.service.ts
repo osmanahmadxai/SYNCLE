@@ -372,6 +372,20 @@ export class HookCdcService implements OnModuleInit, OnModuleDestroy {
         { sequence: seq, rowIndex: seq, rowCount: 1, rowKeys },
         outcome,
       );
+      if (outcome.status === 'failed' && hook.delivery.onError === 'abort') {
+        // stop-on-error: pause the run and stop the stream WITHOUT advancing
+        // the watermark or acking, so this change replays on the next start.
+        // teardown happens outside the change chain — the provider's stop()
+        // may wait for in-flight handlers (i.e. this very call)
+        this.logger.warn(`CDC ${hookId}: pausing after a failed delivery (onError=abort)`);
+        await this.runs.finalize(
+          stream.runId,
+          'paused',
+          'Paused after a failed delivery (onError=abort).',
+        );
+        setImmediate(() => void this.teardown(hookId).catch(() => undefined));
+        return;
+      }
       stream.seq = seq + 1;
       stream.watermark = change.cursor;
       await this.prisma.hookRun.update({

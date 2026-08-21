@@ -6,6 +6,7 @@
  */
 export * from './adapters/types';
 export * from './errors';
+export * from './sql';
 export * from './validation';
 export * from './hooks';
 export * from './workspace';

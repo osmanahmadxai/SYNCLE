@@ -153,17 +153,6 @@ export function engineColumnType(
         uuid: isKey ? 'VARCHAR(255)' : 'CHAR(36)',
         text: isKey ? 'VARCHAR(255)' : 'TEXT',
       }[type];
-    case 'mssql':
-      return {
-        integer: 'INT',
-        bigint: 'BIGINT',
-        number: 'FLOAT',
-        boolean: 'BIT',
-        timestamp: 'DATETIME2',
-        json: 'NVARCHAR(MAX)',
-        uuid: 'UNIQUEIDENTIFIER',
-        text: isKey ? 'NVARCHAR(255)' : 'NVARCHAR(MAX)',
-      }[type];
     case 'sqlite':
     default:
       return {

@@ -1,10 +1,8 @@
-import type { DatabaseEngine } from '@syncle/core';
+import { quoteIdent, type DatabaseEngine } from '@syncle/core';
 
-/** quote an identifier for the given engine's dialect */
-export function quoteIdent(engine: DatabaseEngine, id: string): string {
-  if (engine === 'mysql') return `\`${id.replace(/`/g, '``')}\``;
-  return `"${id.replace(/"/g, '""')}"`;
-}
+// quoting rules live in core next to the adapters that own the dialects —
+// re-exported here so existing imports keep working
+export { quoteIdent };
 
 /**
  * build a safe, dialect-quoted `SELECT *` for a relation. backs the

@@ -7,6 +7,7 @@ import { HookSinkService } from './hook-sink.service';
 import { HookRunProcessor } from './hook-run.processor';
 import { HookRunService } from './hook-run.service';
 import { HookCdcService } from './hook-cdc.service';
+import { HookLifecycleService } from './hook-lifecycle.service';
 import { HookStoreService } from './hook-store.service';
 import { HookWatchProcessor } from './hook-watch.processor';
 import { HookWatchService } from './hook-watch.service';
@@ -32,6 +33,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     HookRunService,
     HookWatchService,
     HookCdcService,
+    HookLifecycleService,
     DeliveryService,
     DatabaseSinkService,
     HookSinkService,
@@ -57,6 +59,6 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     },
   ],
   // exported so WorkspacesModule can stop a workspace's live bridges on delete
-  exports: [HookStoreService, HookWatchService, HookCdcService],
+  exports: [HookStoreService, HookWatchService, HookCdcService, HookLifecycleService],
 })
 export class HooksModule {}

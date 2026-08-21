@@ -293,6 +293,22 @@ export class HookWatchService implements OnModuleInit {
             where: { id: run.id },
             data: { cursorOffset: seq },
           });
+          if (outcome.status === 'failed' && hook.delivery.onError === 'abort') {
+            // stop-on-error: unschedule and leave the run paused with the
+            // reason, WITHOUT persisting this page's advanced cursor — the
+            // next start re-fetches the window, so the failed row is retried
+            // (stable idempotency keys make the overlap safe for receivers)
+            this.logger.warn(
+              `Watch ${hookId}: pausing after a failed delivery (onError=abort)`,
+            );
+            await this.unschedule(hookId);
+            await this.runs.finalize(
+              run.id,
+              'paused',
+              'Paused after a failed delivery (onError=abort).',
+            );
+            return;
+          }
           if (hook.delivery.minDelayMs) await sleep(hook.delivery.minDelayMs, signal);
         }
         if (signal.aborted) return;

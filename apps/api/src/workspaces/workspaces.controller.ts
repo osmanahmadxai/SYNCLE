@@ -14,8 +14,7 @@ import {
 } from '@syncle/core';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { HookStoreService } from '../hooks/hook-store.service';
-import { HookWatchService } from '../hooks/hook-watch.service';
-import { HookCdcService } from '../hooks/hook-cdc.service';
+import { HookLifecycleService } from '../hooks/hook-lifecycle.service';
 import { WorkspaceStoreService } from './workspace-store.service';
 
 @Controller('workspaces')
@@ -23,8 +22,7 @@ export class WorkspacesController {
   constructor(
     private readonly store: WorkspaceStoreService,
     private readonly hooks: HookStoreService,
-    private readonly watch: HookWatchService,
-    private readonly cdc: HookCdcService,
+    private readonly lifecycle: HookLifecycleService,
   ) {}
 
   @Get()
@@ -54,15 +52,12 @@ export class WorkspacesController {
 
   @Delete(':id')
   async remove(@Param('id') id: string): Promise<{ id: string }> {
-    // stop any live listeners in this workspace before the cascade delete, so
-    // CDC slots get dropped and watch schedulers stop cleanly (no zombies).
+    // full teardown of every hook before the cascade delete: CDC slots get
+    // dropped, watch schedulers stop, and in-flight replay runs are canceled
+    // (the same sequence a single-hook delete performs)
     const hooks = await this.hooks.list(id).catch(() => []);
     for (const hook of hooks) {
-      if (hook.trigger.kind === 'cdc') {
-        await this.cdc.cleanup(hook.id).catch(() => undefined);
-      } else if (hook.trigger.kind === 'watch') {
-        await this.watch.stop(hook.id).catch(() => undefined);
-      }
+      await this.lifecycle.teardown(hook.id);
     }
     await this.store.remove(id);
     return { id };

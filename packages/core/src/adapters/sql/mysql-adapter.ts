@@ -15,6 +15,7 @@ import type {
   TableSchema,
 } from '../types';
 import { ConnectionError, QueryError } from '../../errors';
+import { quoteIdent } from '../../sql';
 import {
   BaseSqlAdapter,
   type SqlTransactionConnection,
@@ -108,7 +109,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
   }
 
   protected override quoteIdent(identifier: string): string {
-    return `\`${identifier.replace(/`/g, '``')}\``;
+    return quoteIdent('mysql', identifier);
   }
 
   protected override placeholder(): string {
@@ -117,6 +118,15 @@ export class MysqlAdapter extends BaseSqlAdapter {
 
   protected override autoIncrementKeyword(): string {
     return 'AUTO_INCREMENT';
+  }
+
+  /**
+   * MySQL treats backslash as an escape character inside string literals;
+   * leaving it unescaped corrupts a SQL dump and lets a crafted value break
+   * out of the literal when the dump is restored.
+   */
+  protected override escapeStringLiteral(text: string): string {
+    return text.replace(/'/g, "''").replace(/\\/g, '\\\\');
   }
 
   /**

@@ -17,6 +17,7 @@ import {
   QueryError,
   UnsupportedError,
 } from '../../errors';
+import { quoteIdent } from '../../sql';
 import {
   assertSafeDefaultValue,
   assertSafeIdentifier,
@@ -102,7 +103,7 @@ export class SqliteAdapter extends BaseSqlAdapter {
   }
 
   protected override quoteIdent(identifier: string): string {
-    return `"${identifier.replace(/"/g, '""')}"`;
+    return quoteIdent('sqlite', identifier);
   }
 
   protected override placeholder(): string {

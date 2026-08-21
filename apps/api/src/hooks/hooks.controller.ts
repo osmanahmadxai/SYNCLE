@@ -34,6 +34,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { DatabaseSinkService } from './database-sink.service';
 import { DeliveryService } from './delivery.service';
 import { HookCdcService } from './hook-cdc.service';
+import { HookLifecycleService } from './hook-lifecycle.service';
 import { HookRunService } from './hook-run.service';
 import { HookStoreService } from './hook-store.service';
 import { HookWatchService } from './hook-watch.service';
@@ -50,6 +51,7 @@ export class HooksController {
     private readonly pool: AdapterPoolService,
     private readonly delivery: DeliveryService,
     private readonly databaseSink: DatabaseSinkService,
+    private readonly lifecycle: HookLifecycleService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -90,12 +92,10 @@ export class HooksController {
     // kind — routing by the new one after an edit (say cdc → watch) would leave
     // the old stream running as a zombie, delivering into a finalized run
     const before = await this.store.get(id);
-    let wasListening = false;
-    if (before.trigger.kind === 'cdc') {
-      wasListening = (await this.cdc.stop(id).catch(() => null)) !== null;
-    } else if (before.trigger.kind === 'watch') {
-      wasListening = (await this.watch.stop(id).catch(() => null)) !== null;
-    }
+    const wasListening =
+      before.trigger.kind === 'cdc' || before.trigger.kind === 'watch'
+        ? await this.lifecycle.stopListener(id, before.trigger.kind)
+        : false;
 
     const hook = await this.store.update(id, dto);
     // the destination may have changed; drop the sink's ensured-table cache
@@ -120,20 +120,7 @@ export class HooksController {
   @Delete(':id')
   async remove(@Param('id') id: string): Promise<{ id: string }> {
     await this.store.get(id); // 404s if missing
-    // tear down BOTH listener kinds before deleting: a hook edited across
-    // trigger kinds may have remnants of either (each is a no-op when idle).
-    // cdc.cleanup also drops the replication slot/publication on the source
-    await this.cdc.cleanup(id).catch(() => undefined);
-    await this.watch.stop(id).catch(() => undefined);
-    // stop any in-flight replay run so the worker doesn't keep delivering
-    // rows for a bridge that no longer exists
-    const runs = await this.runs.listRuns(id).catch(() => [] as HookRun[]);
-    for (const run of runs) {
-      if (run.status === 'queued' || run.status === 'running') {
-        await this.runs.cancel(id, run.id).catch(() => undefined);
-      }
-    }
-    this.databaseSink.forget(id);
+    await this.lifecycle.teardown(id);
     await this.store.remove(id);
     return { id };
   }
