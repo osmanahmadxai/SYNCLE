@@ -13,7 +13,7 @@ Syncle is a pnpm monorepo (`web → api → core`). You'll need:
 
 ```bash
 git clone https://github.com/osmanahmadxai/SYNCLE.git
-cd syncle
+cd SYNCLE
 pnpm install
 docker compose up -d          # postgres (metadata) + redis (queue)
 pnpm dev                      # API + web in watch mode
@@ -45,6 +45,9 @@ pnpm build         # core → api → web
 
 If you change `packages/core`, rebuild it (`pnpm build:core`) before the API
 will pick up the new types — `core` is consumed from its compiled `dist/`.
+
+Testing an HTTP destination by hand? `pnpm dev:receiver` starts a tiny echo
+server on `http://localhost:4990` that logs every request it receives.
 
 ## Pull requests
 
