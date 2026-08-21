@@ -48,11 +48,19 @@ RUN pnpm --filter @syncle/core build \
  && pnpm --filter @syncle/web build
 
 # 3) Prune the API to production dependencies only (dist + prisma + prod
-#    node_modules, including the generated client and the prisma CLI for
-#    `migrate deploy` at boot).
+#    node_modules, including the prisma CLI for `migrate deploy` at boot).
 # --legacy: copy workspace deps into node_modules rather than requiring the
 # repo-wide inject-workspace-packages setting (pnpm v10 default changed)
-RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api
+#
+# `prisma generate` has to run AGAIN inside the pruned tree. The client that
+# `prisma generate` produces lives in node_modules/.prisma/client, which
+# belongs to no package in the store — so `pnpm deploy`, which copies packages
+# from the store, leaves it behind. Without this the image starts, applies its
+# migrations, and only then dies on MODULE_NOT_FOUND for .prisma/client.
+RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api \
+ && cd /out/api \
+ && ./node_modules/.bin/prisma generate \
+ && node -e "require('@prisma/client')"
 
 # ---------------------------------------------------------------------------
 
