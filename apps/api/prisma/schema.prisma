@@ -160,6 +160,9 @@ model HookDelivery {
   requestBody     String?  @map("request_body")     // exact JSON body sent (capped)
   responseBody    String?  @map("response_body")     // full response text (capped)
   durationMs      Int?     @map("duration_ms")
+  op              String?  // CDC operation ('insert' | 'update' | 'delete') — a resend must replay a delete as a delete
+  bodyTruncated   Boolean  @default(false) @map("body_truncated") // requestBody was cut at the storage cap; resends refuse it
+  succeededTargetsJson String? @map("succeeded_targets_json") // database sink: target keys already written (skipped on retry)
   createdAt       DateTime @default(now()) @map("created_at")
 
   run HookRun @relation(fields: [runId], references: [id], onDelete: Cascade)

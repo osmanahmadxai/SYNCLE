@@ -66,6 +66,9 @@ export class DeliveryService {
     const headers = this.buildHeaders(dest, idempotencyKey);
     const payload = JSON.stringify(body ?? null);
     const requestBody = payload.slice(0, RESPONSE_LIMIT);
+    // a capture cut at the cap can never be JSON.parsed back for a resend, so
+    // flag it — the retry path refuses these instead of re-sending garbage
+    const bodyTruncated = payload.length > RESPONSE_LIMIT;
     const started = performance.now();
     let lastError: string | null = null;
     let lastStatus: number | null = null;
@@ -95,6 +98,7 @@ export class DeliveryService {
             requestBody,
             responseBody: lastResponse || null,
             durationMs: Math.round(performance.now() - started),
+            bodyTruncated,
           };
         }
 
@@ -124,6 +128,7 @@ export class DeliveryService {
       requestBody,
       responseBody: lastResponse,
       durationMs: Math.round(performance.now() - started),
+      bodyTruncated,
     };
   }
 
