@@ -328,7 +328,8 @@ Env files are created automatically on first run from the committed
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
-`apps/api/.syncle/` on first run — set it explicitly in production.
+`apps/api/.syncle/` on first run — set it explicitly in production
+(generate one with `openssl rand -base64 32`).
 
 ## CDC prerequisites
 
