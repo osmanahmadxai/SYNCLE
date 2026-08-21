@@ -11,8 +11,8 @@ import type {
   DatabaseSchema,
   DatabaseTarget,
 } from '@syncle/core';
-import { DatabaseSinkService } from '../src/hooks/database-sink.service';
-import type { ResolvedHook } from '../src/hooks/hooks.types';
+import { DatabaseSinkService } from '../src/bridges/database-sink.service';
+import type { ResolvedBridge } from '../src/bridges/bridges.types';
 
 interface WriteCalls {
   insert: Record<string, unknown>[];
@@ -71,9 +71,9 @@ function makeService(adapters: Record<string, unknown>): DatabaseSinkService {
   return new DatabaseSinkService(pool as never, connections as never);
 }
 
-function makeHook(): ResolvedHook {
+function makeBridge(): ResolvedBridge {
   return {
-    id: 'hook-1',
+    id: 'bridge-1',
     name: 'bridge',
     source: { kind: 'table', connectionId: 'src', table: 'users' },
     destination: { kind: 'database', targets: [] },
@@ -90,7 +90,7 @@ function makeHook(): ResolvedHook {
     },
     trigger: { kind: 'replay' },
     enabled: true,
-  } as ResolvedHook;
+  } as ResolvedBridge;
 }
 
 function makeTarget(overrides: Partial<DatabaseTarget> = {}): DatabaseTarget {
@@ -124,7 +124,7 @@ describe('DatabaseSinkService.deliver', () => {
     const { adapter, calls } = makeAdapter();
     const svc = makeService({ dst: adapter });
     const outcome = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       [makeTarget()],
       [{ id: 7, name: 'Ada' }],
       'delete',
@@ -142,7 +142,7 @@ describe('DatabaseSinkService.deliver', () => {
     const { adapter, calls } = makeAdapter();
     const svc = makeService({ dst: adapter });
     const outcome = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       [makeTarget({ keyColumns: [] })],
       [{ id: 7 }],
       undefined,
@@ -166,7 +166,7 @@ describe('DatabaseSinkService.deliver', () => {
       makeTarget({ table: 'users_b' }),
     ];
 
-    const first = await svc.deliver(makeHook(), targets, [{ id: 1 }], undefined);
+    const first = await svc.deliver(makeBridge(), targets, [{ id: 1 }], undefined);
     expect(first.status).toBe('failed');
     expect(first.succeededTargets).toHaveLength(1); // A committed, B did not
     expect(calls.upsert.map((p) => p.table)).toEqual(['users_a']);
@@ -174,7 +174,7 @@ describe('DatabaseSinkService.deliver', () => {
     // retry with the persisted checkpoint: A must be skipped, only B written
     failB = false;
     const second = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       targets,
       [{ id: 1 }],
       undefined,
@@ -223,7 +223,7 @@ describe('DatabaseSinkService.deliver', () => {
     // pg drivers return bigint/numeric as strings and this sample has nulls —
     // with the schema resolved, none of that decays the created types to TEXT
     const outcome = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       [makeTarget({ createMissingTable: true })],
       [{ id: '9007199254740993', price: '19.99', meta: null, note: null }],
       undefined,
@@ -250,7 +250,7 @@ describe('DatabaseSinkService.deliver', () => {
     const svc = makeService({ src: src.adapter, dst: dst.adapter });
 
     const outcome = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       [makeTarget({ createMissingTable: true })],
       [{ id: 7, price: '19.99' }],
       undefined,
@@ -265,7 +265,7 @@ describe('DatabaseSinkService.deliver', () => {
     const { adapter } = makeAdapter();
     const svc = makeService({ dst: adapter });
     const outcome = await svc.deliver(
-      makeHook(),
+      makeBridge(),
       [makeTarget()],
       [{ id: 1, blob: 'x'.repeat(20_000) }],
       undefined,

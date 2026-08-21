@@ -67,25 +67,41 @@ export interface AuthStatus {
  * optional on input (partial updates), and the server fills unset values with
  * its env/built-in defaults when reading.
  */
-export const appSettingsSchema = z.object({
-  /** default poll cadence a new polling bridge is seeded with (ms) */
-  defaultPollIntervalMs: z.coerce.number().int().min(1000).max(3_600_000).optional(),
-  /** default rows fetched per poll for a new polling bridge */
-  defaultMaxPerPoll: z.coerce.number().int().min(1).max(5000).optional(),
-  /** operations a new CDC bridge captures by default */
-  defaultCdcOperations: z
-    .array(z.enum(['insert', 'update', 'delete']))
-    .min(1)
-    .optional(),
-  /** hard cap on rows returned by a single ad-hoc query */
-  maxQueryRows: z.coerce.number().int().min(1).max(1_000_000).optional(),
-  /** idle ms before a pooled database connection is closed */
-  poolIdleMs: z.coerce.number().int().min(10_000).max(86_400_000).optional(),
-  /** how many replay runs may execute concurrently (applies on next boot) */
-  hookConcurrency: z.coerce.number().int().min(1).max(100).optional(),
-  /** minutes of inactivity before a login session expires */
-  sessionTtlMinutes: z.coerce.number().int().min(15).max(43_200).optional(),
-});
+export const appSettingsSchema = z.preprocess(
+  (val) => {
+    // legacy key (transition): settings persisted before the bridges/jobs
+    // rename stored this field as `hookConcurrency` — keep honoring it
+    if (
+      val &&
+      typeof val === 'object' &&
+      'hookConcurrency' in (val as Record<string, unknown>) &&
+      !('jobConcurrency' in (val as Record<string, unknown>))
+    ) {
+      const { hookConcurrency, ...rest } = val as Record<string, unknown>;
+      return { ...rest, jobConcurrency: hookConcurrency };
+    }
+    return val;
+  },
+  z.object({
+    /** default poll cadence a new polling bridge is seeded with (ms) */
+    defaultPollIntervalMs: z.coerce.number().int().min(1000).max(3_600_000).optional(),
+    /** default rows fetched per poll for a new polling bridge */
+    defaultMaxPerPoll: z.coerce.number().int().min(1).max(5000).optional(),
+    /** operations a new CDC bridge captures by default */
+    defaultCdcOperations: z
+      .array(z.enum(['insert', 'update', 'delete']))
+      .min(1)
+      .optional(),
+    /** hard cap on rows returned by a single ad-hoc query */
+    maxQueryRows: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    /** idle ms before a pooled database connection is closed */
+    poolIdleMs: z.coerce.number().int().min(10_000).max(86_400_000).optional(),
+    /** how many replay jobs may execute concurrently (applies on next boot) */
+    jobConcurrency: z.coerce.number().int().min(1).max(100).optional(),
+    /** minutes of inactivity before a login session expires */
+    sessionTtlMinutes: z.coerce.number().int().min(15).max(43_200).optional(),
+  }),
+);
 
 export type AppSettingsDTO = z.infer<typeof appSettingsSchema>;
 
@@ -96,6 +112,6 @@ export interface AppSettings {
   defaultCdcOperations: ('insert' | 'update' | 'delete')[];
   maxQueryRows: number;
   poolIdleMs: number;
-  hookConcurrency: number;
+  jobConcurrency: number;
   sessionTtlMinutes: number;
 }
