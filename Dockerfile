@@ -31,14 +31,17 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
 RUN pnpm install --frozen-lockfile
 
-# 2) Build everything. NEXT_PUBLIC_API_URL is baked into the browser bundle at
-#    build time, so it must point at wherever the browser reaches the API
-#    (the host-exposed API port, default http://localhost:4002/api).
+# 2) Build everything.
+#    NEXT_PUBLIC_API_URL is deliberately NOT set: anything NEXT_PUBLIC_* is
+#    inlined into the browser bundle at build time, so baking an API address
+#    here would pin this published image to one host. Instead the browser calls
+#    a relative /api and the web server proxies it (see the web app's
+#    app/api/[...path]/route.ts), with the target read at runtime from
+#    SYNCLE_API_ORIGIN. One image, works on localhost, a LAN box or behind a
+#    reverse proxy.
 #    NEXT_OUTPUT=standalone makes `next build` emit the self-contained server
 #    used by the runtime stage (plain `next start` keeps working outside Docker).
 COPY . .
-ARG NEXT_PUBLIC_API_URL=http://localhost:4002/api
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_OUTPUT=standalone
 RUN pnpm --filter @syncle/core build \
  && pnpm --filter @syncle/api build \

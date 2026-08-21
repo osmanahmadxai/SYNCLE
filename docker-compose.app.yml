@@ -1,12 +1,21 @@
 # Full, self-contained Syncle stack: web GUI + API + Postgres + Redis.
 # Everything runs in containers — a fresh machine needs only Docker.
 #
-#   syncle up          # build + start everything, open the GUI
-#   docker compose -f docker-compose.app.yml up -d --build   # (equivalent)
+#   syncle up                                          # start everything, open the GUI
+#   docker compose -f docker-compose.app.yml up -d     # (equivalent)
+#
+# The app image is pulled from GHCR, so there is nothing to build: first run is
+# a download, not a compile. To build it yourself from this checkout instead:
+#
+#   docker compose -f docker-compose.app.yml --profile build build
+#   SYNCLE_IMAGE=syncle-app:local docker compose -f docker-compose.app.yml up -d
 #
 # For local development against host-run services, use docker-compose.yml
 # (Postgres + Redis only) plus `pnpm dev` instead.
 name: syncle
+
+# Pin a version with SYNCLE_IMAGE=ghcr.io/osmanahmadxai/syncle:v1.2.3
+x-app-image: &app-image ${SYNCLE_IMAGE:-ghcr.io/osmanahmadxai/syncle:latest}
 
 services:
   postgres:
@@ -39,10 +48,7 @@ services:
       retries: 10
 
   api:
-    image: syncle-app:local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: *app-image
     container_name: syncle-api
     restart: unless-stopped
     working_dir: /app/apps/api
@@ -51,7 +57,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: '4002'
-      WEB_ORIGIN: http://localhost:3002
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/syncle?schema=public
       REDIS_URL: redis://redis:6379
       # ⚠ SET THIS. Encrypts stored connection credentials and signs session
@@ -66,8 +71,10 @@ services:
       SYNCLE_DATA_DIR: /app/apps/api/.syncle
     volumes:
       - syncle-api-data:/app/apps/api/.syncle
-    ports:
-      - '4002:4002'
+    # Not published: the browser reaches the API through the web app's /api
+    # proxy, so only one port needs to be open. Uncomment to call it directly.
+    # ports:
+    #   - '4002:4002'
     healthcheck:
       test:
         [
@@ -87,10 +94,7 @@ services:
         condition: service_healthy
 
   web:
-    image: syncle-app:local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: *app-image
     container_name: syncle-web
     restart: unless-stopped
     working_dir: /app/web/apps/web
@@ -100,11 +104,25 @@ services:
       NODE_ENV: production
       PORT: '3002'
       HOSTNAME: 0.0.0.0
+      # Where the web server forwards /api to, over the compose network. The
+      # browser only ever sees this app's own origin, which is what lets the
+      # same image serve localhost, a LAN address or a reverse-proxied domain.
+      SYNCLE_API_ORIGIN: http://api:4002
     ports:
-      - '3002:3002'
+      - '${SYNCLE_PORT:-3002}:3002'
     depends_on:
       api:
         condition: service_healthy
+
+  # Opt-in builder: `docker compose --profile build build` produces
+  # syncle-app:local from this checkout. Not started, never pulled.
+  build:
+    profiles: ['build']
+    image: syncle-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ['true']
 
 volumes:
   syncle-postgres-data:
