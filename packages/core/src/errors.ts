@@ -9,6 +9,7 @@ export type AppErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'CONFLICT'
+  | 'RATE_LIMITED'
   | 'CONNECTION_FAILED'
   | 'QUERY_FAILED'
   | 'UNSUPPORTED'

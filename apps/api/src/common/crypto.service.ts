@@ -9,6 +9,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHmac,
+  hkdfSync,
   randomBytes,
   timingSafeEqual,
 } from 'node:crypto';
@@ -18,10 +19,12 @@ import { runtimeConfig } from './runtime-config';
 
 const ALGO = 'aes-256-gcm';
 const IV_LENGTH = 12;
+const TAG_LENGTH = 16;
 
 @Injectable()
 export class CryptoService {
   private key: Buffer | null = null;
+  private sigKey: Buffer | null = null;
 
   private loadKey(): Buffer {
     if (this.key) return this.key;
@@ -78,12 +81,16 @@ export class CryptoService {
   decrypt(payload: string): string {
     const [ivB64, tagB64, dataB64] = payload.split(':');
     if (!ivB64 || !tagB64 || !dataB64) throw new Error('Malformed ciphertext');
+    const tag = Buffer.from(tagB64, 'base64');
+    // GCM accepts tags as short as 4 bytes; a truncated tag collapses forgery
+    // resistance, so only the full 16-byte tag our encrypt() emits is valid
+    if (tag.length !== TAG_LENGTH) throw new Error('Malformed ciphertext');
     const decipher = createDecipheriv(
       ALGO,
       this.loadKey(),
       Buffer.from(ivB64, 'base64'),
     );
-    decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+    decipher.setAuthTag(tag);
     return Buffer.concat([
       decipher.update(Buffer.from(dataB64, 'base64')),
       decipher.final(),
@@ -92,8 +99,10 @@ export class CryptoService {
 
   /**
    * sign an arbitrary JSON-serializable payload into a compact, tamper-evident
-   * token: `base64url(json).base64url(hmac)`. used for the session cookie — the
-   * master key doubles as the HMAC secret, so no extra key to manage.
+   * token: `base64url(json).base64url(hmac)`. used for the session cookie —
+   * signed with a sub-key HKDF-derived from the master key, so the encryption
+   * key and the MAC key stay independent (key-separation hygiene) while the
+   * operator still manages a single secret.
    */
   signToken(payload: Record<string, unknown>): string {
     const body = base64url(Buffer.from(JSON.stringify(payload), 'utf8'));
@@ -127,7 +136,16 @@ export class CryptoService {
   }
 
   private hmac(data: string): string {
-    return base64url(createHmac('sha256', this.loadKey()).update(data).digest());
+    return base64url(createHmac('sha256', this.loadSigKey()).update(data).digest());
+  }
+
+  /** HKDF(master, info='syncle-session-sig') — derived once, never persisted */
+  private loadSigKey(): Buffer {
+    if (this.sigKey) return this.sigKey;
+    this.sigKey = Buffer.from(
+      hkdfSync('sha256', this.loadKey(), Buffer.alloc(0), 'syncle-session-sig', 32),
+    );
+    return this.sigKey;
   }
 }
 

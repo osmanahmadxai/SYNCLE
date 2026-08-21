@@ -8,6 +8,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import type { HookDeliveryConfig, HttpDestination } from '@syncle/core';
+import { assertAllowedDestination } from '../common/url-guard';
 import type { DeliveryOutcome } from './hooks.types';
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -80,12 +81,22 @@ export class DeliveryService {
       const timeout = AbortSignal.timeout(delivery.timeoutMs);
       const signal = AbortSignal.any([runSignal, timeout]);
       try {
+        // SSRF guard: metadata endpoints always, private ranges when the
+        // deployment opts in. redirects are surfaced instead of followed so a
+        // public host can't 302 the delivery to an internal address.
+        await assertAllowedDestination(dest.url);
         const res = await fetch(dest.url, {
           method: dest.method,
           headers,
           body: payload,
           signal,
+          redirect: 'manual',
         });
+        if (res.status >= 300 && res.status < 400) {
+          lastStatus = res.status;
+          lastError = `HTTP ${res.status}: redirects are not followed — point the destination at the final URL`;
+          break;
+        }
         lastStatus = res.status;
         lastResponse = (await readBodyCapped(res)).slice(0, RESPONSE_LIMIT);
 

@@ -21,6 +21,8 @@ const passwordSchema = z
 export const setupSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
+  /** one-time token printed to the server console on first boot (TOFU guard) */
+  setupToken: z.string().min(1, 'Setup token is required').max(64),
 });
 
 export const loginSchema = z.object({

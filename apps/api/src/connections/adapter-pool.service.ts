@@ -5,6 +5,7 @@
  */
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { createAdapter } from '@syncle/core/adapters';
+import { runtimeConfig } from '../common/runtime-config';
 import type { ConnectionConfig, DatabaseAdapter } from '@syncle/core';
 import { SettingsStoreService } from '../settings/settings-store.service';
 import { ConnectionStoreService } from './connection-store.service';
@@ -92,7 +93,7 @@ export class AdapterPoolService implements OnModuleDestroy {
       this.entries.delete(key);
       await stale.adapter.close().catch(() => {});
     }
-    const adapter = createAdapter(config);
+    const adapter = createAdapter(withServerRestrictions(config));
     await adapter.connect();
     this.entries.set(key, {
       adapter,
@@ -116,7 +117,7 @@ export class AdapterPoolService implements OnModuleDestroy {
 
   /** build a one-off adapter from a raw config (used by "test connection") */
   async test(config: ConnectionConfig): Promise<void> {
-    const adapter = createAdapter(config);
+    const adapter = createAdapter(withServerRestrictions(config));
     try {
       await adapter.connect();
       await adapter.ping();
@@ -145,4 +146,16 @@ export class AdapterPoolService implements OnModuleDestroy {
       targets.map(([, entry]) => entry.adapter.close().catch(() => {})),
     );
   }
+}
+
+/**
+ * server-side config restrictions applied to every adapter, whatever store
+ * the config came from: the SQLite path jail (SYNCLE_SQLITE_DIR) must not be
+ * bypassable by anything a client can persist.
+ */
+function withServerRestrictions<T extends { engine: string }>(config: T): T {
+  if (config.engine === 'sqlite' && runtimeConfig.sqliteBaseDir) {
+    return { ...config, fileBaseDir: runtimeConfig.sqliteBaseDir };
+  }
+  return config;
 }

@@ -1,8 +1,8 @@
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { join, sep } from 'node:path';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BadRequestError } from '../../errors';
+import { BadRequestError, ConnectionError } from '../../errors';
 import type { ConnectionConfig } from '../types';
 import { assertSafeDefaultValue } from './base-sql-adapter';
 import { SqliteAdapter } from './sqlite-adapter';
@@ -315,5 +315,59 @@ describe('assertSafeDefaultValue', () => {
     ]) {
       expect(() => assertSafeDefaultValue(bad)).toThrow(BadRequestError);
     }
+  });
+});
+
+describe('SqliteAdapter fileBaseDir jail', () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'syncle-jail-'));
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  function jailed(file: string): SqliteAdapter {
+    return new SqliteAdapter({ ...makeConfig(file), fileBaseDir: base });
+  }
+
+  it('resolves relative paths under the base directory', async () => {
+    const adapter = jailed('data.db');
+    await adapter.connect();
+    await adapter.ping();
+    await adapter.close();
+    expect(existsSync(join(base, 'data.db'))).toBe(true);
+  });
+
+  it('allows absolute paths inside the base directory', async () => {
+    const adapter = jailed(join(base, 'inner.db'));
+    await adapter.connect();
+    await adapter.close();
+    expect(existsSync(join(base, 'inner.db'))).toBe(true);
+  });
+
+  it('rejects ../ traversal out of the base directory', async () => {
+    await expect(jailed('../escape.db').connect()).rejects.toThrow(
+      ConnectionError,
+    );
+    await expect(
+      jailed(join('sub', '..', '..', 'escape.db')).connect(),
+    ).rejects.toThrow(/restricted/);
+  });
+
+  it('rejects absolute paths outside the base directory', async () => {
+    await expect(jailed(join(tmpdir(), 'outside.db')).connect()).rejects.toThrow(
+      /restricted/,
+    );
+    await expect(jailed('/etc/passwd').connect()).rejects.toThrow(/restricted/);
+  });
+
+  it('rejects a sibling directory sharing the base as a name prefix', async () => {
+    // base "/x/jail" must not admit "/x/jail-evil/f.db" (string-prefix pitfall)
+    await expect(jailed(`${base}-evil${sep}f.db`).connect()).rejects.toThrow(
+      /restricted/,
+    );
   });
 });

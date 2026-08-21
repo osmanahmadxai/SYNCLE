@@ -78,6 +78,11 @@ export interface ConnectionConfig {
   connectionString?: string;
   /** free-form engine-specific options (e.g. Mongo authSource, Redis db index) */
   options?: Record<string, unknown>;
+  /**
+   * server-set restriction (never user input): when present, file-backed
+   * engines (SQLite) may only open paths under this directory
+   */
+  fileBaseDir?: string;
   createdAt: string;
   updatedAt: string;
 }
