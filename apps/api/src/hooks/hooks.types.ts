@@ -53,6 +53,18 @@ export interface DeliveryOutcome {
   succeededTargets?: string[] | null;
 }
 
+/**
+ * the last keyset value a replay run delivered, persisted (as
+ * `cursorJson: {"keyset": ...}`) alongside `cursorOffset` at every batch
+ * checkpoint. resuming from the stored key is exact even when rows were added
+ * or removed under the run, where an OFFSET re-seek would land on the wrong
+ * row. `column` guards against resuming a value against a changed sort.
+ */
+export interface KeysetCheckpoint {
+  column: string;
+  value: unknown;
+}
+
 /** the BullMQ job payload for the `hook-runs` queue */
 export interface HookRunJob {
   runId: string;

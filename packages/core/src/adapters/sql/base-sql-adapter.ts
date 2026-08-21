@@ -2,10 +2,12 @@
  * shared implementation for relational engines.
  *
  * concrete SQL adapters (Postgres, MySQL, SQLite, ...) only implement the
- * connection lifecycle, schema introspection, and three small dialect
- * primitives (`quoteIdent`, `placeholder`, `runSql`). everything user-facing
- * (browse, raw query, row mutations) is built here ONCE, with strict
- * parameterization so no user value is ever concatenated into SQL
+ * connection lifecycle, schema introspection, three small dialect primitives
+ * (`quoteIdent`, `placeholder`, `execPooled`) and, where their dialect
+ * deviates, the overridable hooks (`likeKeyword`, `upsertClause`,
+ * `booleanLiteral`, `hexLiteral`, `escapeStringLiteral`, ...). everything
+ * user-facing (browse, raw query, row mutations) is built here ONCE, with
+ * strict parameterization so no user value is ever concatenated into SQL
  */
 import type {
   AdapterCapabilities,
@@ -710,10 +712,18 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     return `CREATE TABLE IF NOT EXISTS ${this.qualify(t.name, t.schema)} (\n${defs.join(',\n')}\n);`;
   }
 
-  /** binary literal for SQL dumps: `X'..'` (MySQL/SQLite) or `'\x..'` (PG) */
+  /** binary literal for SQL dumps: `X'..'` (Postgres overrides with `'\x..'`) */
   protected hexLiteral(buf: Buffer): string {
-    const hex = buf.toString('hex');
-    return this.engine === 'postgres' ? `'\\x${hex}'` : `X'${hex}'`;
+    return `X'${buf.toString('hex')}'`;
+  }
+
+  /**
+   * escape a string for embedding in a single-quoted SQL literal. the default
+   * doubles quotes per the SQL standard; dialects with extra escape characters
+   * override (MySQL also doubles backslashes).
+   */
+  protected escapeStringLiteral(text: string): string {
+    return text.replace(/'/g, "''");
   }
 
   private sqlLiteral(value: unknown): string {
@@ -725,12 +735,7 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     if (Buffer.isBuffer(value)) return this.hexLiteral(value);
     const text =
       typeof value === 'object' ? JSON.stringify(value) : String(value);
-    let escaped = text.replace(/'/g, "''");
-    // MySQL treats backslash as an escape character inside string literals;
-    // leaving it unescaped corrupts the dump and lets a crafted value break
-    // out of the literal when the dump is restored
-    if (this.engine === 'mysql') escaped = escaped.replace(/\\/g, '\\\\');
-    return `'${escaped}'`;
+    return `'${this.escapeStringLiteral(text)}'`;
   }
 
   async restore(content: string, format: BackupFormat): Promise<RestoreResult> {

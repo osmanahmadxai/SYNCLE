@@ -29,11 +29,35 @@ import { HookSinkService } from './hook-sink.service';
 import { HookRunService } from './hook-run.service';
 import { HookStoreService } from './hook-store.service';
 import { RunRegistryService } from './run-registry.service';
-import { HOOK_RUNS_QUEUE, type HookRunJob, type ResolvedHook } from './hooks.types';
+import {
+  HOOK_RUNS_QUEUE,
+  type HookRunJob,
+  type KeysetCheckpoint,
+  type ResolvedHook,
+} from './hooks.types';
 
 interface StreamItem {
   row: Record<string, unknown>;
   index: number;
+  /** present on keyset-paginated streams: this row's checkpointable key */
+  keyset?: KeysetCheckpoint;
+}
+
+/**
+ * read the keyset checkpoint out of a run's cursorJson, if one was stored.
+ * watch cursors share the column but use their own shape (no `keyset` key),
+ * and legacy replay runs stored nothing — both yield null.
+ */
+function parseKeysetCheckpoint(cursorJson: string | null): KeysetCheckpoint | null {
+  if (!cursorJson) return null;
+  try {
+    const keyset = (JSON.parse(cursorJson) as { keyset?: KeysetCheckpoint }).keyset;
+    return keyset && typeof keyset.column === 'string'
+      ? { column: keyset.column, value: keyset.value }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 @Processor(HOOK_RUNS_QUEUE, { concurrency: runtimeConfig.hookConcurrency })
@@ -69,7 +93,13 @@ export class HookRunProcessor extends WorkerHost {
       if (job.data.mode === 'resend') {
         await this.runs.executeResend(runId, controller.signal);
       } else {
-        await this.execute(runId, row.cursorOffset, row.configSnapshotJson, controller.signal);
+        await this.execute(
+          runId,
+          row.cursorOffset,
+          parseKeysetCheckpoint(row.cursorJson),
+          row.configSnapshotJson,
+          controller.signal,
+        );
       }
     } finally {
       this.registry.release(runId);
@@ -79,6 +109,7 @@ export class HookRunProcessor extends WorkerHost {
   private async execute(
     runId: string,
     startOffset: number,
+    resumeKey: KeysetCheckpoint | null,
     snapshotJson: string,
     signal: AbortSignal,
   ): Promise<void> {
@@ -116,19 +147,24 @@ export class HookRunProcessor extends WorkerHost {
 
     let buffer: Record<string, unknown>[] = [];
     let bufferStart = startOffset;
+    // the keyset value of the newest row in the flushed prefix; checkpointed
+    // with the offset so a resume lands on the exact next row even when the
+    // table mutated between attempts (an OFFSET re-seek cannot promise that)
+    let lastKeyset: KeysetCheckpoint | undefined;
 
     try {
-      for await (const item of this.streamRows(hook, runId, startOffset)) {
+      for await (const item of this.streamRows(hook, runId, startOffset, resumeKey)) {
         if (await stopRequested()) {
           await this.runs.finalize(runId, 'canceled');
           return;
         }
         buffer.push(item.row);
+        if (item.keyset) lastKeyset = item.keyset;
         if (buffer.length === batchSize) {
           const stop = await this.flush(runId, table, buffer, bufferStart, done, priorTargets, hook, pkColumn, signal);
           buffer = [];
           bufferStart = item.index + 1;
-          await this.runs.setCursor(runId, bufferStart);
+          await this.runs.setCursor(runId, bufferStart, lastKeyset);
           if (stop) {
             await this.runs.finalize(runId, 'failed', 'Stopped after a failed delivery (onError=abort).');
             return;
@@ -210,9 +246,10 @@ export class HookRunProcessor extends WorkerHost {
     hook: ResolvedHook,
     runId: string,
     startOffset: number,
+    resumeKey: KeysetCheckpoint | null,
   ): AsyncGenerator<StreamItem> {
     return hook.source.kind === 'table'
-      ? this.streamTable(hook, runId, startOffset)
+      ? this.streamTable(hook, runId, startOffset, resumeKey)
       : this.streamQuery(hook, runId, startOffset);
   }
 
@@ -220,6 +257,7 @@ export class HookRunProcessor extends WorkerHost {
     hook: ResolvedHook,
     runId: string,
     startOffset: number,
+    resumeKey: KeysetCheckpoint | null,
   ): AsyncGenerator<StreamItem> {
     if (hook.source.kind !== 'table') return;
     const src = hook.source;
@@ -235,16 +273,23 @@ export class HookRunProcessor extends WorkerHost {
       let lastKey: unknown = null;
       let index = startOffset;
       if (startOffset > 0) {
-        // resume: find the key of the last already-delivered row (one seek)
-        const seek = await browse({
-          schema: src.schema,
-          table: src.table,
-          filters: src.filters,
-          sort,
-          limit: 1,
-          offset: startOffset - 1,
-        });
-        lastKey = seek.rows[0]?.[keysetColumn] ?? null;
+        if (resumeKey && resumeKey.column === keysetColumn) {
+          // exact resume from the checkpointed key — immune to rows added or
+          // removed under the run, and no deep-OFFSET seek query
+          lastKey = resumeKey.value;
+        } else {
+          // legacy runs (no checkpoint) or a changed sort column: fall back to
+          // seeking the key of the last already-delivered row by offset
+          const seek = await browse({
+            schema: src.schema,
+            table: src.table,
+            filters: src.filters,
+            sort,
+            limit: 1,
+            offset: startOffset - 1,
+          });
+          lastKey = seek.rows[0]?.[keysetColumn] ?? null;
+        }
       }
       for (;;) {
         const filters = [
@@ -262,9 +307,9 @@ export class HookRunProcessor extends WorkerHost {
           offset: 0,
         });
         for (const row of page.rows) {
-          yield { row, index };
-          index++;
           lastKey = row[keysetColumn];
+          yield { row, index, keyset: { column: keysetColumn, value: lastKey } };
+          index++;
         }
         if (!page.hasMore || page.rows.length === 0) return;
       }

@@ -4,14 +4,14 @@
  * has to stream and deliver.
  *
  * durability model: one BullMQ job per run (`jobId = runId`). a crashed run is
- * recovered by BullMQ's stalled-job detection and resumed from `cursorOffset`;
+ * recovered by BullMQ's stalled-job detection and resumed from its checkpoint
+ * (`cursorOffset`, plus the last keyset value for keyset-paginated streams);
  * on boot we also re-enqueue any non-terminal run so nothing is orphaned.
  */
 import { randomUUID } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
-  AppError,
   BadRequestError,
   ConflictError,
   type CdcOperation,
@@ -36,7 +36,9 @@ import {
   HOOK_RUNS_QUEUE,
   type DeliveryOutcome,
   type HookRunJob,
+  type KeysetCheckpoint,
 } from './hooks.types';
+import { ensureQueueReady } from './queue.util';
 
 const ACTIVE: HookRunStatus[] = ['queued', 'running', 'canceling'];
 const TERMINAL: HookRunStatus[] = [
@@ -91,7 +93,7 @@ export class HookRunService implements OnModuleInit {
     });
     if (failedCount === 0) throw new BadRequestError('No failed deliveries to retry.');
 
-    await this.ensureQueueReady();
+    await ensureQueueReady(this.queue);
     await this.clearSettledJob(runId);
     const row = await this.prisma.hookRun.update({
       where: { id: runId },
@@ -312,7 +314,7 @@ export class HookRunService implements OnModuleInit {
           where: { hookId, status: 'draft' },
         });
     if (draft && draft.hookId === hookId && draft.status === 'draft') {
-      await this.ensureQueueReady();
+      await ensureQueueReady(this.queue);
       const row = await this.prisma.hookRun.update({
         where: { id: draft.id },
         data: { status: 'queued', startedAt: new Date() },
@@ -338,7 +340,7 @@ export class HookRunService implements OnModuleInit {
     });
     if (latest) return this.resume(hookId, latest.id);
 
-    await this.ensureQueueReady();
+    await ensureQueueReady(this.queue);
     const id = randomUUID();
     const snapshotJson = await this.store.snapshotJson(hookId);
     const total = await this.computeTotal(snapshotJson).catch(() => null);
@@ -376,12 +378,15 @@ export class HookRunService implements OnModuleInit {
     if (failedCount === 0)
       throw new BadRequestError('No failed rows to retry.');
 
-    await this.ensureQueueReady();
+    await ensureQueueReady(this.queue);
     const updated = await this.prisma.hookRun.update({
       where: { id: runId },
       data: {
         status: 'queued',
         cursorOffset: 0,
+        // the keyset checkpoint belongs to the reset offset — keeping it would
+        // make the re-stream resume mid-table and skip the earlier failed rows
+        cursorJson: null,
         error: null,
         finishedAt: null,
         configSnapshotJson: await this.store.snapshotJson(hookId),
@@ -428,7 +433,7 @@ export class HookRunService implements OnModuleInit {
         `Run "${runId}" cannot be resumed (status: ${row.status}).`,
       );
     }
-    await this.ensureQueueReady();
+    await ensureQueueReady(this.queue);
     // resume the REMAINING rows with the hook's CURRENT config, so edits made
     // after the run started (e.g. fewer columns, a new endpoint) take effect
     const reset = await this.prisma.hookRun.update({
@@ -473,25 +478,6 @@ export class HookRunService implements OnModuleInit {
     } catch {
       /* best-effort, the add that follows still surfaces real queue failures */
       return undefined;
-    }
-  }
-
-  /** fail fast with a friendly message when Redis is unreachable */
-  private async ensureQueueReady(): Promise<void> {
-    try {
-      await Promise.race([
-        this.queue.waitUntilReady(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), 2000),
-        ),
-      ]);
-      return;
-    } catch {
-      throw new AppError(
-        'CONNECTION_FAILED',
-        'The job queue (Redis) is unavailable. Start it with `docker compose up -d redis` or set REDIS_URL.',
-        503,
-      );
     }
   }
 
@@ -688,10 +674,26 @@ export class HookRunService implements OnModuleInit {
     });
   }
 
-  async setCursor(runId: string, cursorOffset: number): Promise<void> {
+  /**
+   * checkpoint the resume position. for keyset-paginated streams the actual
+   * last keyset value is persisted alongside the offset: resuming from the
+   * stored key lands on the exact row after the last delivered one even when
+   * the table changed between attempts, which an OFFSET re-seek cannot
+   * guarantee. `null` clears a stale checkpoint (offset-paginated streams).
+   */
+  async setCursor(
+    runId: string,
+    cursorOffset: number,
+    keyset?: KeysetCheckpoint | null,
+  ): Promise<void> {
     await this.prisma.hookRun.update({
       where: { id: runId },
-      data: { cursorOffset },
+      data: {
+        cursorOffset,
+        ...(keyset !== undefined
+          ? { cursorJson: keyset ? JSON.stringify({ keyset }) : null }
+          : {}),
+      },
     });
   }
 
