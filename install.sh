@@ -43,8 +43,11 @@ if [ -z "$REF" ]; then
   [ -n "$REF" ] || REF=main
 fi
 
+# The git tag carries a "v" prefix; the image tag does not. docker/metadata-action
+# renders {{version}} from the semver in the tag, so v1.1.0 publishes as 1.1.0 —
+# asking for :v1.1.0 gets "not found".
 case "$REF" in
-  v*) IMAGE_TAG="$REF" ;;
+  v*) IMAGE_TAG="${REF#v}" ;;
   *)  IMAGE_TAG="latest" ;;
 esac
 IMAGE="${SYNCLE_IMAGE:-$IMAGE_REPO:$IMAGE_TAG}"
