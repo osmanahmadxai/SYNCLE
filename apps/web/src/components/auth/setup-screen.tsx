@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useTranslations } from 'next-intl';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { useSetup } from '@/lib/queries';
+import { readSetupTokenFromHash } from '@/lib/setup-token';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -26,7 +27,25 @@ export function SetupScreen() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [setupToken, setSetupToken] = useState('');
+  const [tokenFromServer, setTokenFromServer] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * `syncle up` opens this page with the first-run token in the URL fragment,
+   * so the operator never copies it by hand. Stripped from the address bar as
+   * soon as it is read, to keep it out of browser history.
+   */
+  useEffect(() => {
+    const token = readSetupTokenFromHash(window.location.hash);
+    if (!token) return;
+    setSetupToken(token);
+    setTokenFromServer(true);
+    window.history.replaceState(
+      null,
+      '',
+      window.location.pathname + window.location.search,
+    );
+  }, []);
 
   async function handleSubmit() {
     // the Enter-key handler bypasses the button's disabled state
@@ -126,16 +145,23 @@ export function SetupScreen() {
                 onChange={(e) => setConfirm(e.target.value)}
               />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="setup-token">{t('token')}</Label>
-              <Input
-                id="setup-token"
-                autoComplete="off"
-                value={setupToken}
-                onChange={(e) => setSetupToken(e.target.value)}
-              />
-              <p className="text-muted-foreground text-xs">{t('tokenHint')}</p>
-            </div>
+            {tokenFromServer ? (
+              <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                {t('tokenAuto')}
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                <Label htmlFor="setup-token">{t('token')}</Label>
+                <Input
+                  id="setup-token"
+                  autoComplete="off"
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                />
+                <p className="text-muted-foreground text-xs">{t('tokenHint')}</p>
+              </div>
+            )}
             {error && <p className="text-destructive text-sm">{error}</p>}
             <Button type="submit" className="w-full" disabled={setup.isPending}>
               {setup.isPending ? (

@@ -17,6 +17,12 @@ export const runtimeConfig = {
   dataDir,
   storeFile: resolve(dataDir, 'syncle.db'),
   keyFile: resolve(dataDir, 'master.key'),
+  /**
+   * first-run setup token, mirrored to disk so the launcher can hand it to the
+   * browser instead of making the operator dig it out of the container logs.
+   * exists only while the instance has no account.
+   */
+  setupTokenFile: resolve(dataDir, 'setup-token'),
   masterKey: process.env.SYNCLE_MASTER_KEY ?? null,
   maxQueryRows: Number(process.env.SYNCLE_MAX_QUERY_ROWS ?? 5000),
   poolIdleMs: Number(process.env.SYNCLE_POOL_IDLE_MS ?? 300_000),

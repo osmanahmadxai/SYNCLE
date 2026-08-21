@@ -37,6 +37,16 @@ open_url() {
   else printf 'Open %s in your browser.\n' "$1"; fi
 }
 
+# The API writes its first-run token into the data dir, and removes it as soon
+# as an account exists. Reading it needs container access on this host — the
+# very thing the token is proof of — so handing it to the browser changes how
+# the operator receives it, not who is able to.
+setup_token() {
+  compose exec -T api \
+    sh -c 'cat "${SYNCLE_DATA_DIR:-.syncle}/setup-token" 2>/dev/null' 2>/dev/null \
+    | tr -d '\r\n'
+}
+
 wait_for_web() {
   printf 'Waiting for the web GUI'
   for _ in $(seq 1 60); do
@@ -72,19 +82,40 @@ EOF
 cmd="${1:-up}"
 case "$cmd" in
   up)
-    # pull first so a slow download isn't mistaken for a hung startup
+    # pull first so a slow download isn't mistaken for a hung startup.
+    # best-effort: a pull failure must not stop a start that could still work
+    # from cached images (offline, or a locally built SYNCLE_IMAGE). If an
+    # image really is missing, `up` fails next with a clearer message.
     printf 'Downloading images (first run takes a minute)...\n'
-    compose pull --quiet
+    compose pull --quiet 2>/dev/null || printf 'Could not refresh images — using what is already downloaded.\n'
     compose up -d
     wait_for_web
-    open_url "$WEB_URL"
+    # a token only exists on a first run; the fragment prefills the setup form
+    # so it never has to be typed, and never reaches the server or the logs
+    token=$(setup_token || true)
+    if [ -n "$token" ]; then
+      open_url "$WEB_URL/#setup-token=$token"
+      printf '\nFirst run — the setup form is prefilled in your browser.\n'
+      printf 'If it did not open, go to:\n  %s/#setup-token=%s\n\n' "$WEB_URL" "$token"
+    else
+      open_url "$WEB_URL"
+    fi
     printf 'Syncle is running at %s\n' "$WEB_URL"
     ;;
   down)    compose down ;;
   restart) compose restart ;;
   status|ps) compose ps ;;
   logs)    shift || true; compose logs -f "$@" ;;
-  open)    open_url "$WEB_URL" ;;
+  open)
+    # carry the token through here too, so `syncle open` before setup is done
+    # lands on a prefilled form rather than an empty token field
+    token=$(setup_token || true)
+    if [ -n "$token" ]; then
+      open_url "$WEB_URL/#setup-token=$token"
+    else
+      open_url "$WEB_URL"
+    fi
+    ;;
   update)
     # re-runs the installer, which refreshes the compose file and launcher and
     # re-pins the image to the newest release. the encryption key is preserved.

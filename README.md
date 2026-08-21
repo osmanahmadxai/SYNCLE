@@ -128,9 +128,11 @@ opens it at **http://localhost:3002**. Docker is the only requirement — Node,
 Postgres and Redis all run in containers, and the app image is pulled prebuilt,
 so nothing is compiled on your machine.
 
-On first run the API prints a **setup token** to the console; enter it in the
-web UI to create your admin account. Grab it with `syncle logs api` if you miss
-it.
+On first run it opens the setup form with a one-time **setup token** already
+filled in, so all you do is pick a username and password. The token proves you
+are the operator of this machine — it is read off the server by `syncle up`,
+never typed. If you're setting up from another device, `syncle logs api` prints
+it and the form accepts it by hand.
 
 After that, the `syncle` command manages the stack:
 
