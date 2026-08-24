@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 # Syncle one-command installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh | sh
+#   curl -fsSL https://syncle.dev/install | sh
 #
 # Add `-s -- up` to start it right away:
 #
-#   curl -fsSL https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh | sh -s -- up
+#   curl -fsSL https://syncle.dev/install | sh -s -- up
 #
 # Requires Docker (with Compose v2) and curl. Nothing else — Node, Postgres and
 # Redis all run in containers, and the app image is downloaded prebuilt, so
