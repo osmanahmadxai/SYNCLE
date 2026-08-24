@@ -1,0 +1,45 @@
+# Syncle
+
+> Open-source, self-hosted database synchronization. Draw a bridge from a
+> source database to one or more destinations and Syncle keeps them in sync —
+> live via change data capture (CDC), polled via cursors, or as a one-shot
+> backfill. PostgreSQL, MySQL/MariaDB, SQLite, MongoDB and Redis, any engine
+> to any other, plus HTTP endpoints as destinations. MIT licensed.
+
+Install with one command (Docker is the only requirement):
+
+    curl -fsSL https://syncle.dev/install | sh -s -- up
+
+## What it guarantees
+
+- Idempotent upserts keyed by columns you choose: replays, retries and
+  redeliveries never double-write.
+- Inserts, updates AND deletes propagate, each tagged with its operation.
+- Missing destination tables are created from the source's shape, with types
+  translated across engines.
+- Columns can be mapped and renamed as rows cross.
+- Interrupted jobs resume from their cursor instead of starting over.
+
+## How a bridge fires
+
+- Replay: one-shot stream of the source (initial backfill, migrations).
+- Watch: cursor polling (auto-increment id, updated_at, or primary-key diff).
+- CDC: real-time change capture — Postgres logical replication, MySQL binlog,
+  MongoDB change streams, Redis keyspace notifications.
+
+## Key facts
+
+- Self-hosted: no account, no telemetry, no third party in the data path.
+- Stored connection credentials are encrypted (AES-256-GCM) with a key that
+  never leaves the install.
+- SSH tunnels reach databases on private networks.
+- A lightweight alternative to Airbyte (no Kubernetes) and Debezium (no
+  Kafka) for single-operator use.
+
+## Links
+
+- Website: https://syncle.dev
+- Source (GitHub): https://github.com/osmanahmadxai/SYNCLE
+- Releases: https://github.com/osmanahmadxai/SYNCLE/releases/latest
+- Issues: https://github.com/osmanahmadxai/SYNCLE/issues
+- License (MIT): https://github.com/osmanahmadxai/SYNCLE/blob/main/LICENSE

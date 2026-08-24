@@ -92,6 +92,10 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    /* clip, not hidden: guards against any future absolutely-positioned
+       decoration widening the page on phones without creating a scroll
+       container */
+    overflow-x: clip;
     font-synthesis-weight: none;
     text-rendering: optimizeLegibility;
   }

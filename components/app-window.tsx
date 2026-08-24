@@ -37,10 +37,10 @@ export function AppWindow() {
       {/* a soft light behind the window so it sits on the page rather than on top of it */}
       <div
         aria-hidden
-        className="absolute -inset-x-8 -top-6 bottom-0 rounded-[2rem] bg-foreground/[0.04] blur-2xl"
+        className="absolute inset-x-0 -top-6 bottom-0 rounded-[2rem] bg-foreground/[0.04] blur-2xl sm:-inset-x-8"
       />
 
-      <div className="relative overflow-hidden rounded-xl border bg-card shadow-2xl shadow-black/60">
+      <div className="relative overflow-hidden rounded-xl border bg-card shadow-2xl shadow-black/60 ring-1 ring-foreground/[0.06]">
         {/* title bar */}
         <div className="flex h-9 items-center gap-2 border-b bg-muted/30 px-3.5">
           <span className="flex gap-1.5">
@@ -53,7 +53,7 @@ export function AppWindow() {
           </span>
         </div>
 
-        <div className="grid grid-cols-[168px_1fr] sm:grid-cols-[196px_1fr]">
+        <div className="grid grid-cols-1 sm:grid-cols-[196px_1fr]">
           {/* ── rail ─────────────────────────────────────────────── */}
           <aside className="hidden border-r bg-muted/15 p-3 sm:block">
             <p className="px-2 pb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -71,7 +71,7 @@ export function AppWindow() {
                 >
                   <span
                     className={`size-1.5 shrink-0 rounded-full ${
-                      b.live ? 'bg-foreground/70' : 'bg-foreground/20'
+                      b.live ? 'animate-pulse bg-foreground/70' : 'bg-foreground/20'
                     }`}
                   />
                   <span className="truncate">{b.name}</span>
@@ -102,7 +102,7 @@ export function AppWindow() {
             <div className="grid grid-cols-4 divide-x border-b">
               {STATS.map((s) => (
                 <div key={s.label} className="px-3 py-2.5">
-                  <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                     {s.label}
                   </p>
                   <p className="mt-0.5 text-base font-semibold tabular-nums">

@@ -8,9 +8,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     {
       url: SITE_URL,
-      lastModified: new Date('2026-08-24'),
-      changeFrequency: 'weekly',
-      priority: 1,
+      // the build date: honest for a static site rebuilt on content change
+      lastModified: new Date(),
     },
   ];
 }
