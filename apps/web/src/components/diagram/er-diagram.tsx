@@ -22,7 +22,7 @@ type TableNodeData = { table: TableSchema };
 function TableNode({ data }: NodeProps<Node<TableNodeData>>) {
   const { table } = data;
   return (
-    <div className="border-border bg-card min-w-[200px] overflow-hidden rounded-md border shadow-sm">
+    <div className="border-border bg-card min-w-[200px] overflow-hidden rounded-md border">
       <Handle type="target" position={Position.Left} className="!bg-primary" />
       <div className="bg-muted/60 border-b px-3 py-1.5 text-xs font-semibold">
         {table.name}

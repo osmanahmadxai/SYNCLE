@@ -55,7 +55,7 @@ type DestNodeData = { label: string; kind: 'http' | 'database' };
 
 function ConnectionNode({ data }: NodeProps<Node<ConnNodeData>>) {
   return (
-    <div className="bg-card flex min-w-[150px] items-center gap-2 rounded-md border px-3 py-2 shadow-sm">
+    <div className="bg-card flex min-w-[150px] items-center gap-2 rounded-md border px-3 py-2">
       <Database className="text-primary h-4 w-4 shrink-0" />
       <div className="min-w-0">
         <div className="truncate text-xs font-semibold">{data.label}</div>
@@ -72,7 +72,7 @@ function BridgeNode({ data }: NodeProps<Node<BridgeNodeData>>) {
   return (
     <div
       className={cn(
-        'bg-card min-w-[170px] cursor-pointer rounded-md border px-3 py-2 shadow-sm transition-shadow hover:shadow-md',
+        'bg-card min-w-[170px] cursor-pointer rounded-md border px-3 py-2',
         data.selected ? 'ring-primary ring-2' : '',
       )}
     >
@@ -102,7 +102,7 @@ function BridgeNode({ data }: NodeProps<Node<BridgeNodeData>>) {
 
 function DestinationNode({ data }: NodeProps<Node<DestNodeData>>) {
   return (
-    <div className="bg-card flex min-w-[150px] items-center gap-2 rounded-md border px-3 py-2 shadow-sm">
+    <div className="bg-card flex min-w-[150px] items-center gap-2 rounded-md border px-3 py-2">
       <Handle type="target" position={Position.Left} className="!bg-primary" />
       {data.kind === 'database' ? (
         <Database className="h-4 w-4 shrink-0 text-emerald-500" />

@@ -435,7 +435,7 @@ export function DeliveryMonitor({
                 className={cn(
                   'flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium transition-colors',
                   view === id
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -502,7 +502,7 @@ export function DeliveryMonitor({
                     className={cn(
                       'rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
                       filter === f.value
-                        ? 'bg-background text-foreground shadow-sm'
+                        ? 'bg-background text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
                     )}
                   >
@@ -662,8 +662,8 @@ export function DeliveryMonitor({
                       ].filter(Boolean).join(' · ')}
                       className={cn(
                         'flex h-[32px] items-center justify-center rounded border text-[10px] font-semibold tabular-nums',
-                        'transition-[transform,box-shadow] duration-100',
-                        'hover:scale-110 hover:z-10 hover:shadow-sm',
+                        'transition-transform duration-100',
+                        'hover:scale-110 hover:z-10',
                         CELL_STYLES[state],
                         openDelivery?.sequence === seq && 'ring-foreground z-10 ring-2 scale-110',
                         isSel && 'ring-primary z-10 ring-2 scale-110',
