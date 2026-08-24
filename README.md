@@ -120,7 +120,7 @@ The rest is the same whichever destination and trigger you pick:
 ### Install and run — one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh | sh -s -- up
+curl -fsSL https://syncle.dev/install | sh -s -- up
 ```
 
 That's the whole thing. It downloads the newest release, starts Syncle, and

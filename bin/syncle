@@ -12,7 +12,7 @@ set -euo pipefail
 export SYNCLE_HOME="${SYNCLE_HOME:-$HOME/.syncle}"
 COMPOSE_FILE="$SYNCLE_HOME/docker-compose.app.yml"
 ENV_FILE="$SYNCLE_HOME/.env"
-INSTALLER="https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/install.sh"
+INSTALLER="https://syncle.dev/install"
 WEB_URL="http://localhost:${SYNCLE_PORT:-3002}"
 
 die() { printf 'syncle: %s\n' "$1" >&2; exit 1; }
