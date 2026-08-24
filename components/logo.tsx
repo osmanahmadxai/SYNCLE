@@ -8,7 +8,14 @@ import Image from 'next/image';
  * the same approach the app itself uses — which keeps it working without
  * JavaScript and avoids a flash on first paint.
  */
-export function Logo({ className = 'h-9 w-auto' }: { className?: string }) {
+export function Logo({
+  className = 'h-9 w-auto',
+  priority = false,
+}: {
+  className?: string;
+  /** only the header instance is above the fold */
+  priority?: boolean;
+}) {
   return (
     <>
       <Image
@@ -16,7 +23,7 @@ export function Logo({ className = 'h-9 w-auto' }: { className?: string }) {
         alt="Syncle"
         width={747}
         height={412}
-        priority
+        priority={priority}
         className={`${className} dark:hidden`}
       />
       <Image
@@ -24,7 +31,7 @@ export function Logo({ className = 'h-9 w-auto' }: { className?: string }) {
         alt="Syncle"
         width={747}
         height={412}
-        priority
+        priority={priority}
         className={`${className} hidden dark:block`}
       />
     </>

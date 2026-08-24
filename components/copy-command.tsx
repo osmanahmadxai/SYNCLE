@@ -8,13 +8,22 @@ import { cn } from '@/lib/utils';
 /**
  * The install command with a copy button — the one thing most visitors came
  * to take away, so it gets to be the loudest element on the page.
+ *
+ * On phones the command WRAPS instead of scrolling: iOS and Android hide
+ * scrollbars, so an overflowing command just looks cut off mid-URL — on the
+ * flagship element. Desktop keeps the single line.
+ *
+ * `prominent` marks the hero instance as the call to action (ring + glow);
+ * the section and footer copies stay quiet so there is exactly one loudest.
  */
 export function CopyCommand({
   command,
   className,
+  prominent = false,
 }: {
   command: string;
   className?: string;
+  prominent?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,18 +60,23 @@ export function CopyCommand({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-xl border bg-card/40 py-2.5 pl-4 pr-2.5 backdrop-blur',
+        'flex items-start gap-3 rounded-xl border bg-card/40 py-2.5 pl-4 pr-2.5 backdrop-blur transition-colors sm:items-center',
+        prominent &&
+          'ring-1 ring-foreground/15 hover:ring-foreground/25',
+        copied && prominent && 'ring-foreground/40',
         className,
       )}
     >
-      <span aria-hidden className="select-none font-mono text-sm text-muted-foreground">
+      <span
+        aria-hidden
+        className="mt-1 select-none font-mono text-sm text-muted-foreground/50 sm:mt-0"
+      >
         $
       </span>
       <code
         id="install-command"
-        // text-left is explicit: the hero centres its children, and an
-        // inherited text-center would float the command in the middle of its box
-        className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-left font-mono text-[13px] leading-6 sm:text-sm"
+        // wraps below sm; scrolls (single line) from sm up
+        className="min-w-0 flex-1 whitespace-pre-wrap break-all text-left font-mono text-[13px] leading-6 sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal"
       >
         {command}
       </code>
@@ -72,7 +86,7 @@ export function CopyCommand({
         size="sm"
         onClick={copy}
         aria-label={copied ? 'Copied' : 'Copy install command'}
-        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+        className="h-10 shrink-0 gap-1.5 px-3 text-xs text-muted-foreground hover:text-foreground sm:h-8 sm:px-2.5"
       >
         {copied ? (
           <>

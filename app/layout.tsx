@@ -70,7 +70,16 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
   },
-  icons: { icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }] },
+  // SVG first for anything that will take it; the PNG is the fallback for
+  // browsers that still will not, and Apple gets an unrounded square because
+  // iOS masks the corners itself.
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/icon-32.png', type: 'image/png', sizes: '32x32' },
+    ],
+    apple: [{ url: '/apple-icon.png', type: 'image/png', sizes: '180x180' }],
+  },
 };
 
 export const viewport: Viewport = {

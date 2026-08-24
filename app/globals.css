@@ -92,6 +92,10 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    /* clip, not hidden: guards against any future absolutely-positioned
+       decoration widening the page on phones without creating a scroll
+       container */
+    overflow-x: clip;
     font-synthesis-weight: none;
     text-rendering: optimizeLegibility;
   }
@@ -125,6 +129,61 @@
     );
     background-size: 22px 22px;
     mask-image: radial-gradient(60% 50% at 50% 0%, #000 20%, transparent 78%);
+  }
+
+  /*
+   * Anything in the hero scene that owns a hue — an engine's brand colour, an
+   * operation's — carries it as a light/dark pair set inline from the data,
+   * because several of the real values only survive one background: SQLite's
+   * navy vanishes on black, a dark green washes out on white. CSS picks the
+   * side that reads and hands it back as `--tint`.
+   */
+  .tinted {
+    --tint: var(--tint-light);
+  }
+
+  .dark .tinted {
+    --tint: var(--tint-dark);
+  }
+
+  /* an engine is greyscale until the cursor asks which logo it is */
+  .engine-node .engine-mark,
+  .engine-node .engine-ring {
+    transition:
+      fill 180ms ease,
+      fill-opacity 180ms ease,
+      stroke 180ms ease,
+      stroke-opacity 180ms ease;
+  }
+
+  .engine-node:hover .engine-mark {
+    fill: var(--tint);
+    fill-opacity: 1;
+  }
+
+  .engine-node:hover .engine-ring {
+    stroke: var(--tint);
+    stroke-opacity: 0.55;
+  }
+
+  /*
+   * SMIL is immune to the reduced-motion kill switch above, so the hero draws
+   * both a moving layer and a still one and swaps them here. Doing it in CSS
+   * rather than JavaScript is what lets the scene stay server-rendered: no
+   * hydration, and never a frame of the wrong version.
+   */
+  .hero-still {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-motion {
+      display: none;
+    }
+
+    .hero-still {
+      display: block;
+    }
   }
 
   /* hairline that fades out at both ends, for section breaks */

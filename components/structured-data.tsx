@@ -1,13 +1,26 @@
-import { DESCRIPTION, FAQ, GITHUB, SITE_URL, TITLE } from '@/lib/content';
+import {
+  AUTHOR_GITHUB,
+  DESCRIPTION,
+  FAQ,
+  GITHUB,
+  SITE_URL,
+  TITLE,
+} from '@/lib/content';
 
 /**
  * JSON-LD for the page. Three graphs:
  *
- *  - SoftwareApplication, so Google can present Syncle as a piece of software
- *    (name, licence, price, operating systems) rather than a generic page.
- *  - FAQPage, mirroring the visible FAQ exactly — Google requires the answers
- *    to be present on the page, which is why both read from lib/content.
- *  - WebSite, which is what makes a sitelinks search box eligible.
+ *  - SoftwareApplication + SoftwareSourceCode (multi-typed — the standard
+ *    pattern for open-source tools, which makes codeRepository and
+ *    programmingLanguage legal properties).
+ *  - FAQPage, mirroring the visible FAQ exactly — the answers must be present
+ *    on the page, which is why both read from lib/content. Google has retired
+ *    FAQ rich results for most sites; the value now is entity clarity and
+ *    LLM/AI-overview consumption.
+ *  - WebSite, for brand/entity disambiguation.
+ *
+ * softwareVersion is deliberately absent: a hardcoded version goes stale the
+ * moment a release ships, and wrong structured data is worse than none.
  *
  * Rendered from a server component, so it ships in the static HTML and is
  * visible to crawlers that do not execute JavaScript.
@@ -15,18 +28,20 @@ import { DESCRIPTION, FAQ, GITHUB, SITE_URL, TITLE } from '@/lib/content';
 export function StructuredData() {
   const graph = [
     {
-      '@type': 'SoftwareApplication',
+      '@type': ['SoftwareApplication', 'SoftwareSourceCode'],
       '@id': `${SITE_URL}/#software`,
       name: 'Syncle',
       alternateName: 'Syncle database sync',
       description: DESCRIPTION,
       url: SITE_URL,
+      sameAs: GITHUB,
       applicationCategory: 'DeveloperApplication',
-      applicationSubCategory: 'Database synchronisation',
+      applicationSubCategory: 'Database synchronization',
       operatingSystem: 'macOS, Linux, Docker',
-      softwareVersion: '1.2.0',
+      softwareRequirements: 'Docker',
       license: 'https://opensource.org/licenses/MIT',
       isAccessibleForFree: true,
+      datePublished: '2026-08-21',
       offers: {
         '@type': 'Offer',
         price: '0',
@@ -35,11 +50,15 @@ export function StructuredData() {
       author: {
         '@type': 'Person',
         name: 'Osman Ahmadzai',
+        url: AUTHOR_GITHUB,
       },
       codeRepository: GITHUB,
       programmingLanguage: 'TypeScript',
+      downloadUrl: `${GITHUB}/releases/latest`,
+      installUrl: `${SITE_URL}/install`,
+      screenshot: `${SITE_URL}/opengraph-image`,
       featureList: [
-        'Cross-engine database synchronisation',
+        'Cross-engine database synchronization',
         'Change data capture (CDC) in real time',
         'Cursor-based polling',
         'One-shot backfill and migration',
@@ -67,7 +86,7 @@ export function StructuredData() {
       name: 'Syncle',
       description: DESCRIPTION,
       inLanguage: 'en',
-      publisher: { '@type': 'Person', name: 'Osman Ahmadzai' },
+      publisher: { '@type': 'Person', name: 'Osman Ahmadzai', url: AUTHOR_GITHUB },
     },
   ];
 
