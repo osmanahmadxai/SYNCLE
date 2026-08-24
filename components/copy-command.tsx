@@ -60,9 +60,9 @@ export function CopyCommand({
   return (
     <div
       className={cn(
-        'flex items-start gap-3 rounded-xl border bg-card/40 py-2.5 pl-4 pr-2.5 backdrop-blur transition-shadow sm:items-center',
+        'flex items-start gap-3 rounded-xl border bg-card/40 py-2.5 pl-4 pr-2.5 backdrop-blur transition-colors sm:items-center',
         prominent &&
-          'ring-1 ring-foreground/15 shadow-[0_0_40px_-12px] shadow-foreground/20 hover:ring-foreground/25',
+          'ring-1 ring-foreground/15 hover:ring-foreground/25',
         copied && prominent && 'ring-foreground/40',
         className,
       )}
@@ -76,7 +76,7 @@ export function CopyCommand({
       <code
         id="install-command"
         // wraps below sm; scrolls (single line) from sm up
-        className="min-w-0 flex-1 whitespace-pre-wrap break-all text-left font-mono text-[13px] leading-6 sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal sm:text-sm"
+        className="min-w-0 flex-1 whitespace-pre-wrap break-all text-left font-mono text-[13px] leading-6 sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal"
       >
         {command}
       </code>

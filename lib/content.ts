@@ -41,7 +41,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'How is it different from Airbyte or Debezium?',
-    a: 'Scale of setup. Airbyte expects Kubernetes and a team to operate it; Debezium expects Kafka. Syncle is a single command, four containers and a web interface, aimed at one operator who wants two databases kept in step without standing up a data platform first.',
+    a: 'Scale of setup. Airbyte expects Kubernetes and a team to operate it; Debezium expects Kafka. Syncle is a single command, four containers and a web interface, aimed at one operator who wants their databases kept in step without standing up a data platform first.',
   },
 ];
 

@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { AppWindow } from '@/components/app-window';
 import { CopyCommand } from '@/components/copy-command';
-import { HeroScene } from '@/components/hero-scene';
+import { HeroDiagram } from '@/components/hero-diagram';
 import { Logo } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Badge } from '@/components/ui/badge';
@@ -25,15 +25,8 @@ import {
   USE_CASES,
 } from '@/lib/content';
 
-const ENGINES = [
-  'PostgreSQL',
-  'MySQL',
-  'MariaDB',
-  'SQLite',
-  'MongoDB',
-  'Redis',
-  'HTTP',
-];
+/** the five engines Syncle speaks, same order as the hero diagram */
+const ENGINES = ['PostgreSQL', 'MySQL', 'MongoDB', 'SQLite', 'Redis'];
 
 const TRIGGERS = [
   {
@@ -185,57 +178,65 @@ export default function Home() {
         </div>
       </header>
 
-      {/* ── hero ────────────────────────────────────────────────────── */}
-      <section className="relative overflow-x-clip">
+      {/*
+        ── hero ──────────────────────────────────────────────────────
+        Two columns from `lg` up, and one screen tall: the words take the left,
+        the drawing takes the right at close to its drawn size, and the pair is
+        centred in the viewport. Stacked below `lg`, where a 700px drawing
+        beside anything is not a layout.
+      */}
+      <section className="relative overflow-x-clip xl:flex xl:min-h-[calc(100svh-3.5rem)] xl:items-center">
         <div
           aria-hidden
           className="dot-grid pointer-events-none absolute inset-x-0 top-0 h-[420px]"
         />
-        <div className="relative mx-auto max-w-6xl px-5 pb-14 pt-14 sm:px-8 sm:pb-16 sm:pt-24">
-          <div className="mx-auto max-w-4xl text-center">
-            <a href={GITHUB} rel="noopener" className="inline-flex">
-              <Badge
-                variant="secondary"
-                className="gap-2 border border-foreground/10 bg-secondary/40 font-mono text-xs font-normal backdrop-blur"
-              >
-                <span className="size-1.5 animate-pulse rounded-full bg-foreground/80" />
-                Open source · MIT · self-hosted
-              </Badge>
-            </a>
-
-            <h1 className="mt-6 text-balance text-4xl font-semibold leading-[1.03] tracking-[-0.03em] min-[420px]:text-[2.75rem] sm:text-6xl sm:tracking-[-0.035em] lg:text-7xl">
-              Keep any databases in{' '}
-              <span className="whitespace-nowrap">sync, live,</span> across
-              engines
-            </h1>
-
-            <p className="mx-auto mt-5 max-w-xl text-pretty text-lg leading-relaxed text-muted-foreground">
-              Draw a bridge from a source to its destinations. The moment a row
-              changes, it is written everywhere you linked — any engine to any
-              other.
-            </p>
-
-            <div className="mx-auto mt-8 max-w-xl">
-              <CopyCommand command={INSTALL_COMMAND} prominent />
-            </div>
-
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
-              <span className="py-2">Docker is the only requirement</span>
-              <span aria-hidden className="hidden text-muted-foreground/40 sm:inline">
-                ·
-              </span>
-              <a
-                href={GITHUB}
-                rel="noopener"
-                className="inline-flex items-center gap-1 py-2 underline-offset-4 transition hover:text-foreground hover:underline"
-              >
-                Read the docs <ArrowUpRight className="size-3.5" />
+        <div className="relative mx-auto w-full max-w-6xl px-5 py-14 sm:px-8 sm:py-16 xl:max-w-[86rem] 2xl:max-w-[96rem]">
+          <div className="grid items-center gap-12 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)] xl:gap-8">
+            <div className="mx-auto max-w-2xl text-center xl:mx-0 xl:text-left">
+              <a href={GITHUB} rel="noopener" className="inline-flex">
+                <Badge
+                  variant="secondary"
+                  className="gap-2 border border-foreground/10 bg-secondary/40 font-mono text-xs font-normal backdrop-blur"
+                >
+                  <span className="size-1.5 animate-pulse rounded-full bg-foreground/80" />
+                  Open source · MIT · self-hosted
+                </Badge>
               </a>
-            </div>
-          </div>
 
-          <div className="mt-10 sm:mt-16">
-            <HeroScene />
+              <h1 className="mt-5 text-balance text-4xl font-semibold leading-[1.04] tracking-[-0.03em] min-[420px]:text-[2.75rem] sm:text-5xl sm:tracking-[-0.035em] xl:text-[4rem]">
+                Keep any databases in{' '}
+                <span className="whitespace-nowrap">sync, live,</span> across
+                engines
+              </h1>
+
+              <p className="mt-5 max-w-xl text-pretty text-base leading-relaxed text-muted-foreground max-xl:mx-auto sm:text-lg xl:text-xl">
+                Draw a bridge from a source to its destinations. The moment a
+                row changes, it is written everywhere you linked — any engine to
+                any other.
+              </p>
+
+              <div className="mt-8 max-w-xl max-xl:mx-auto xl:max-w-none">
+                <CopyCommand command={INSTALL_COMMAND} prominent />
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-sm text-muted-foreground xl:justify-start xl:text-base">
+                <span className="py-2">Docker is the only requirement</span>
+                <span aria-hidden className="hidden text-muted-foreground/40 sm:inline">
+                  ·
+                </span>
+                <a
+                  href={GITHUB}
+                  rel="noopener"
+                  className="inline-flex items-center gap-1 py-2 underline-offset-4 transition hover:text-foreground hover:underline"
+                >
+                  Read the docs <ArrowUpRight className="size-3.5" />
+                </a>
+              </div>
+            </div>
+
+            <div className="mx-auto w-full max-w-[760px] xl:max-w-[800px]">
+              <HeroDiagram />
+            </div>
           </div>
         </div>
       </section>
@@ -245,7 +246,8 @@ export default function Home() {
         <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
           <div className="flex flex-col items-center gap-5 lg:flex-row lg:justify-between">
             <p className="text-center text-sm text-muted-foreground lg:text-left">
-              One bridge, several destinations at once — and bridges chain.
+              Any of the five on either end — one bridge, several destinations
+              at once, and bridges chain.
             </p>
             <ul className="flex flex-wrap items-center justify-center gap-2">
               {ENGINES.map((name) => (
@@ -360,7 +362,7 @@ export default function Home() {
             </ol>
           </div>
 
-          <div className="rounded-xl border bg-card/30 p-6 shadow-[inset_0_1px_0_0_theme(colors.foreground/8%)]">
+          <div className="rounded-xl border bg-card/30 p-6">
             <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
               Then, day to day
             </p>
@@ -423,7 +425,7 @@ export default function Home() {
         index={5}
         eyebrow="Where it sits"
         title="Smaller than a data platform, on purpose"
-        lead="A lightweight, self-hosted Airbyte and Debezium alternative: those are built for teams running pipelines as a discipline. Syncle is for one person who wants two databases to agree."
+        lead="A lightweight, self-hosted Airbyte and Debezium alternative: those are built for teams running pipelines as a discipline. Syncle is for one person who wants their databases to agree."
         tint
       >
         <div className="relative mt-12">
@@ -522,7 +524,7 @@ export default function Home() {
         <div className="relative mx-auto max-w-6xl px-5 py-20 text-center sm:px-8 sm:py-28">
           <Logo className="mx-auto h-10 w-auto opacity-80" />
           <h2 className="mx-auto mt-6 max-w-xl text-balance text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
-            Two databases, kept in step, in about a minute
+            Your databases, kept in step, in about a minute
           </h2>
           <div className="mx-auto mt-8 max-w-xl">
             <CopyCommand command={INSTALL_COMMAND} />
