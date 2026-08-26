@@ -1,19 +1,16 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Source_Serif_4 } from 'next/font/google';
 import { StructuredData } from '@/components/structured-data';
-import { THEME_SCRIPT } from '@/components/theme-toggle';
 import { DESCRIPTION, GITHUB, SITE_URL, TITLE } from '@/lib/content';
 import './globals.css';
 
-const geist = Geist({
+/*
+ * One downloaded face, for headings only. Body text is the visitor's own
+ * system font — nothing to load, and nothing to flash.
+ */
+const sourceSerif = Source_Serif_4({
   subsets: ['latin'],
-  variable: '--font-geist',
-  display: 'swap',
-});
-
-const geistMono = Geist_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono',
+  variable: '--font-heading',
   display: 'swap',
 });
 
@@ -43,9 +40,6 @@ export const metadata: Metadata = {
   authors: [{ name: 'Osman Ahmadzai', url: GITHUB }],
   creator: 'Osman Ahmadzai',
   publisher: 'Syncle',
-  // one page, so the canonical is unambiguous — this kills any duplicate
-  // indexing of ?utm_… and trailing-slash variants
-  alternates: { canonical: '/' },
   robots: {
     index: true,
     follow: true,
@@ -83,11 +77,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' },
-  ],
-  colorScheme: 'light dark',
+  themeColor: '#ffffff',
+  colorScheme: 'light',
 };
 
 export default function RootLayout({
@@ -95,16 +86,9 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // the `dark` class is applied by THEME_SCRIPT before first paint, so the
-  // element differs from the server markup — hence suppressHydrationWarning
   return (
-    <html
-      lang="en"
-      className={`${geist.variable} ${geistMono.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={sourceSerif.variable}>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         <StructuredData />
       </head>
       <body className="font-sans">{children}</body>

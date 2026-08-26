@@ -1,5 +1,3 @@
-import { Radio } from 'lucide-react';
-
 /**
  * The Syncle interface — the bridge list, the live job, and the rows that have
  * actually crossed. It is the hero, because the most convincing thing a
@@ -66,7 +64,7 @@ export function AppWindow() {
                 >
                   <span
                     className={`size-1.5 shrink-0 rounded-full ${
-                      b.live ? 'animate-pulse bg-foreground/70' : 'bg-foreground/20'
+                      b.live ? 'bg-emerald-600' : 'bg-foreground/20'
                     }`}
                   />
                   <span className="truncate">{b.name}</span>
@@ -88,7 +86,7 @@ export function AppWindow() {
                 </p>
               </div>
               <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                <Radio className="size-3" aria-hidden />
+                <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />
                 CDC
               </span>
             </div>
@@ -124,7 +122,7 @@ export function AppWindow() {
                   {ROWS.map((r) => (
                     <tr key={r.id}>
                       <td className="px-3 py-[7px] font-mono tabular-nums text-muted-foreground">
-                        <span className="mr-2 inline-block size-1.5 rounded-full bg-foreground/60 align-middle" />
+                        <span className="mr-2 inline-block size-1.5 rounded-full bg-emerald-600 align-middle" />
                         {r.id}
                       </td>
                       <td className="px-3 py-[7px] font-medium">{r.name}</td>
@@ -142,8 +140,6 @@ export function AppWindow() {
                   ))}
                 </tbody>
               </table>
-              {/* the table continues past the frame rather than stopping dead */}
-              <div className="h-10 bg-gradient-to-b from-transparent to-card" />
             </div>
           </div>
         </div>

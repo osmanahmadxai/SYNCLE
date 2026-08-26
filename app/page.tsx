@@ -1,22 +1,12 @@
-import {
-  ArrowUpRight,
-  CircleSlash2,
-  Columns3,
-  GitBranch,
-  Radio,
-  RefreshCw,
-  TableProperties,
-  Trash2,
-} from 'lucide-react';
+import type { Metadata } from 'next';
 import { AppWindow } from '@/components/app-window';
 import { CopyCommand } from '@/components/copy-command';
-import { HeroDiagram } from '@/components/hero-diagram';
-import { Logo } from '@/components/logo';
-import { ThemeToggle } from '@/components/theme-toggle';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { CodeBlock } from '@/components/docs/code-block';
+import { InstallTranscript } from '@/components/install-transcript';
+import { SyncDiagram } from '@/components/sync-diagram';
+import { SiteFooter } from '@/components/site-footer';
+import { SiteHeader } from '@/components/site-header';
 import {
-  AUTHOR_GITHUB,
   COMPARISON,
   FAQ,
   GITHUB,
@@ -24,109 +14,86 @@ import {
   SECURITY,
   USE_CASES,
 } from '@/lib/content';
+import { DOC_PAGES, docHref } from '@/lib/docs';
 
-/** the five engines Syncle speaks, same order as the hero diagram */
-const ENGINES = ['PostgreSQL', 'MySQL', 'MongoDB', 'SQLite', 'Redis'];
+export const metadata: Metadata = {
+  alternates: { canonical: '/' },
+};
 
 const TRIGGERS = [
   {
-    icon: RefreshCw,
     name: 'Replay',
-    tagline: 'One shot',
-    body: 'Stream all — or a filtered slice — of the source once, then finish. The right tool for an initial backfill or a migration.',
+    body: 'A one-shot pass: stream all — or a filtered slice — of the source once, then finish. The right tool for an initial backfill or a migration.',
   },
   {
-    icon: GitBranch,
     name: 'Watch',
-    tagline: 'Polled',
-    body: 'Follow a cursor: an auto-increment id, an updated_at column, or a primary-key diff. New rows sync as they appear, on every engine.',
+    body: 'Polling on a cursor: an auto-increment id, an updated_at column, or a primary-key diff. New rows sync as they appear. Works on every engine, including SQLite.',
   },
   {
-    icon: Radio,
     name: 'CDC',
-    tagline: 'Real time',
-    body: 'True change data capture (CDC): read the change log itself — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications.',
+    body: 'Change data capture: read the change log itself — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications. Changes arrive as they happen, no polling.',
   },
 ];
 
 const GUARANTEES = [
   {
-    icon: CircleSlash2,
-    title: 'No duplicates, ever',
-    body: 'Writes are idempotent upserts keyed by the columns you choose, so replays, retries and redeliveries never double-write.',
+    title: 'No duplicates.',
+    body: 'Writes are idempotent upserts keyed by the columns you choose, so replays, retries and redeliveries rewrite the same row instead of adding another.',
   },
   {
-    icon: Trash2,
-    title: 'Deletes propagate',
-    body: 'Inserts, updates and deletes all cross the bridge, each tagged with its operation — not just the rows that happen to be new.',
+    title: 'Deletes propagate — on CDC bridges.',
+    body: 'With a CDC trigger, inserts, updates and deletes all cross the bridge, each tagged with its operation. A watch bridge polls, so it sees new rows (and updates, on a timestamp cursor) but cannot see deletes.',
   },
   {
-    icon: TableProperties,
-    title: 'Missing table? Created',
-    body: "If the destination doesn't exist, Syncle builds it from the source's shape, translating types across engines.",
+    title: 'Missing tables are created.',
+    body: "If the destination table doesn't exist, Syncle builds it from the source's shape, translating types across engines.",
   },
   {
-    icon: Columns3,
-    title: 'Map and rename columns',
-    body: 'Write this column into that column over there — or design a payload and POST it to an HTTP endpoint instead.',
+    title: 'Interrupted jobs resume.',
+    body: 'Jobs checkpoint their cursor as they go. A crash or restart picks up where it stopped instead of starting over.',
+  },
+  {
+    title: 'Columns can be mapped and renamed.',
+    body: 'Write this column into that column over there — or design a JSON payload and POST each row to an HTTP endpoint instead.',
   },
 ];
 
 const STEPS = [
   {
-    t: 'Run the command',
-    b: 'The image is pulled prebuilt for your architecture — Intel or ARM, macOS or Linux. Nothing compiles.',
+    t: 'Run the command.',
+    b: 'It checks for Docker and Compose v2, pulls the prebuilt image, starts four containers, and opens the interface at localhost:3002.',
   },
   {
-    t: 'Create your admin account',
-    b: 'Syncle opens with a one-time setup token already filled in, proving you operate the machine.',
+    t: 'Create your admin account.',
+    b: 'The setup form opens with a one-time token already filled in — read from the server’s own data directory (it is printed in the logs too), proving you operate the machine.',
   },
   {
-    t: 'Draw your first bridge',
+    t: 'Draw your first bridge.',
     b: 'Pick a source table and its destinations, then start it. Backfill first, then leave it listening.',
   },
 ];
 
+const DAY_TO_DAY: [string, string][] = [
+  ['syncle up', 'start it, and open the interface'],
+  ['syncle down', 'stop, keeping your data'],
+  ['syncle logs', 'follow what the bridges are doing'],
+  ['syncle update', 'move to the newest release'],
+  ['syncle uninstall', 'remove everything, data included'],
+];
+
 function Section({
   id,
-  index,
-  eyebrow,
   title,
-  lead,
-  tint = false,
   children,
 }: {
   id?: string;
-  /** printed into the eyebrow — gives the long page a visible order */
-  index: number;
-  eyebrow: string;
   title: string;
-  lead?: string;
-  /** alternate surface band so the page striping is more than borders */
-  tint?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section
-      id={id}
-      className={`scroll-mt-16 border-t py-16 sm:py-24 ${tint ? 'bg-muted/[0.03]' : ''}`}
-    >
-      <div className="mx-auto max-w-6xl px-5 sm:px-8">
-        <div className="max-w-2xl">
-          <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
-            {String(index).padStart(2, '0')} — {eyebrow}
-          </p>
-          <h2 className="mt-3 text-balance text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
-            {title}
-          </h2>
-          {lead && (
-            <p className="mt-4 text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg">
-              {lead}
-            </p>
-          )}
-        </div>
-        {children}
-      </div>
+    <section id={id} className="mt-16 scroll-mt-8 sm:mt-20">
+      <h2 className="text-2xl font-semibold sm:text-[1.75rem]">{title}</h2>
+      {children}
     </section>
   );
 }
@@ -134,477 +101,482 @@ function Section({
 export default function Home() {
   return (
     <>
-      {/* ── nav ─────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-50 border-b bg-background/70 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-8">
-          <a href="#" aria-label="Syncle — back to top">
-            <Logo className="h-7 w-auto sm:h-8" priority />
-          </a>
-          <nav className="flex items-center gap-0.5 sm:gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="max-sm:h-10 max-sm:px-2.5"
-              nativeButton={false} render={<a href="#how-it-fires" />}
-            >
-              How it works
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden md:inline-flex"
-              nativeButton={false} render={<a href="#use-cases" />}
-            >
-              Use cases
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden sm:inline-flex"
-              nativeButton={false} render={<a href="#faq" />}
-            >
-              FAQ
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="max-sm:h-10 max-sm:px-3"
-              nativeButton={false} render={<a href={GITHUB} rel="noopener" />}
-            >
-              GitHub
-            </Button>
-            <ThemeToggle />
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
-      {/*
-        ── hero ──────────────────────────────────────────────────────
-        Two columns from `lg` up, and one screen tall: the words take the left,
-        the drawing takes the right at close to its drawn size, and the pair is
-        centred in the viewport. Stacked below `lg`, where a 700px drawing
-        beside anything is not a layout.
-      */}
-      <section className="relative overflow-x-clip xl:flex xl:min-h-[calc(100svh-3.5rem)] xl:items-center">
-        <div
-          aria-hidden
-          className="dot-grid pointer-events-none absolute inset-x-0 top-0 h-[420px]"
-        />
-        <div className="relative mx-auto w-full max-w-6xl px-5 py-14 sm:px-8 sm:py-16 xl:max-w-[86rem] 2xl:max-w-[96rem]">
-          <div className="grid items-center gap-12 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)] xl:gap-8">
-            <div className="mx-auto max-w-2xl text-center xl:mx-0 xl:text-left">
-              <a href={GITHUB} rel="noopener" className="inline-flex">
-                <Badge
-                  variant="secondary"
-                  className="gap-2 border border-foreground/10 bg-secondary/40 font-mono text-xs font-normal backdrop-blur"
-                >
-                  <span className="size-1.5 animate-pulse rounded-full bg-foreground/80" />
-                  Open source · MIT · self-hosted
-                </Badge>
-              </a>
+      <main className="mx-auto max-w-3xl px-5 sm:px-8">
+        {/* ── intro ───────────────────────────────────────────────────── */}
+        <section className="pt-12 sm:pt-16">
+          <h1 className="text-balance text-4xl font-semibold leading-[1.1] sm:text-[2.75rem]">
+            Keep any databases in sync, live, across engines
+          </h1>
 
-              <h1 className="mt-5 text-balance text-4xl font-semibold leading-[1.04] tracking-[-0.03em] min-[420px]:text-[2.75rem] sm:text-5xl sm:tracking-[-0.035em] xl:text-[4rem]">
-                Keep any databases in{' '}
-                <span className="whitespace-nowrap">sync, live,</span> across
-                engines
-              </h1>
+          <p className="mt-6 text-pretty text-lg leading-relaxed">
+            Syncle is a small, self-hosted sync tool. You draw a bridge from a
+            source database to one or more destinations, and rows are written
+            across it — as a one-off backfill, on a polling cursor, or the
+            moment they change, straight from the database&apos;s own change
+            log. Any of the five engines it speaks can sit on either end.
+          </p>
 
-              <p className="mt-5 max-w-xl text-pretty text-base leading-relaxed text-muted-foreground max-xl:mx-auto sm:text-lg xl:text-xl">
-                Draw a bridge from a source to its destinations. The moment a
-                row changes, it is written everywhere you linked — any engine to
-                any other.
-              </p>
+          <div className="mt-8">
+            <CopyCommand command={INSTALL_COMMAND} />
+          </div>
 
-              <div className="mt-8 max-w-xl max-xl:mx-auto xl:max-w-none">
-                <CopyCommand command={INSTALL_COMMAND} prominent />
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            Docker with Compose v2 and curl are the only requirements — the
+            script checks for exactly those before it runs, and everything
+            else lives in containers. Open source under the MIT licence.
+          </p>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <a href="/docs" className="btn btn-primary">
+              Read the documentation
+            </a>
+            <a href={GITHUB} rel="noopener" className="btn btn-quiet">
+              View the source on GitHub
+            </a>
+          </div>
+        </section>
+
+        {/* ── the five engines, synchronized ──────────────────────────── */}
+        <figure className="mt-10 sm:mt-12">
+          <SyncDiagram />
+          <figcaption className="text-center text-sm text-muted-foreground">
+            Every engine syncs through Syncle, in both directions — any of
+            the five can be the source or the destination.
+          </figcaption>
+        </figure>
+
+        {/* ── how it works ────────────────────────────────────────────── */}
+        <Section id="how-it-works" title="How a bridge fires">
+          <p className="mt-4 leading-relaxed">
+            A bridge is a saved sync path: a source table or query, the columns
+            and mapping, the destinations, and a trigger. The trigger is how it
+            notices that something changed — there are three, and you pick per
+            bridge. The rest of the pipeline is identical.
+          </p>
+          <dl className="mt-8 space-y-6">
+            {TRIGGERS.map((t) => (
+              <div key={t.name} className="grid gap-1 sm:grid-cols-[7.5rem_1fr] sm:gap-4">
+                <dt className="font-mono text-sm font-medium leading-relaxed">{t.name}</dt>
+                <dd className="text-[15px] leading-relaxed">{t.body}</dd>
               </div>
+            ))}
+          </dl>
+          <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
+            The honest edges: SQLite has no change log, so it syncs by watch
+            rather than CDC; and Redis keyspace notifications are not durable,
+            so a Redis CDC bridge misses events that happen while Syncle is
+            down. Details in{' '}
+            <a href="/docs/cdc" className="link">
+              the CDC documentation
+            </a>
+            .
+          </p>
+        </Section>
 
-              <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-sm text-muted-foreground xl:justify-start xl:text-base">
-                <span className="py-2">Docker is the only requirement</span>
-                <span aria-hidden className="hidden text-muted-foreground/40 sm:inline">
-                  ·
-                </span>
-                <a
-                  href={GITHUB}
-                  rel="noopener"
-                  className="inline-flex items-center gap-1 py-2 underline-offset-4 transition hover:text-foreground hover:underline"
-                >
-                  Read the docs <ArrowUpRight className="size-3.5" />
-                </a>
+        {/* ── guarantees ──────────────────────────────────────────────── */}
+        <Section title="What it promises about your rows">
+          <p className="mt-4 leading-relaxed">
+            Moving data is the easy half. The hard half is moving it exactly
+            once, in the right shape, and noticing when a row disappears.
+          </p>
+          <ul className="mt-8 space-y-5">
+            {GUARANTEES.map((g) => (
+              <li key={g.title} className="text-[15px] leading-relaxed">
+                <span className="font-semibold">{g.title}</span>{' '}
+                <span>{g.body}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+
+        {/* ── interface ───────────────────────────────────────────────── */}
+        <Section title="You can see what it did">
+          <p className="mt-4 leading-relaxed">
+            Every delivery lands on a live timeline — synced, failed, skipped
+            or queued — and clicking one shows the exact row that was written,
+            how long it took, and any error. Failed rows can be retried in
+            place, without rerunning the job.
+          </p>
+          <figure className="mt-8">
+            <AppWindow />
+            <figcaption className="mt-3 text-center text-sm text-muted-foreground">
+              The bridge view: a live CDC bridge, its delivery counts, and
+              the rows that have crossed it.
+            </figcaption>
+          </figure>
+        </Section>
+
+        {/* ── workbench ───────────────────────────────────────────────── */}
+        <Section title="It comes with a workbench">
+          <p className="mt-4 leading-relaxed">
+            Connecting a database for syncing also makes it browsable — the
+            same interface doubles as a small database workbench, for every
+            connected engine, not just the ones in a bridge:
+          </p>
+          <ul className="mt-6 list-disc space-y-2 pl-5 text-[15px] leading-relaxed">
+            <li>browse, filter, sort and edit rows, with CSV and JSON export</li>
+            <li>
+              a query editor — SQL for the relational engines, command
+              documents for MongoDB, plain commands for Redis
+            </li>
+            <li>schema views and an interactive ER diagram</li>
+            <li>create and drop tables and databases</li>
+            <li>
+              backup and restore — portable JSON for any engine, or a .sql
+              script for the relational ones
+            </li>
+          </ul>
+          <div className="mt-6">
+            <a href="/docs/workbench" className="btn btn-quiet">
+              More about the workbench
+            </a>
+          </div>
+        </Section>
+
+        {/* ── install ─────────────────────────────────────────────────── */}
+        <Section id="install" title="Installing it">
+          <div className="mt-6">
+            <CopyCommand command={INSTALL_COMMAND} />
+          </div>
+          <figure className="mt-3">
+            <InstallTranscript />
+            <figcaption className="mt-3 text-sm text-muted-foreground">
+              What a first run prints, start to finish — the script&apos;s
+              actual output, not a mock-up.
+            </figcaption>
+          </figure>
+          <ol className="mt-8 list-decimal space-y-4 pl-5">
+            {STEPS.map((s) => (
+              <li key={s.t} className="pl-1 text-[15px] leading-relaxed">
+                <span className="font-semibold">{s.t}</span>{' '}
+                <span>{s.b}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="mt-6 leading-relaxed">
+            After that, a small launcher does the day-to-day:
+          </p>
+          <dl className="mt-4 divide-y rounded-md border">
+            {DAY_TO_DAY.map(([cmd, what]) => (
+              <div key={cmd} className="flex flex-wrap items-baseline gap-x-4 px-4 py-2.5">
+                <dt className="font-mono text-[13px]">{cmd}</dt>
+                <dd className="text-sm text-muted-foreground">{what}</dd>
               </div>
-            </div>
+            ))}
+          </dl>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            Prefer to see what you are piping to sh first? The script is{' '}
+            <a href={`${GITHUB}/blob/main/install.sh`} rel="noopener" className="link">
+              install.sh in the repository
+            </a>
+            , and the{' '}
+            <a href="/docs/install" className="link">
+              installation page
+            </a>{' '}
+            covers the manual Docker Compose route, ports, and where your data
+            lives.
+          </p>
+        </Section>
 
-            <div className="mx-auto w-full max-w-[760px] xl:max-w-[800px]">
-              <HeroDiagram />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── engines ─────────────────────────────────────────────────── */}
-      <section className="border-t">
-        <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
-          <div className="flex flex-col items-center gap-5 lg:flex-row lg:justify-between">
-            <p className="text-center text-sm text-muted-foreground lg:text-left">
-              Any of the five on either end — one bridge, several destinations
-              at once, and bridges chain.
-            </p>
-            <ul className="flex flex-wrap items-center justify-center gap-2">
-              {ENGINES.map((name) => (
-                <li key={name}>
-                  <span className="inline-flex rounded-md border border-foreground/[0.07] px-2.5 py-1 font-mono text-xs text-muted-foreground transition hover:text-foreground">
-                    {name}
+        {/* ── use cases ───────────────────────────────────────────────── */}
+        <Section id="use-cases" title="What people point it at">
+          <p className="mt-4 leading-relaxed">
+            Every one of these is the same primitive — a source, some
+            destinations, and a trigger — aimed at a different problem.
+          </p>
+          <ul className="mt-8 space-y-6">
+            {USE_CASES.map((u) => (
+              <li key={u.title}>
+                <h3 className="font-semibold">
+                  {u.title}{' '}
+                  <span className="ml-1 font-mono text-xs font-normal text-muted-foreground">
+                    {u.tag}
                   </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </section>
+                </h3>
+                <p className="mt-1 text-[15px] leading-relaxed">
+                  {u.body}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Section>
 
-      {/* ── triggers ────────────────────────────────────────────────── */}
-      <Section
-        id="how-it-fires"
-        index={1}
-        eyebrow="How a bridge fires"
-        title="Backfill it, poll it, or read the log"
-        lead="Three ways of noticing that something changed. Pick per bridge — the rest of the pipeline is identical."
-      >
-        <div className="mt-12 grid overflow-hidden rounded-xl border sm:grid-cols-3">
-          {TRIGGERS.map((t, i) => (
-            <div
-              key={t.name}
-              className={`group p-6 transition-colors duration-200 hover:bg-foreground/[0.03] ${
-                i > 0
-                  ? 'border-t border-foreground/[0.06] sm:border-l sm:border-t-0'
-                  : ''
-              }`}
-            >
-              <t.icon
-                className="size-5 text-muted-foreground transition-colors group-hover:text-foreground"
-                aria-hidden
-              />
-              <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                {t.tagline}
-              </p>
-              <h3 className="mt-1 text-lg font-semibold">{t.name}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {t.body}
-              </p>
-            </div>
-          ))}
-        </div>
+        {/* ── http destinations ───────────────────────────────────────── */}
+        <Section title="When the destination is an API">
+          <p className="mt-4 leading-relaxed">
+            Sometimes the thing that needs the rows is a service, not another
+            database. A bridge can POST each change to a URL instead, with a
+            JSON body you shape yourself:
+          </p>
+          <CodeBlock title="Payload template">{`{
+  "event": "row.changed",
+  "op": "{{$op}}",
+  "row": "{{$row}}",
+  "sent_at": "{{$now}}"
+}`}</CodeBlock>
+          <p className="mt-4 text-[15px] leading-relaxed">
+            Tokens fill in per row — any column by name, the whole row, the
+            operation that produced it. Substitution happens on the parsed
+            JSON, never by pasting strings together, so a value full of quotes
+            cannot break the body and nothing in a row is ever executed.
+            Failed requests retry with backoff. The details live in{' '}
+            <a href="/docs/bridges" className="link">
+              How bridges work
+            </a>
+            .
+          </p>
+        </Section>
 
-        <div className="mt-6">
-          <AppWindow />
-        </div>
-      </Section>
-
-      {/* ── guarantees ──────────────────────────────────────────────── */}
-      <Section
-        index={2}
-        eyebrow="What makes it trustworthy"
-        title="Moving data is the easy half"
-        lead="The hard half is moving it exactly once, in the right shape, and noticing when a row disappears."
-      >
-        <div className="mt-12 grid overflow-hidden rounded-xl border sm:grid-cols-2">
-          {GUARANTEES.map((g, i) => (
-            <div
-              key={g.title}
-              className={`group p-7 transition-colors duration-200 hover:bg-foreground/[0.03] ${
-                i > 0 ? 'border-t border-foreground/[0.06]' : ''
-              } ${i % 2 === 1 ? 'sm:border-l' : ''} ${i === 1 ? 'sm:border-t-0' : ''}`}
-            >
-              <g.icon
-                className="size-5 text-muted-foreground transition-colors group-hover:text-foreground"
-                aria-hidden
-              />
-              <h3 className="mt-4 font-semibold">{g.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {g.body}
-              </p>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ── install ─────────────────────────────────────────────────── */}
-      <Section
-        id="install"
-        index={3}
-        eyebrow="Get started"
-        title="One command, then a browser tab"
-        lead="It downloads the newest release, starts it, and opens the interface. No Node, no Postgres, no Redis to install — they all run in containers."
-        tint
-      >
-        {/* full width: in a narrow column the command truncates mid-string,
-            and it is the one thing on the page people came to copy */}
-        <div className="mt-12">
-          <CopyCommand command={INSTALL_COMMAND} />
-        </div>
-
-        <div className="mt-10 grid gap-10 lg:grid-cols-2">
-          <div>
-            <ol className="space-y-7">
-              {STEPS.map((s, i) => (
-                <li key={s.t} className="flex gap-4">
-                  <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border font-mono text-[11px] text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-semibold">{s.t}</h3>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      {s.b}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
-
-          <div className="rounded-xl border bg-card/30 p-6">
-            <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Then, day to day
-            </p>
-            <dl className="mt-5 divide-y divide-foreground/[0.06]">
-              {[
-                ['syncle up', 'start it, and open the interface'],
-                ['syncle down', 'stop, keeping your data'],
-                ['syncle logs', 'follow what the bridges are doing'],
-                ['syncle update', 'move to the newest release'],
-                ['syncle uninstall', 'remove everything, data included'],
-              ].map(([cmd, what]) => (
-                <div
-                  key={cmd}
-                  className="flex flex-wrap items-baseline gap-x-3 py-2.5"
-                >
-                  <dt className="font-mono text-[13px]">{cmd}</dt>
-                  <dd className="text-sm text-muted-foreground">{what}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </div>
-      </Section>
-
-      {/* ── use cases ───────────────────────────────────────────────── */}
-      <Section
-        id="use-cases"
-        index={4}
-        eyebrow="What people use it for"
-        title="The jobs a bridge is actually for"
-        lead="Every one of these is the same primitive — a source, some destinations, and a trigger — pointed at a different problem."
-      >
-        <div className="mt-12 grid overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-3">
-          {USE_CASES.map((u, i) => (
-            <div
-              key={u.title}
-              className={`group relative p-6 transition-colors duration-200 hover:bg-foreground/[0.03] ${
-                i > 0 ? 'border-t border-foreground/[0.06]' : ''
-              } ${i % 2 === 1 ? 'sm:border-l' : ''} ${
-                i >= 2 ? 'sm:border-t' : 'sm:border-t-0'
-              } ${i % 3 !== 0 ? 'lg:border-l' : 'lg:border-l-0'} ${
-                i >= 3 ? 'lg:border-t' : 'lg:border-t-0'
-              }`}
-            >
-              <span className="absolute right-5 top-6 font-mono text-[10px] uppercase tracking-widest text-muted-foreground/60">
-                {u.tag}
-              </span>
-              <h3 className="pr-16 font-semibold">{u.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {u.body}
-              </p>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ── comparison ──────────────────────────────────────────────── */}
-      <Section
-        id="compare"
-        index={5}
-        eyebrow="Where it sits"
-        title="Smaller than a data platform, on purpose"
-        lead="A lightweight, self-hosted Airbyte and Debezium alternative: those are built for teams running pipelines as a discipline. Syncle is for one person who wants their databases to agree."
-        tint
-      >
-        <div className="relative mt-12">
-          <div className="overflow-x-auto rounded-xl border">
-            <table className="w-full min-w-[42rem] text-left text-sm">
+        {/* ── comparison ──────────────────────────────────────────────── */}
+        <Section id="compare" title="Where it sits">
+          <p className="mt-4 leading-relaxed">
+            Airbyte and Debezium are built for teams running pipelines as a
+            discipline. Syncle is deliberately smaller: for one person who
+            wants their databases to agree. If you already run Kafka, Debezium
+            is the right answer — this is for everyone who does not.
+          </p>
+          <div className="mt-8 overflow-x-auto rounded-md border">
+            <table className="w-full min-w-[36rem] text-left text-sm">
               <thead>
-                <tr className="border-b bg-muted/20">
-                  <th className="px-5 py-3 font-medium text-muted-foreground">
+                <tr className="border-b bg-muted/60">
+                  <th className="px-4 py-2.5 font-medium">
                     <span className="sr-only">Aspect</span>
                   </th>
-                  <th className="border-x border-foreground/[0.06] bg-foreground/[0.03] px-5 py-3 font-semibold">
-                    Syncle
-                  </th>
-                  <th className="px-5 py-3 font-medium text-muted-foreground">Airbyte</th>
-                  <th className="px-5 py-3 font-medium text-muted-foreground">Debezium</th>
+                  <th className="px-4 py-2.5 font-semibold">Syncle</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground">Airbyte</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground">Debezium</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-foreground/[0.06]">
+              <tbody className="divide-y">
                 {COMPARISON.map((row) => (
-                  <tr key={row.aspect} className="transition-colors hover:bg-muted/10">
-                    <th
-                      scope="row"
-                      className="px-5 py-3 text-left font-normal text-muted-foreground"
-                    >
+                  <tr key={row.aspect}>
+                    <th scope="row" className="px-4 py-2.5 text-left font-normal text-muted-foreground">
                       {row.aspect}
                     </th>
-                    <td className="border-x border-foreground/[0.06] bg-foreground/[0.03] px-5 py-3 font-medium">
-                      {row.syncle}
-                    </td>
-                    <td className="px-5 py-3 text-muted-foreground">{row.airbyte}</td>
-                    <td className="px-5 py-3 text-muted-foreground">{row.debezium}</td>
+                    <td className="px-4 py-2.5">{row.syncle}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{row.airbyte}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{row.debezium}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {/* edge fade signals the table pans on phones (scrollbars are hidden there) */}
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-y-0 right-0 w-10 rounded-r-xl bg-gradient-to-l from-background sm:hidden"
-          />
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground sm:hidden">
-          Swipe to compare →
-        </p>
-        <p className="mt-4 text-sm text-muted-foreground">
-          Not a knock on either — if you already run Kafka, Debezium is the right
-          answer. This is for everyone who does not.
-        </p>
-      </Section>
+        </Section>
 
-      {/* ── security ────────────────────────────────────────────────── */}
-      <Section
-        id="security"
-        index={6}
-        eyebrow="Your data, your machines"
-        title="Nothing phones home"
-        lead="A sync tool sees every row it moves and holds the credentials to both ends. That earns some scrutiny."
-      >
-        <div className="mt-12 grid gap-x-12 gap-y-9 sm:grid-cols-2">
-          {SECURITY.map((item) => (
-            <div key={item.title}>
-              <h3 className="font-semibold">{item.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {item.body}
-              </p>
-            </div>
-          ))}
-        </div>
-      </Section>
+        {/* ── what it isn't ───────────────────────────────────────────── */}
+        <Section title="What it isn't">
+          <p className="mt-4 leading-relaxed">
+            Knowing what a tool refuses to be tells you as much as its feature
+            list, so, plainly:
+          </p>
+          <ul className="mt-8 space-y-5">
+            <li className="text-[15px] leading-relaxed">
+              <span className="font-semibold">Not a data platform.</span> No
+              Kafka, no connector marketplace, no scheduling DAGs. If your
+              team runs pipelines as a discipline, Airbyte or Debezium will
+              serve you better — genuinely.
+            </li>
+            <li className="text-[15px] leading-relaxed">
+              <span className="font-semibold">Not a cloud service.</span>{' '}
+              Nothing is hosted and there is no account. You run it, it is
+              yours, and backing it up is your job too — the{' '}
+              <a href="/docs/self-hosting" className="link">
+                self-hosting page
+              </a>{' '}
+              says exactly what to back up.
+            </li>
+            <li className="text-[15px] leading-relaxed">
+              <span className="font-semibold">Not multi-user.</span> One admin
+              account, on purpose. It is a tool for the person who operates
+              the machine, not a workspace for a department.
+            </li>
+            <li className="text-[15px] leading-relaxed">
+              <span className="font-semibold">Not magic.</span> CDC has
+              per-engine prerequisites, SQLite has no change log to read, and
+              Redis change events are not durable. The documentation writes
+              every limitation next to the feature it limits.
+            </li>
+          </ul>
+        </Section>
 
-      {/* ── faq ─────────────────────────────────────────────────────── */}
-      <Section id="faq" index={7} eyebrow="Questions" title="Before you install it">
-        <div className="mt-12 grid gap-x-12 gap-y-9 sm:grid-cols-2">
-          {FAQ.map((item) => (
-            <div key={item.q}>
-              <h3 className="font-semibold">{item.q}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {item.a}
-              </p>
-            </div>
-          ))}
-        </div>
-      </Section>
+        {/* ── under the hood ──────────────────────────────────────────── */}
+        <Section title="Under the hood">
+          <p className="mt-4 leading-relaxed">
+            For the curious, the short version of what you would find if you
+            opened it up:
+          </p>
+          <dl className="mt-6 divide-y rounded-md border">
+            {[
+              ['Version', '1.0.0 — the first stable release'],
+              ['Licence', 'MIT, for the whole thing'],
+              ['Written in', 'TypeScript — a NestJS API and a Next.js interface'],
+              ['Runs as', 'four containers, with one published port'],
+              [
+                'Keeps its own state in',
+                'a bundled PostgreSQL (metadata) and Redis (job queue)',
+              ],
+              ['Speaks', 'English and Chinese, in the interface'],
+            ].map(([what, detail]) => (
+              <div key={what} className="flex flex-wrap items-baseline gap-x-4 px-4 py-2.5">
+                <dt className="w-36 shrink-0 text-sm text-muted-foreground">{what}</dt>
+                <dd className="text-sm">{detail}</dd>
+              </div>
+            ))}
+          </dl>
+        </Section>
 
-      {/* ── closing call to action ──────────────────────────────────── */}
-      <section className="relative overflow-x-clip border-t">
-        <div
-          aria-hidden
-          className="dot-grid pointer-events-none absolute inset-x-0 bottom-0 h-[320px]"
-          style={{
-            maskImage:
-              'radial-gradient(60% 50% at 50% 100%, #000 20%, transparent 78%)',
-          }}
-        />
-        <div className="relative mx-auto max-w-6xl px-5 py-20 text-center sm:px-8 sm:py-28">
-          <Logo className="mx-auto h-10 w-auto opacity-80" />
-          <h2 className="mx-auto mt-6 max-w-xl text-balance text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
-            Your databases, kept in step, in about a minute
-          </h2>
-          <div className="mx-auto mt-8 max-w-xl">
+        {/* ── releases ────────────────────────────────────────────────── */}
+        <Section title="Where the project stands">
+          <p className="mt-4 leading-relaxed">
+            Version 1.0.0 — the first stable release — shipped on 20 August
+            2026, after the project grew up under its working name, Data
+            Bridge. The changelog follows the Keep a Changelog format and the
+            releases aim at semantic versioning, so you can tell from a
+            version number whether an update is a fix or a change.{' '}
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[13px]">
+              syncle update
+            </code>{' '}
+            moves a running install to the newest release whenever you decide
+            to.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <a href={`${GITHUB}/releases/latest`} rel="noopener" className="btn btn-quiet">
+              See the releases
+            </a>
+            <a href={`${GITHUB}/blob/main/CHANGELOG.md`} rel="noopener" className="btn btn-quiet">
+              Read the changelog
+            </a>
+          </div>
+        </Section>
+
+        {/* ── security ────────────────────────────────────────────────── */}
+        <Section id="security" title="Your data, your machines">
+          <p className="mt-4 leading-relaxed">
+            A sync tool sees every row it moves and holds the credentials to
+            both ends. That earns some scrutiny, so here is exactly where
+            things stand:
+          </p>
+          <ul className="mt-8 space-y-5">
+            {SECURITY.map((item) => (
+              <li key={item.title} className="text-[15px] leading-relaxed">
+                <span className="font-semibold">{item.title}.</span>{' '}
+                <span>{item.body}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+
+        {/* ── documentation ───────────────────────────────────────────── */}
+        <Section id="docs" title="The documentation">
+          <p className="mt-4 leading-relaxed">
+            Nine short pages cover the whole tool. Every command, default and
+            endpoint in them was taken from the source code rather than from
+            memory, and where something has a limit, the limit is written
+            next to it.
+          </p>
+          <ul className="mt-8 grid gap-x-10 gap-y-5 sm:grid-cols-2">
+            {DOC_PAGES.map((page) => (
+              <li key={page.slug} className="text-[15px] leading-relaxed">
+                <a href={docHref(page)} className="link font-medium">
+                  {page.title}
+                </a>{' '}
+                <span className="text-muted-foreground">
+                  — {page.description}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-6">
+            <a href="/docs" className="btn btn-quiet">
+              Start with the overview
+            </a>
+          </div>
+        </Section>
+
+        {/* ── faq ─────────────────────────────────────────────────────── */}
+        <Section id="faq" title="Questions people ask first">
+          <div className="mt-8 space-y-8">
+            {FAQ.map((item) => (
+              <div key={item.q}>
+                <h3 className="font-semibold">{item.q}</h3>
+                <p className="mt-2 text-[15px] leading-relaxed">
+                  {item.a}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        {/* ── contributing ────────────────────────────────────────────── */}
+        <Section title="Bugs, ideas and contributions">
+          <p className="mt-4 leading-relaxed">
+            Bug reports and rough edges go in the issue tracker — including
+            places where the documentation and the software disagree, which
+            counts as a bug here. Code contributions are welcome too: the
+            contributing guide covers the whole setup, which is three
+            commands once you have Node 22, pnpm 10 and Docker. One
+            exception: security problems go by email, not into a public
+            issue — the{' '}
+            <a href="/docs/self-hosting#reporting" className="link">
+              self-hosting page
+            </a>{' '}
+            explains how.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <a href={`${GITHUB}/issues`} rel="noopener" className="btn btn-quiet">
+              Open an issue
+            </a>
+            <a
+              href={`${GITHUB}/blob/main/CONTRIBUTING.md`}
+              rel="noopener"
+              className="btn btn-quiet"
+            >
+              Read the contributing guide
+            </a>
+          </div>
+        </Section>
+
+        {/* ── closing ─────────────────────────────────────────────────── */}
+        <Section title="Try it against two databases you already have">
+          <p className="mt-4 leading-relaxed">
+            The honest pitch: one command, about a minute, and nothing to
+            clean up afterwards if it is not for you —{' '}
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[13px]">
+              syncle uninstall
+            </code>{' '}
+            removes every trace.
+          </p>
+          <div className="mt-6">
             <CopyCommand command={INSTALL_COMMAND} />
           </div>
-        </div>
-      </section>
-
-      {/* ── footer ──────────────────────────────────────────────────── */}
-      <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-5 py-14 sm:px-8">
-          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="lg:col-span-2">
-              <Logo className="h-8 w-auto" />
-              <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted-foreground">
-                Open-source database synchronization. Any engine to any other,
-                live — running entirely on your own machines.
-              </p>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold">Product</h3>
-              <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
-                {[
-                  ['#how-it-fires', 'How it works'],
-                  ['#install', 'Install'],
-                  ['#use-cases', 'Use cases'],
-                  ['#compare', 'Comparison'],
-                  ['#security', 'Security'],
-                  ['#faq', 'FAQ'],
-                ].map(([href, label]) => (
-                  <li key={href}>
-                    <a
-                      href={href}
-                      className="inline-block py-1.5 transition hover:text-foreground"
-                    >
-                      {label}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold">Project</h3>
-              <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
-                {[
-                  [GITHUB, 'Source on GitHub'],
-                  [`${GITHUB}/releases/latest`, 'Releases'],
-                  [`${GITHUB}/issues`, 'Report an issue'],
-                  [`${GITHUB}/blob/main/LICENSE`, 'MIT licence'],
-                ].map(([href, label]) => (
-                  <li key={href}>
-                    <a
-                      href={href}
-                      rel="noopener"
-                      className="inline-block py-1.5 transition hover:text-foreground"
-                    >
-                      {label}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <div className="mt-5">
+            <a href="/docs/quickstart" className="btn btn-primary">
+              Follow the quickstart
+            </a>
           </div>
+        </Section>
 
-          <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t pt-6 text-sm text-muted-foreground sm:flex-row">
-            <p>© {new Date().getFullYear()} Syncle. MIT licensed.</p>
-            <p className="font-mono text-xs">
-              Built by{' '}
-              <a
-                href={AUTHOR_GITHUB}
-                rel="noopener"
-                className="inline-flex items-center gap-1 py-2 underline-offset-4 transition hover:text-foreground hover:underline"
-              >
-                Osman Ahmadzai <ArrowUpRight className="size-3" />
-              </a>
-            </p>
-          </div>
-        </div>
-      </footer>
+        {/* ── note from the author ────────────────────────────────────── */}
+        <section className="mb-20 mt-16 rounded-md border bg-card px-6 py-6 sm:mt-20 sm:px-8">
+          <p className="text-[15px] leading-relaxed">
+            I built Syncle because I kept writing the same one-off sync scripts
+            — a cron job here, a copy-paste ETL there — and none of them
+            handled deletes, retries, or the day the schema changed. I wanted
+            one small thing I could run on my own box, point at two databases,
+            and trust. If that is what you are after too, I hope it serves you
+            well. Bugs and rough edges go in{' '}
+            <a href={`${GITHUB}/issues`} rel="noopener" className="link">
+              the issue tracker
+            </a>
+            ; I read all of them.
+          </p>
+          <p className="mt-4 text-sm font-medium">— Osman Ahmadzai</p>
+        </section>
+      </main>
+
+      <SiteFooter />
     </>
   );
 }

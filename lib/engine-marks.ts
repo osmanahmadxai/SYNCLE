@@ -15,11 +15,11 @@
  * larger than a square one at the same height, and a solid mark reads heavier
  * than an outline at the same opacity.
  *
- * `light` / `dark` are the brand hues, spent only on hover. Two values
- * because several of the official ones survive one background and not the
- * other: SQLite's navy disappears on black, Redis' red glares on white.
+ * `light` / `dark` record the official brand hues against a light and a dark
+ * background. The site no longer spends them — the strip draws everything in
+ * ink — but they are kept with the marks as reference data.
  *
- * Order is the order they are placed around the ring, clockwise from the top.
+ * Order is the order they appear in the strip.
  */
 export type EngineMark = {
   id: string;
