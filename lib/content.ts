@@ -17,7 +17,11 @@ export const TITLE =
 export const DESCRIPTION =
   'Open-source, self-hosted database sync with real-time CDC — PostgreSQL, MySQL, SQLite, MongoDB and Redis, any engine to any other. One command to install.';
 
-/** Doubles as the visible FAQ and the FAQPage structured data. */
+/**
+ * Doubles as the visible FAQ and the FAQPage structured data. Every claim
+ * here is checked against the product repo — where the honest answer has an
+ * edge case, the edge case is in the answer.
+ */
 export const FAQ: { q: string; a: string }[] = [
   {
     q: 'Which databases can Syncle sync between?',
@@ -25,48 +29,47 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Does it sync in real time, or on a schedule?',
-    a: 'Both, and you choose per bridge. CDC reads the database change log directly — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications — so changes arrive with no polling. Watch polls a cursor instead, which works on every engine. Replay is a one-shot pass for the initial backfill.',
+    a: 'You choose per bridge. CDC reads the database change log directly — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications — so changes arrive without polling. Watch polls a cursor instead, which works on every engine, including SQLite, which has no change log to read. Replay is a one-shot pass for the initial backfill.',
   },
   {
     q: 'Can it duplicate or lose rows?',
-    a: 'Writes are idempotent upserts keyed by the columns you pick, so a replay, a retry or a redelivery rewrites the same row rather than adding another. Deletes propagate as deletes. Jobs record their cursor as they go, so an interrupted run resumes where it stopped instead of starting over.',
+    a: 'Writes are idempotent upserts keyed by the columns you pick, so a replay, a retry or a redelivery rewrites the same row rather than adding another. Jobs record their cursor as they go, so an interrupted run resumes where it stopped instead of starting over. What each trigger sees differs: a CDC bridge propagates inserts, updates and deletes; a watch bridge polls, so it sees new rows (and updates, on a timestamp cursor) but never deletes. And Redis CDC rides keyspace notifications, which are not durable — if Syncle is down when a Redis key changes, that event is gone.',
   },
   {
     q: 'What do I need installed to run it?',
-    a: 'Docker, and nothing else. Node, PostgreSQL and Redis all run in containers, and the application image is pulled prebuilt for your architecture, so nothing is compiled on your machine. One command installs it, starts it and opens the web interface.',
+    a: 'Docker with Compose v2, and curl for the installer — that is what the install script actually checks before it will run. Node, PostgreSQL and Redis all run in containers, and the application image is pulled prebuilt, so nothing is compiled on your machine.',
   },
   {
     q: 'Is Syncle free, and is my data sent anywhere?',
-    a: 'It is MIT licensed and entirely self-hosted. It runs on your own machine against your own databases; there is no account, no telemetry and no third-party service in the path. Stored connection credentials are encrypted with a key that never leaves your install.',
+    a: 'It is MIT licensed and entirely self-hosted. It runs on your own machine against your own databases; there is no account and no third-party service in the data path. Stored connection credentials are encrypted with AES-256-GCM under a key that never leaves your install.',
   },
   {
     q: 'How is it different from Airbyte or Debezium?',
-    a: 'Scale of setup. Airbyte expects Kubernetes and a team to operate it; Debezium expects Kafka. Syncle is a single command, four containers and a web interface, aimed at one operator who wants their databases kept in step without standing up a data platform first.',
+    a: 'Scale of setup. Airbyte expects a platform deployment — Kubernetes, or Docker Compose at smaller scale — and a team to operate it; Debezium expects Kafka. Syncle is one command, four containers and a web interface, aimed at one operator who wants their databases kept in step without standing up a data platform first.',
   },
 ];
-
 
 /** Real jobs people reach for a sync tool to do. `tag` names the trigger. */
 export const USE_CASES: { title: string; body: string; tag: string }[] = [
   {
     title: 'Migrate to a different engine',
     tag: 'Replay + CDC',
-    body: 'Sync PostgreSQL to MySQL, or MySQL to Postgres: backfill every row with a replay job, then leave a CDC bridge running so the two stay identical while you cut traffic over. Nothing has to be offline for it.',
+    body: 'Backfill every row with a replay job, then leave a CDC bridge running so old and new stay identical while you cut traffic over. Nothing has to go offline for it.',
   },
   {
     title: 'Feed a read replica you actually control',
     tag: 'CDC',
-    body: 'Keep a second database in step for reporting or exports without pointing analysts at production — database replication you can shape, without the managed-service bill.',
+    body: 'Keep a second database in step for reporting or exports without pointing analysts at production, and without the managed-service bill.',
   },
   {
     title: 'Warm a cache from the source of truth',
     tag: 'CDC',
-    body: 'Project rows straight into Redis as they change, keyed however you like, so the cache is never the thing that went stale. Deletes remove the key rather than leaving it to expire.',
+    body: 'Project rows into Redis as they change, keyed however you like, so the cache is never the thing that went stale. Deletes remove the key rather than leaving it to expire.',
   },
   {
     title: 'Give search its own copy',
     tag: 'Watch',
-    body: 'Postgres to MongoDB replication for the columns a search index needs, reshaped on the way across, without bolting write hooks onto the application.',
+    body: 'Sync the columns a search index needs into MongoDB, reshaped on the way across, without bolting write hooks onto the application.',
   },
   {
     title: 'Split a monolith database',
@@ -76,7 +79,7 @@ export const USE_CASES: { title: string; body: string; tag: string }[] = [
   {
     title: 'Push rows to a service, not a database',
     tag: 'Any',
-    body: 'Send each change to an HTTP endpoint with a payload you design, with retries and backoff, when what you need fed is an API rather than another store.',
+    body: 'Send each change to an HTTP endpoint with a payload you design, with retries and backoff, when the thing to feed is an API rather than another store.',
   },
 ];
 
@@ -112,9 +115,9 @@ export const COMPARISON: {
     debezium: 'You write the consumer',
   },
   {
-    aspect: 'Interface',
-    syncle: 'Web GUI, no config files',
-    airbyte: 'Web GUI',
+    aspect: 'Day-to-day interface',
+    syncle: 'A web GUI',
+    airbyte: 'A web GUI',
     debezium: 'Config and code',
   },
   {
@@ -128,16 +131,16 @@ export const COMPARISON: {
 /** What happens to credentials and data. */
 export const SECURITY: { title: string; body: string }[] = [
   {
-    title: 'Your data never leaves',
-    body: 'Syncle runs on your machine and talks to your databases directly. There is no account, no telemetry, and no third party in the path — the rows go from your source to your destination and nowhere else.',
+    title: 'Your data stays on your machines',
+    body: 'Syncle runs where you install it and talks to your databases directly. There is no account and no third party in the path — rows go from your source to your destination and nowhere else.',
   },
   {
     title: 'Credentials are encrypted at rest',
     body: 'Saved connection details are sealed with AES-256-GCM under a key generated at install, which stays on the host. Losing the key costs you the stored secrets rather than exposing them.',
   },
   {
-    title: 'One operator, guarded from the first request',
-    body: 'The admin account is created with a one-time token printed on the server, so an instance reachable before you set it up cannot be claimed by whoever finds it first. Login is rate limited.',
+    title: 'One admin account, claimed with a server-side token',
+    body: 'The admin account is created with a one-time token printed on the server, and login is rate limited. If you expose an instance beyond your own machine, finish that first-run setup before the port is reachable — the token is a guard, not a substitute for a firewall.',
   },
   {
     title: 'Reach private databases over SSH',

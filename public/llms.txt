@@ -6,7 +6,7 @@
 > backfill. PostgreSQL, MySQL/MariaDB, SQLite, MongoDB and Redis, any engine
 > to any other, plus HTTP endpoints as destinations. MIT licensed.
 
-Install with one command (Docker is the only requirement):
+Install with one command (requires Docker with Compose v2, and curl):
 
     curl -fsSL https://syncle.dev/install | sh -s -- up
 
@@ -14,7 +14,9 @@ Install with one command (Docker is the only requirement):
 
 - Idempotent upserts keyed by columns you choose: replays, retries and
   redeliveries never double-write.
-- Inserts, updates AND deletes propagate, each tagged with its operation.
+- With CDC triggers, inserts, updates AND deletes propagate, each tagged with
+  its operation. Watch triggers poll, so they detect new rows (and updates on
+  a timestamp cursor) but not deletes.
 - Missing destination tables are created from the source's shape, with types
   translated across engines.
 - Columns can be mapped and renamed as rows cross.
@@ -23,18 +25,33 @@ Install with one command (Docker is the only requirement):
 ## How a bridge fires
 
 - Replay: one-shot stream of the source (initial backfill, migrations).
-- Watch: cursor polling (auto-increment id, updated_at, or primary-key diff).
+- Watch: cursor polling (auto-increment id, updated_at, or primary-key diff);
+  works on every engine, including SQLite.
 - CDC: real-time change capture — Postgres logical replication, MySQL binlog,
-  MongoDB change streams, Redis keyspace notifications.
+  MongoDB change streams, Redis keyspace notifications. SQLite has no change
+  log, so it syncs by watch rather than CDC; Redis keyspace notifications are
+  not durable, so events during downtime are lost.
 
 ## Key facts
 
-- Self-hosted: no account, no telemetry, no third party in the data path.
+- Self-hosted: no account and no third party in the data path.
 - Stored connection credentials are encrypted (AES-256-GCM) with a key that
   never leaves the install.
 - SSH tunnels reach databases on private networks.
 - A lightweight alternative to Airbyte (no Kubernetes) and Debezium (no
   Kafka) for single-operator use.
+
+## Documentation
+
+- Overview: https://syncle.dev/docs
+- Installation: https://syncle.dev/docs/install
+- Quickstart: https://syncle.dev/docs/quickstart
+- How bridges work: https://syncle.dev/docs/bridges
+- CDC setup: https://syncle.dev/docs/cdc
+- Database workbench: https://syncle.dev/docs/workbench
+- Configuration: https://syncle.dev/docs/configuration
+- HTTP API: https://syncle.dev/docs/api
+- Self-hosting & security: https://syncle.dev/docs/self-hosting
 
 ## Links
 
