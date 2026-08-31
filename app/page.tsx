@@ -146,7 +146,7 @@ export default function Home() {
         </section>
 
         {/* ── the walkthrough ─────────────────────────────────────────── */}
-        <Section title="One bridge, built and running">
+        <Section id="demo" title="One bridge, built and running">
           <p className="mt-4">
             Fifty-eight seconds, no cuts: an empty workspace, then a bridge
             from a Postgres <code className="code">orders</code> table into
@@ -254,6 +254,12 @@ export default function Home() {
             src="/media/06-workbench-data.png"
             alt="The Syncle workbench browsing a customers table: the connection list, a schema tree with row counts, and a paginated grid of 5,060 rows"
             caption="Browsing a source table, with the schema tree beside it."
+          />
+
+          <Shot
+            src="/media/08-workbench-query.png"
+            alt="The Syncle query editor running a grouped aggregate over the customers table, with the result set below it in 11 milliseconds"
+            caption="The query editor, with the result set underneath."
           />
 
           <Shot
