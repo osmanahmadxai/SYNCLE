@@ -1,0 +1,17 @@
+# Issues are for defects and concrete feature requests. Everything else —
+# questions, "is this supposed to work like this?", setup help — belongs in
+# Discussions, where the answer stays searchable for the next person who asks.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or setup help
+    url: https://github.com/osmanahmadxai/SYNCLE/discussions/categories/q-a
+    about: Ask how something works, or read the answers other people have already had.
+  - name: Documentation
+    url: https://syncle.dev/docs
+    about: Installation, bridges, CDC prerequisites, configuration and the HTTP API.
+  - name: Share what you built
+    url: https://github.com/osmanahmadxai/SYNCLE/discussions/categories/show-and-tell
+    about: Tell us which engines you are bridging, and what you pointed Syncle at.
+  - name: Report a security problem
+    url: https://syncle.dev/docs/self-hosting#reporting
+    about: Security issues go by email, never into a public issue.
