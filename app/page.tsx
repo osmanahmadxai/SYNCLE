@@ -498,7 +498,12 @@ export default function Home() {
             </a>
           </p>
           <p className="mt-10">
-            Bug reports and rough edges go in{' '}
+            Questions and setup help go in{' '}
+            <a href={`${GITHUB}/discussions`} rel="noopener" className="link">
+              Discussions
+            </a>
+            , where the answer stays readable for whoever asks the same thing
+            next month. Bug reports and rough edges go in{' '}
             <a href={`${GITHUB}/issues`} rel="noopener" className="link">
               the issue tracker
             </a>{' '}

@@ -11,6 +11,7 @@ export function SiteFooter({ wide = false }: { wide?: boolean }) {
   const links: [string, string][] = [
     ['/docs', 'Documentation'],
     [GITHUB, 'Source'],
+    [`${GITHUB}/discussions`, 'Discussions'],
     [`${GITHUB}/releases/latest`, 'Releases'],
     [`${GITHUB}/issues`, 'Report an issue'],
     [`${GITHUB}/blob/main/LICENSE`, 'MIT licence'],
