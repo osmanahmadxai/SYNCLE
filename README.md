@@ -33,7 +33,9 @@ when you need them.
 
 <br>
 
-<img src="docs/assets/syncle-bridge-animation.svg" width="100%" alt="Animated: rows flowing live from a PostgreSQL source across a Syncle bridge into MongoDB, Redis and MySQL — insert, update and delete operations riding the lanes">
+<img src="docs/assets/media/syncle-live-sync.gif" width="100%" alt="A CDC bridge running in Syncle: rows inserted into PostgreSQL arrive in MongoDB while the delivered counter climbs, each row listed with the time it took">
+
+<sub>A real bridge, running. Rows are inserted into Postgres from outside the browser while the page is open — the counter is the bridge doing the work. <a href="docs/assets/media/syncle-demo.mp4">Full 46-second run</a> · <a href="docs/assets/media">more screenshots</a></sub>
 
 </div>
 
@@ -113,6 +115,14 @@ The rest is the same whichever destination and trigger you pick:
 - **Stay in control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
   place — failed cells flip green.
+
+<img src="docs/assets/media/screenshots/01-bridge-live-cdc.png" width="100%" alt="A live CDC bridge in Syncle: running since 6:31pm, 2,580 delivered, 0 failed, 0 skipped, 100% success, and a table of the customer rows that crossed it with the time each took">
+
+<sub>A CDC bridge mid-flight, and every row that crossed it — what was written, when, and how long it took.</sub>
+
+<img src="docs/assets/media/screenshots/03-bridge-backfill.png" width="100%" alt="A completed replay job in Syncle: 5,690 rows total, 6,050 delivered, 0 failed, 100% success, listing each customer row with its delivery time">
+
+<sub>A finished backfill. Deliveries can exceed the total because rows kept changing at the source while the replay ran — the upserts are idempotent, so they land once.</sub>
 
 ---
 
@@ -300,6 +310,12 @@ for shaping a source and for inspecting what landed in a destination:
 
 Every table view has a one-click "Create bridge" that drops you into the builder
 pre-seeded with that table as the source.
+
+<img src="docs/assets/media/screenshots/06-workbench-data.png" width="100%" alt="The Syncle workbench browsing a customers table: connection list, schema tree with row counts, and a paginated grid of 5,060 rows">
+
+<img src="docs/assets/media/screenshots/09-workbench-diagram.png" width="100%" alt="The interactive ER diagram in Syncle showing customers, orders, order_items and products with their columns, types and foreign-key relationships">
+
+<sub>Browsing a source table, and the same database as an ER diagram. <a href="docs/assets/media">The query editor and structure views are here too.</a></sub>
 
 ---
 
