@@ -1,46 +1,46 @@
 import { Logo } from '@/components/logo';
 import { GITHUB } from '@/lib/content';
+import { MEASURE, WIDE_MEASURE } from '@/lib/layout';
 
 /**
- * The site header, shared by the homepage and the docs pages. Text links
- * for reading, two small flat buttons for doing; not sticky — the page
- * scrolls past it the way a document does.
+ * The header, shared by the homepage and the docs. The lockup and three text
+ * links — no buttons, no rule under it, nothing sticky. The page scrolls past
+ * it the way a document does.
+ *
+ * `wide` switches to the docs measure, so the lockup always sits on the same
+ * left edge as the text below it.
  */
-export function SiteHeader({ current }: { current?: 'docs' }) {
+export function SiteHeader({
+  current,
+  wide = false,
+}: {
+  current?: 'docs';
+  wide?: boolean;
+}) {
   return (
-    <header className="border-b">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5 sm:px-8">
-        <a href="/" aria-label="Syncle — home">
-          <Logo className="h-8 w-auto sm:h-9" priority />
+    <header
+      className={`mx-auto flex items-center justify-between gap-6 px-6 py-7 ${
+        wide ? WIDE_MEASURE : MEASURE
+      }`}
+    >
+      <a href="/" aria-label="Syncle — home">
+        <Logo className="h-10 w-auto" priority />
+      </a>
+      <nav className="flex items-center gap-5 text-sm sm:gap-6">
+        <a
+          href="/docs"
+          aria-current={current === 'docs' ? 'page' : undefined}
+          className={current === 'docs' ? 'font-semibold' : 'link'}
+        >
+          Docs
         </a>
-        <nav className="flex items-center gap-4 text-sm sm:gap-5">
-          <a
-            href="/#how-it-works"
-            className="hidden py-2 hover:underline hover:underline-offset-4 md:inline-block"
-          >
-            How it works
-          </a>
-          <a
-            href="/docs"
-            aria-current={current === 'docs' ? 'page' : undefined}
-            className={`py-2 hover:underline hover:underline-offset-4 ${
-              current === 'docs' ? 'font-semibold' : ''
-            }`}
-          >
-            Docs
-          </a>
-          <a
-            href={GITHUB}
-            rel="noopener"
-            className="btn btn-quiet btn-sm hidden sm:inline-flex"
-          >
-            GitHub
-          </a>
-          <a href="/#install" className="btn btn-primary btn-sm">
-            Install
-          </a>
-        </nav>
-      </div>
+        <a href="/#install" className="link">
+          Install
+        </a>
+        <a href={GITHUB} rel="noopener" className="link">
+          GitHub
+        </a>
+      </nav>
     </header>
   );
 }

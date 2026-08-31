@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 
 /**
  * The install command with a copy button — the one thing most visitors came
- * to take away.
+ * to take away. A wash, a prompt and the text; no border, no chrome.
  *
  * On phones the command WRAPS instead of scrolling: iOS and Android hide
  * scrollbars, so an overflowing command just looks cut off mid-URL. Desktop
@@ -53,20 +53,17 @@ export function CopyCommand({
   return (
     <div
       className={cn(
-        'flex items-start gap-3 rounded-md border bg-muted/60 py-2.5 pl-4 pr-2 sm:items-center',
+        'flex items-start gap-3 rounded bg-muted px-4 py-3 font-mono text-[13px] leading-6',
         className,
       )}
     >
-      <span
-        aria-hidden
-        className="mt-1 select-none font-mono text-sm text-muted-foreground/60 sm:mt-0"
-      >
+      <span aria-hidden className="select-none text-muted-foreground">
         $
       </span>
       <code
         ref={codeRef}
         // wraps below sm; scrolls (single line) from sm up
-        className="min-w-0 flex-1 whitespace-pre-wrap break-all text-left font-mono text-[13px] leading-6 sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal"
+        className="min-w-0 flex-1 whitespace-pre-wrap break-all text-left sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal"
       >
         {command}
       </code>
@@ -74,7 +71,7 @@ export function CopyCommand({
         type="button"
         onClick={copy}
         aria-label={copied ? 'Copied' : 'Copy install command'}
-        className="shrink-0 rounded px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+        className="shrink-0 text-muted-foreground underline underline-offset-4 hover:text-foreground"
       >
         {copied ? 'copied' : 'copy'}
       </button>

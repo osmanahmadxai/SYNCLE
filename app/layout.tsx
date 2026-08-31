@@ -1,18 +1,7 @@
 import type { Metadata, Viewport } from 'next';
-import { Source_Serif_4 } from 'next/font/google';
 import { StructuredData } from '@/components/structured-data';
 import { DESCRIPTION, GITHUB, SITE_URL, TITLE } from '@/lib/content';
 import './globals.css';
-
-/*
- * One downloaded face, for headings only. Body text is the visitor's own
- * system font — nothing to load, and nothing to flash.
- */
-const sourceSerif = Source_Serif_4({
-  subsets: ['latin'],
-  variable: '--font-heading',
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -87,7 +76,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={sourceSerif.variable}>
+    <html lang="en">
       <head>
         <StructuredData />
       </head>

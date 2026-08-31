@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
- * A code block with a copy button in the corner. No syntax highlighting on
- * purpose: these docs quote shell commands, env files and JSON, and plain
- * ink keeps them readable without shipping a highlighter.
+ * A code block: a wash, the text, and a copy link in the corner. No syntax
+ * highlighting on purpose — these docs quote shell commands, env files and
+ * JSON, and plain ink keeps them readable without shipping a highlighter.
  *
- * `title` labels the block the way a filename comment would — where the
- * content goes, or what runs it.
+ * `title` labels the block the way a filename comment would, and sits above
+ * it as a line of small type rather than inside a bar of its own.
  */
 export function CodeBlock({
   children,
@@ -41,13 +41,11 @@ export function CodeBlock({
   }, [code]);
 
   return (
-    <div className="my-5 overflow-hidden rounded-md border">
+    <div className="my-5">
       {title && (
-        <div className="border-b bg-muted/60 px-4 py-1.5 font-mono text-xs text-muted-foreground">
-          {title}
-        </div>
+        <p className="mb-1.5 font-mono text-xs text-muted-foreground">{title}</p>
       )}
-      <div className="relative bg-muted/40">
+      <div className="relative rounded bg-muted">
         <pre className="overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-relaxed">
           <code>{code}</code>
         </pre>
@@ -55,7 +53,7 @@ export function CodeBlock({
           type="button"
           onClick={copy}
           aria-label={copied ? 'Copied' : 'Copy code'}
-          className="absolute right-2 top-2 rounded border bg-background px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="absolute right-3 top-3 font-mono text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
         >
           {copied ? 'copied' : 'copy'}
         </button>

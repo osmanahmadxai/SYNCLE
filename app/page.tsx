@@ -1,20 +1,12 @@
 import type { Metadata } from 'next';
-import { AppWindow } from '@/components/app-window';
 import { CopyCommand } from '@/components/copy-command';
 import { CodeBlock } from '@/components/docs/code-block';
 import { InstallTranscript } from '@/components/install-transcript';
-import { SyncDiagram } from '@/components/sync-diagram';
 import { SiteFooter } from '@/components/site-footer';
 import { SiteHeader } from '@/components/site-header';
-import {
-  COMPARISON,
-  FAQ,
-  GITHUB,
-  INSTALL_COMMAND,
-  SECURITY,
-  USE_CASES,
-} from '@/lib/content';
+import { FAQ, GITHUB, INSTALL_COMMAND, SECURITY, USE_CASES } from '@/lib/content';
 import { DOC_PAGES, docHref } from '@/lib/docs';
+import { MEASURE } from '@/lib/layout';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -65,7 +57,7 @@ const STEPS = [
   },
   {
     t: 'Create your admin account.',
-    b: 'The setup form opens with a one-time token already filled in — read from the server’s own data directory (it is printed in the logs too), proving you operate the machine.',
+    b: 'The setup form opens with a one-time token already filled in — read from the server’s own data directory, and printed in the logs too — proving you operate the machine.',
   },
   {
     t: 'Draw your first bridge.',
@@ -91,8 +83,8 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="mt-16 scroll-mt-8 sm:mt-20">
-      <h2 className="text-2xl font-semibold sm:text-[1.75rem]">{title}</h2>
+    <section id={id} className="mt-16 scroll-mt-8">
+      <h2 className="text-[1.35rem]">{title}</h2>
       {children}
     </section>
   );
@@ -103,67 +95,76 @@ export default function Home() {
     <>
       <SiteHeader />
 
-      <main className="mx-auto max-w-3xl px-5 sm:px-8">
+      <main className={`mx-auto px-6 text-[18px] leading-[1.75] ${MEASURE}`}>
         {/* ── intro ───────────────────────────────────────────────────── */}
-        <section className="pt-12 sm:pt-16">
-          <h1 className="text-balance text-4xl font-semibold leading-[1.1] sm:text-[2.75rem]">
+        <section className="pt-10 sm:pt-14">
+          <h1 className="max-w-[15ch] text-[2.4rem] leading-[1.1] sm:text-[2.9rem]">
             Keep any databases in sync, live, across engines
           </h1>
 
-          <p className="mt-6 text-pretty text-lg leading-relaxed">
+          <p className="mt-7 max-w-[62ch] text-pretty text-[19px] leading-[1.65]">
             Syncle is a small, self-hosted sync tool. You draw a bridge from a
             source database to one or more destinations, and rows are written
             across it — as a one-off backfill, on a polling cursor, or the
             moment they change, straight from the database&apos;s own change
-            log. Any of the five engines it speaks can sit on either end.
+            log.
+          </p>
+
+          <p className="mt-4 max-w-[70ch]">
+            It speaks PostgreSQL, MySQL and MariaDB, SQLite, MongoDB and Redis,
+            and any of them can sit on either end. An HTTP endpoint works as a
+            destination too, when the thing that needs the rows is a service
+            rather than a database.
           </p>
 
           <div className="mt-8">
             <CopyCommand command={INSTALL_COMMAND} />
           </div>
 
-          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-4 max-w-[70ch] text-[15px] leading-relaxed text-muted-foreground">
             Docker with Compose v2 and curl are the only requirements — the
-            script checks for exactly those before it runs, and everything
-            else lives in containers. Open source under the MIT licence.
+            script checks for exactly those before it runs, and everything else
+            lives in containers. Open source under the MIT licence.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <a href="/docs" className="btn btn-primary">
+          <p className="mt-6">
+            <a href="/docs" className="link">
               Read the documentation
             </a>
-            <a href={GITHUB} rel="noopener" className="btn btn-quiet">
-              View the source on GitHub
+            <span className="mx-3 text-muted-foreground">·</span>
+            <a href={GITHUB} rel="noopener" className="link">
+              Source on GitHub
             </a>
-          </div>
+          </p>
         </section>
 
-        {/* ── the five engines, synchronized ──────────────────────────── */}
-        <figure className="mt-10 sm:mt-12">
-          <SyncDiagram />
-          <figcaption className="text-center text-sm text-muted-foreground">
-            Every engine syncs through Syncle, in both directions — any of
-            the five can be the source or the destination.
-          </figcaption>
-        </figure>
+        {/* ── why ─────────────────────────────────────────────────────── */}
+        <Section title="Why it exists">
+          <p className="mt-4">
+            I kept writing the same one-off sync scripts — a cron job here, a
+            copy-paste ETL there — and none of them handled deletes, retries,
+            or the day the schema changed. I wanted one small thing I could run
+            on my own box, point at two databases, and trust. That is all
+            Syncle is meant to be.
+          </p>
+        </Section>
 
         {/* ── how it works ────────────────────────────────────────────── */}
         <Section id="how-it-works" title="How a bridge fires">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             A bridge is a saved sync path: a source table or query, the columns
             and mapping, the destinations, and a trigger. The trigger is how it
             notices that something changed — there are three, and you pick per
             bridge. The rest of the pipeline is identical.
           </p>
-          <dl className="mt-8 space-y-6">
+          <div className="mt-5 space-y-4">
             {TRIGGERS.map((t) => (
-              <div key={t.name} className="grid gap-1 sm:grid-cols-[7.5rem_1fr] sm:gap-4">
-                <dt className="font-mono text-sm font-medium leading-relaxed">{t.name}</dt>
-                <dd className="text-[15px] leading-relaxed">{t.body}</dd>
-              </div>
+              <p key={t.name}>
+                <span className="font-semibold">{t.name}.</span> {t.body}
+              </p>
             ))}
-          </dl>
-          <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
+          </div>
+          <p className="mt-5 text-[15px] text-muted-foreground">
             The honest edges: SQLite has no change log, so it syncs by watch
             rather than CDC; and Redis keyspace notifications are not durable,
             so a Redis CDC bridge misses events that happen while Syncle is
@@ -177,98 +178,83 @@ export default function Home() {
 
         {/* ── guarantees ──────────────────────────────────────────────── */}
         <Section title="What it promises about your rows">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             Moving data is the easy half. The hard half is moving it exactly
             once, in the right shape, and noticing when a row disappears.
           </p>
-          <ul className="mt-8 space-y-5">
+          <div className="mt-5 space-y-4">
             {GUARANTEES.map((g) => (
-              <li key={g.title} className="text-[15px] leading-relaxed">
-                <span className="font-semibold">{g.title}</span>{' '}
-                <span>{g.body}</span>
-              </li>
+              <p key={g.title}>
+                <span className="font-semibold">{g.title}</span> {g.body}
+              </p>
             ))}
-          </ul>
+          </div>
         </Section>
 
-        {/* ── interface ───────────────────────────────────────────────── */}
-        <Section title="You can see what it did">
-          <p className="mt-4 leading-relaxed">
+        {/* ── the interface ───────────────────────────────────────────── */}
+        <Section title="What you see while it runs">
+          <p className="mt-4">
             Every delivery lands on a live timeline — synced, failed, skipped
             or queued — and clicking one shows the exact row that was written,
             how long it took, and any error. Failed rows can be retried in
             place, without rerunning the job.
           </p>
-          <figure className="mt-8">
-            <AppWindow />
-            <figcaption className="mt-3 text-center text-sm text-muted-foreground">
-              The bridge view: a live CDC bridge, its delivery counts, and
-              the rows that have crossed it.
-            </figcaption>
-          </figure>
-        </Section>
-
-        {/* ── workbench ───────────────────────────────────────────────── */}
-        <Section title="It comes with a workbench">
-          <p className="mt-4 leading-relaxed">
-            Connecting a database for syncing also makes it browsable — the
+          <p className="mt-4">
+            Connecting a database for syncing also makes it browsable, so the
             same interface doubles as a small database workbench, for every
-            connected engine, not just the ones in a bridge:
+            connected engine and not just the ones in a bridge: browse, filter,
+            sort and edit rows, with CSV and JSON export; a query editor — SQL
+            for the relational engines, command documents for MongoDB, plain
+            commands for Redis; schema views and an interactive ER diagram;
+            create and drop tables and databases; and backup and restore, as
+            portable JSON for any engine or a .sql script for the relational
+            ones.
           </p>
-          <ul className="mt-6 list-disc space-y-2 pl-5 text-[15px] leading-relaxed">
-            <li>browse, filter, sort and edit rows, with CSV and JSON export</li>
-            <li>
-              a query editor — SQL for the relational engines, command
-              documents for MongoDB, plain commands for Redis
-            </li>
-            <li>schema views and an interactive ER diagram</li>
-            <li>create and drop tables and databases</li>
-            <li>
-              backup and restore — portable JSON for any engine, or a .sql
-              script for the relational ones
-            </li>
-          </ul>
-          <div className="mt-6">
-            <a href="/docs/workbench" className="btn btn-quiet">
+          <p className="mt-4">
+            <a href="/docs/workbench" className="link">
               More about the workbench
             </a>
-          </div>
+          </p>
         </Section>
 
         {/* ── install ─────────────────────────────────────────────────── */}
         <Section id="install" title="Installing it">
-          <div className="mt-6">
+          <div className="mt-5">
             <CopyCommand command={INSTALL_COMMAND} />
           </div>
-          <figure className="mt-3">
+          <div className="mt-3">
             <InstallTranscript />
-            <figcaption className="mt-3 text-sm text-muted-foreground">
-              What a first run prints, start to finish — the script&apos;s
-              actual output, not a mock-up.
-            </figcaption>
-          </figure>
-          <ol className="mt-8 list-decimal space-y-4 pl-5">
+          </div>
+          <p className="mt-3 text-[15px] text-muted-foreground">
+            What a first run prints, start to finish — the script&apos;s actual
+            output, not a mock-up.
+          </p>
+
+          <ol className="mt-6 list-decimal space-y-3 pl-5">
             {STEPS.map((s) => (
-              <li key={s.t} className="pl-1 text-[15px] leading-relaxed">
-                <span className="font-semibold">{s.t}</span>{' '}
-                <span>{s.b}</span>
+              <li key={s.t} className="pl-1">
+                <span className="font-semibold">{s.t}</span> {s.b}
               </li>
             ))}
           </ol>
-          <p className="mt-6 leading-relaxed">
-            After that, a small launcher does the day-to-day:
-          </p>
-          <dl className="mt-4 divide-y rounded-md border">
+
+          <p className="mt-6">After that, a small launcher does the day-to-day:</p>
+          <ul className="mt-4 space-y-2">
             {DAY_TO_DAY.map(([cmd, what]) => (
-              <div key={cmd} className="flex flex-wrap items-baseline gap-x-4 px-4 py-2.5">
-                <dt className="font-mono text-[13px]">{cmd}</dt>
-                <dd className="text-sm text-muted-foreground">{what}</dd>
-              </div>
+              <li key={cmd} className="text-[15px]">
+                <code className="code">{cmd}</code>
+                <span className="text-muted-foreground"> — {what}</span>
+              </li>
             ))}
-          </dl>
-          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+          </ul>
+
+          <p className="mt-6 text-[15px] text-muted-foreground">
             Prefer to see what you are piping to sh first? The script is{' '}
-            <a href={`${GITHUB}/blob/main/install.sh`} rel="noopener" className="link">
+            <a
+              href={`${GITHUB}/blob/main/install.sh`}
+              rel="noopener"
+              className="link"
+            >
               install.sh in the repository
             </a>
             , and the{' '}
@@ -282,30 +268,24 @@ export default function Home() {
 
         {/* ── use cases ───────────────────────────────────────────────── */}
         <Section id="use-cases" title="What people point it at">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             Every one of these is the same primitive — a source, some
             destinations, and a trigger — aimed at a different problem.
           </p>
-          <ul className="mt-8 space-y-6">
+          <div className="mt-5 space-y-4">
             {USE_CASES.map((u) => (
-              <li key={u.title}>
-                <h3 className="font-semibold">
-                  {u.title}{' '}
-                  <span className="ml-1 font-mono text-xs font-normal text-muted-foreground">
-                    {u.tag}
-                  </span>
-                </h3>
-                <p className="mt-1 text-[15px] leading-relaxed">
-                  {u.body}
-                </p>
-              </li>
+              <p key={u.title}>
+                <span className="font-semibold">{u.title}</span>{' '}
+                <span className="text-muted-foreground">({u.tag}).</span>{' '}
+                {u.body}
+              </p>
             ))}
-          </ul>
+          </div>
         </Section>
 
         {/* ── http destinations ───────────────────────────────────────── */}
         <Section title="When the destination is an API">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             Sometimes the thing that needs the rows is a service, not another
             database. A bridge can POST each change to a URL instead, with a
             JSON body you shape yourself:
@@ -316,12 +296,12 @@ export default function Home() {
   "row": "{{$row}}",
   "sent_at": "{{$now}}"
 }`}</CodeBlock>
-          <p className="mt-4 text-[15px] leading-relaxed">
+          <p className="mt-4">
             Tokens fill in per row — any column by name, the whole row, the
             operation that produced it. Substitution happens on the parsed
             JSON, never by pasting strings together, so a value full of quotes
-            cannot break the body and nothing in a row is ever executed.
-            Failed requests retry with backoff. The details live in{' '}
+            cannot break the body and nothing in a row is ever executed. Failed
+            requests retry with backoff. The details live in{' '}
             <a href="/docs/bridges" className="link">
               How bridges work
             </a>
@@ -329,56 +309,23 @@ export default function Home() {
           </p>
         </Section>
 
-        {/* ── comparison ──────────────────────────────────────────────── */}
-        <Section id="compare" title="Where it sits">
-          <p className="mt-4 leading-relaxed">
-            Airbyte and Debezium are built for teams running pipelines as a
-            discipline. Syncle is deliberately smaller: for one person who
-            wants their databases to agree. If you already run Kafka, Debezium
-            is the right answer — this is for everyone who does not.
-          </p>
-          <div className="mt-8 overflow-x-auto rounded-md border">
-            <table className="w-full min-w-[36rem] text-left text-sm">
-              <thead>
-                <tr className="border-b bg-muted/60">
-                  <th className="px-4 py-2.5 font-medium">
-                    <span className="sr-only">Aspect</span>
-                  </th>
-                  <th className="px-4 py-2.5 font-semibold">Syncle</th>
-                  <th className="px-4 py-2.5 font-medium text-muted-foreground">Airbyte</th>
-                  <th className="px-4 py-2.5 font-medium text-muted-foreground">Debezium</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {COMPARISON.map((row) => (
-                  <tr key={row.aspect}>
-                    <th scope="row" className="px-4 py-2.5 text-left font-normal text-muted-foreground">
-                      {row.aspect}
-                    </th>
-                    <td className="px-4 py-2.5">{row.syncle}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{row.airbyte}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{row.debezium}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Section>
-
         {/* ── what it isn't ───────────────────────────────────────────── */}
-        <Section title="What it isn't">
-          <p className="mt-4 leading-relaxed">
+        <Section id="compare" title="What it isn’t">
+          <p className="mt-4">
             Knowing what a tool refuses to be tells you as much as its feature
             list, so, plainly:
           </p>
-          <ul className="mt-8 space-y-5">
-            <li className="text-[15px] leading-relaxed">
+          <div className="mt-5 space-y-4">
+            <p>
               <span className="font-semibold">Not a data platform.</span> No
-              Kafka, no connector marketplace, no scheduling DAGs. If your
-              team runs pipelines as a discipline, Airbyte or Debezium will
-              serve you better — genuinely.
-            </li>
-            <li className="text-[15px] leading-relaxed">
+              Kafka, no connector marketplace, no scheduling DAGs. Airbyte
+              expects a platform deployment and a team to operate it, and
+              Debezium expects Kafka; both are built for teams running
+              pipelines as a discipline. If that is you, they will serve you
+              better — genuinely. Syncle is for one person who wants their
+              databases to agree.
+            </p>
+            <p>
               <span className="font-semibold">Not a cloud service.</span>{' '}
               Nothing is hosted and there is no account. You run it, it is
               yours, and backing it up is your job too — the{' '}
@@ -386,100 +333,81 @@ export default function Home() {
                 self-hosting page
               </a>{' '}
               says exactly what to back up.
-            </li>
-            <li className="text-[15px] leading-relaxed">
+            </p>
+            <p>
               <span className="font-semibold">Not multi-user.</span> One admin
-              account, on purpose. It is a tool for the person who operates
-              the machine, not a workspace for a department.
-            </li>
-            <li className="text-[15px] leading-relaxed">
+              account, on purpose. It is a tool for the person who operates the
+              machine, not a workspace for a department.
+            </p>
+            <p>
               <span className="font-semibold">Not magic.</span> CDC has
               per-engine prerequisites, SQLite has no change log to read, and
               Redis change events are not durable. The documentation writes
               every limitation next to the feature it limits.
-            </li>
-          </ul>
-        </Section>
-
-        {/* ── under the hood ──────────────────────────────────────────── */}
-        <Section title="Under the hood">
-          <p className="mt-4 leading-relaxed">
-            For the curious, the short version of what you would find if you
-            opened it up:
-          </p>
-          <dl className="mt-6 divide-y rounded-md border">
-            {[
-              ['Version', '1.0.0 — the first stable release'],
-              ['Licence', 'MIT, for the whole thing'],
-              ['Written in', 'TypeScript — a NestJS API and a Next.js interface'],
-              ['Runs as', 'four containers, with one published port'],
-              [
-                'Keeps its own state in',
-                'a bundled PostgreSQL (metadata) and Redis (job queue)',
-              ],
-              ['Speaks', 'English and Chinese, in the interface'],
-            ].map(([what, detail]) => (
-              <div key={what} className="flex flex-wrap items-baseline gap-x-4 px-4 py-2.5">
-                <dt className="w-36 shrink-0 text-sm text-muted-foreground">{what}</dt>
-                <dd className="text-sm">{detail}</dd>
-              </div>
-            ))}
-          </dl>
-        </Section>
-
-        {/* ── releases ────────────────────────────────────────────────── */}
-        <Section title="Where the project stands">
-          <p className="mt-4 leading-relaxed">
-            Version 1.0.0 — the first stable release — shipped on 20 August
-            2026, after the project grew up under its working name, Data
-            Bridge. The changelog follows the Keep a Changelog format and the
-            releases aim at semantic versioning, so you can tell from a
-            version number whether an update is a fix or a change.{' '}
-            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[13px]">
-              syncle update
-            </code>{' '}
-            moves a running install to the newest release whenever you decide
-            to.
-          </p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <a href={`${GITHUB}/releases/latest`} rel="noopener" className="btn btn-quiet">
-              See the releases
-            </a>
-            <a href={`${GITHUB}/blob/main/CHANGELOG.md`} rel="noopener" className="btn btn-quiet">
-              Read the changelog
-            </a>
+            </p>
           </div>
         </Section>
 
         {/* ── security ────────────────────────────────────────────────── */}
         <Section id="security" title="Your data, your machines">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             A sync tool sees every row it moves and holds the credentials to
             both ends. That earns some scrutiny, so here is exactly where
             things stand:
           </p>
-          <ul className="mt-8 space-y-5">
+          <div className="mt-5 space-y-4">
             {SECURITY.map((item) => (
-              <li key={item.title} className="text-[15px] leading-relaxed">
-                <span className="font-semibold">{item.title}.</span>{' '}
-                <span>{item.body}</span>
-              </li>
+              <p key={item.title}>
+                <span className="font-semibold">{item.title}.</span> {item.body}
+              </p>
             ))}
-          </ul>
+          </div>
+        </Section>
+
+        {/* ── under the hood ──────────────────────────────────────────── */}
+        <Section title="Under the hood">
+          <p className="mt-4">
+            Version 1.0.0 — the first stable release — shipped on 20 August
+            2026, after the project grew up under its working name, Data
+            Bridge. It is TypeScript throughout: a NestJS API and a Next.js
+            interface, running as four containers behind one published port,
+            keeping their own state in a bundled PostgreSQL and Redis. The
+            interface speaks English and Chinese, and the whole thing is MIT
+            licensed.
+          </p>
+          <p className="mt-4">
+            The changelog follows Keep a Changelog and releases aim at semantic
+            versioning, so a version number tells you whether an update is a
+            fix or a change. <code className="code">syncle update</code> moves a
+            running install to the newest release whenever you decide to.
+          </p>
+          <p className="mt-4">
+            <a href={`${GITHUB}/releases/latest`} rel="noopener" className="link">
+              Releases
+            </a>
+            <span className="mx-3 text-muted-foreground">·</span>
+            <a
+              href={`${GITHUB}/blob/main/CHANGELOG.md`}
+              rel="noopener"
+              className="link"
+            >
+              Changelog
+            </a>
+          </p>
         </Section>
 
         {/* ── documentation ───────────────────────────────────────────── */}
         <Section id="docs" title="The documentation">
-          <p className="mt-4 leading-relaxed">
+          <p className="mt-4">
             Nine short pages cover the whole tool. Every command, default and
             endpoint in them was taken from the source code rather than from
-            memory, and where something has a limit, the limit is written
-            next to it.
+            memory, and where something has a limit, the limit is written next
+            to it.
           </p>
-          <ul className="mt-8 grid gap-x-10 gap-y-5 sm:grid-cols-2">
+          <ul className="mt-5 space-y-3 text-[15px]">
             {DOC_PAGES.map((page) => (
-              <li key={page.slug} className="text-[15px] leading-relaxed">
-                <a href={docHref(page)} className="link font-medium">
+              <li key={page.slug}>
+                <a href={docHref(page)} className="link">
                   {page.title}
                 </a>{' '}
                 <span className="text-muted-foreground">
@@ -488,92 +416,60 @@ export default function Home() {
               </li>
             ))}
           </ul>
-          <div className="mt-6">
-            <a href="/docs" className="btn btn-quiet">
-              Start with the overview
-            </a>
-          </div>
         </Section>
 
         {/* ── faq ─────────────────────────────────────────────────────── */}
         <Section id="faq" title="Questions people ask first">
-          <div className="mt-8 space-y-8">
+          <div className="mt-5 space-y-6">
             {FAQ.map((item) => (
               <div key={item.q}>
-                <h3 className="font-semibold">{item.q}</h3>
-                <p className="mt-2 text-[15px] leading-relaxed">
-                  {item.a}
-                </p>
+                <h3 className="text-[1.05rem]">{item.q}</h3>
+                <p className="mt-2">{item.a}</p>
               </div>
             ))}
           </div>
         </Section>
 
-        {/* ── contributing ────────────────────────────────────────────── */}
-        <Section title="Bugs, ideas and contributions">
-          <p className="mt-4 leading-relaxed">
-            Bug reports and rough edges go in the issue tracker — including
-            places where the documentation and the software disagree, which
-            counts as a bug here. Code contributions are welcome too: the
-            contributing guide covers the whole setup, which is three
-            commands once you have Node 22, pnpm 10 and Docker. One
-            exception: security problems go by email, not into a public
-            issue — the{' '}
+        {/* ── closing ─────────────────────────────────────────────────── */}
+        <Section title="Try it against two databases you already have">
+          <p className="mt-4">
+            One command, about a minute, and nothing to clean up afterwards if
+            it is not for you — <code className="code">syncle uninstall</code>{' '}
+            removes every trace.
+          </p>
+          <div className="mt-5">
+            <CopyCommand command={INSTALL_COMMAND} />
+          </div>
+          <p className="mt-5">
+            <a href="/docs/quickstart" className="link">
+              Follow the quickstart
+            </a>
+          </p>
+          <p className="mt-10">
+            Bug reports and rough edges go in{' '}
+            <a href={`${GITHUB}/issues`} rel="noopener" className="link">
+              the issue tracker
+            </a>{' '}
+            — including places where the documentation and the software
+            disagree, which counts as a bug here. I read all of them. Code
+            contributions are welcome too; the{' '}
+            <a
+              href={`${GITHUB}/blob/main/CONTRIBUTING.md`}
+              rel="noopener"
+              className="link"
+            >
+              contributing guide
+            </a>{' '}
+            covers the setup, which is three commands once you have Node 22,
+            pnpm 10 and Docker. Security problems go by email rather than into
+            a public issue — the{' '}
             <a href="/docs/self-hosting#reporting" className="link">
               self-hosting page
             </a>{' '}
             explains how.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <a href={`${GITHUB}/issues`} rel="noopener" className="btn btn-quiet">
-              Open an issue
-            </a>
-            <a
-              href={`${GITHUB}/blob/main/CONTRIBUTING.md`}
-              rel="noopener"
-              className="btn btn-quiet"
-            >
-              Read the contributing guide
-            </a>
-          </div>
+          <p className="mb-16 mt-5">— Osman Ahmadzai</p>
         </Section>
-
-        {/* ── closing ─────────────────────────────────────────────────── */}
-        <Section title="Try it against two databases you already have">
-          <p className="mt-4 leading-relaxed">
-            The honest pitch: one command, about a minute, and nothing to
-            clean up afterwards if it is not for you —{' '}
-            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[13px]">
-              syncle uninstall
-            </code>{' '}
-            removes every trace.
-          </p>
-          <div className="mt-6">
-            <CopyCommand command={INSTALL_COMMAND} />
-          </div>
-          <div className="mt-5">
-            <a href="/docs/quickstart" className="btn btn-primary">
-              Follow the quickstart
-            </a>
-          </div>
-        </Section>
-
-        {/* ── note from the author ────────────────────────────────────── */}
-        <section className="mb-20 mt-16 rounded-md border bg-card px-6 py-6 sm:mt-20 sm:px-8">
-          <p className="text-[15px] leading-relaxed">
-            I built Syncle because I kept writing the same one-off sync scripts
-            — a cron job here, a copy-paste ETL there — and none of them
-            handled deletes, retries, or the day the schema changed. I wanted
-            one small thing I could run on my own box, point at two databases,
-            and trust. If that is what you are after too, I hope it serves you
-            well. Bugs and rough edges go in{' '}
-            <a href={`${GITHUB}/issues`} rel="noopener" className="link">
-              the issue tracker
-            </a>
-            ; I read all of them.
-          </p>
-          <p className="mt-4 text-sm font-medium">— Osman Ahmadzai</p>
-        </section>
       </main>
 
       <SiteFooter />
