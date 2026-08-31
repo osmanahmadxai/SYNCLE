@@ -425,9 +425,10 @@ export default function Home() {
         {/* ── under the hood ──────────────────────────────────────────── */}
         <Section title="Under the hood">
           <p className="mt-4">
-            Version 1.0.0 — the first stable release — shipped on 20 August
-            2026, after the project grew up under its working name, Data
-            Bridge. It is TypeScript throughout: a NestJS API and a Next.js
+            The first stable release, 1.0.0, shipped on 23 July 2026, after
+            the project grew up under its working name, Data Bridge; there have
+            been releases since — the link below always points at the current
+            one. It is TypeScript throughout: a NestJS API and a Next.js
             interface, running as four containers behind one published port,
             keeping their own state in a bundled PostgreSQL and Redis. The
             interface speaks English and Chinese, and the whole thing is MIT
