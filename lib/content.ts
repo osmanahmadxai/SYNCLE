@@ -83,51 +83,6 @@ export const USE_CASES: { title: string; body: string; tag: string }[] = [
   },
 ];
 
-/** How Syncle sits against the tools people already know. */
-export const COMPARISON: {
-  aspect: string;
-  syncle: string;
-  airbyte: string;
-  debezium: string;
-}[] = [
-  {
-    aspect: 'To get running',
-    syncle: 'One command',
-    airbyte: 'Kubernetes or Docker Compose',
-    debezium: 'Kafka and Connect',
-  },
-  {
-    aspect: 'Moving parts',
-    syncle: 'Four containers',
-    airbyte: 'A platform',
-    debezium: 'A broker and a cluster',
-  },
-  {
-    aspect: 'Real-time capture',
-    syncle: 'Built in, per bridge',
-    airbyte: 'On some connectors',
-    debezium: 'The whole point',
-  },
-  {
-    aspect: 'Writes to the destination',
-    syncle: 'Direct, idempotent upserts',
-    airbyte: 'Through its own staging',
-    debezium: 'You write the consumer',
-  },
-  {
-    aspect: 'Day-to-day interface',
-    syncle: 'A web GUI',
-    airbyte: 'A web GUI',
-    debezium: 'Config and code',
-  },
-  {
-    aspect: 'Aimed at',
-    syncle: 'One operator',
-    airbyte: 'A data team',
-    debezium: 'A platform team',
-  },
-];
-
 /** What happens to credentials and data. */
 export const SECURITY: { title: string; body: string }[] = [
   {

@@ -5,10 +5,10 @@
  * change with them. Output only: it renders directly beneath the copyable
  * install command, which plays the part of the `$` line.
  *
- * Static markup, no animation: it is a quotation, not a demo.
+ * Static markup, no animation and no colour: it is a quotation, not a demo.
  */
 
-/** `arrow` lines carry the installer's real cyan `==>` prefix */
+/** `arrow` lines carry the installer's real `==>` prefix */
 const LINES: { text: string; arrow?: boolean }[] = [
   { text: 'Installing Syncle v1.0.0', arrow: true },
   { text: 'Generating an encryption key', arrow: true },
@@ -21,13 +21,8 @@ const LINES: { text: string; arrow?: boolean }[] = [
 
 export function InstallTranscript() {
   return (
-    <div className="rounded-md border bg-muted/40 px-5 py-4 font-mono text-[13px] leading-[1.8]">
-      {LINES.map((line, i) => (
-        <p key={i} className="text-muted-foreground">
-          {line.arrow && <span className="text-cyan-700">{'==> '}</span>}
-          {line.text || ' '}
-        </p>
-      ))}
-    </div>
+    <pre className="overflow-x-auto rounded bg-muted px-4 py-3.5 font-mono text-[13px] leading-[1.8] text-muted-foreground">
+      {LINES.map((line) => `${line.arrow ? '==> ' : ''}${line.text}`).join('\n')}
+    </pre>
   );
 }

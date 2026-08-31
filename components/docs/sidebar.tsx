@@ -4,30 +4,28 @@ import { usePathname } from 'next/navigation';
 import { DOC_PAGES, docHref } from '@/lib/docs';
 
 /**
- * The docs page list. A client component only because it highlights the page
- * being read, which needs the pathname.
+ * The docs page list: plain links, the one you are reading set in bold ink.
+ * A client component only because it needs the pathname to know which.
  */
 export function DocsSidebar() {
   const pathname = usePathname();
 
   return (
-    <nav aria-label="Documentation">
-      <p className="px-2 text-sm font-semibold">Documentation</p>
-      <ul className="mt-2">
+    <nav aria-label="Documentation" className="text-sm">
+      <p className="font-serif font-semibold">Documentation</p>
+      <ul className="mt-3 space-y-2">
         {DOC_PAGES.map((page) => {
           const href = docHref(page);
           const active =
-            pathname === href || pathname === `${href}/` || (page.slug === '' && pathname === '/docs/');
+            pathname === href ||
+            pathname === `${href}/` ||
+            (page.slug === '' && pathname === '/docs/');
           return (
             <li key={href}>
               <a
                 href={href}
                 aria-current={active ? 'page' : undefined}
-                className={`block rounded px-2 py-1.5 text-sm ${
-                  active
-                    ? 'bg-muted font-medium text-foreground'
-                    : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-                }`}
+                className={active ? 'font-semibold' : 'link'}
               >
                 {page.title}
               </a>

@@ -13,10 +13,10 @@ export default function DocsLayout({
 }) {
   return (
     <>
-      <SiteHeader current="docs" />
-      <div className="mx-auto max-w-5xl px-5 sm:px-8">
-        <div className="gap-10 py-10 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:py-12">
-          <aside className="mb-10 lg:mb-0">
+      <SiteHeader current="docs" wide />
+      <div className="mx-auto max-w-[72rem] px-6">
+        <div className="gap-12 pb-16 pt-4 lg:grid lg:grid-cols-[13rem_minmax(0,56rem)]">
+          <aside className="mb-12 lg:mb-0">
             <div className="lg:sticky lg:top-8">
               <DocsSidebar />
             </div>
@@ -24,7 +24,7 @@ export default function DocsLayout({
           <div className="min-w-0">{children}</div>
         </div>
       </div>
-      <SiteFooter />
+      <SiteFooter wide />
     </>
   );
 }
