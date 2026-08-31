@@ -18,6 +18,7 @@ when you need them.
 <br>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Discussions](https://img.shields.io/badge/Discussions-ask%20a%20question-5865F2?logo=github&logoColor=white)](https://github.com/osmanahmadxai/SYNCLE/discussions)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)
 ![pnpm](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
@@ -443,6 +444,23 @@ React Flow · Zod · Vitest.
   further, complete first-run setup before the port is reachable, put it behind
   TLS, and restrict which destinations (database connections / endpoint URLs)
   a bridge may write to.
+
+## Questions, ideas and contributions
+
+- **Questions and setup help** belong in
+  [Discussions](https://github.com/osmanahmadxai/SYNCLE/discussions/categories/q-a),
+  not the issue tracker — an answer there stays searchable for whoever asks next.
+- **Ideas** for where Syncle should go next are welcome in
+  [Ideas](https://github.com/osmanahmadxai/SYNCLE/discussions/categories/ideas),
+  and what you pointed it at belongs in
+  [Show and tell](https://github.com/osmanahmadxai/SYNCLE/discussions/categories/show-and-tell).
+- **Bugs** go in the [issue tracker](https://github.com/osmanahmadxai/SYNCLE/issues) —
+  including places where the documentation and the software disagree, which
+  counts as a bug here.
+- **Code** is welcome too: [CONTRIBUTING.md](CONTRIBUTING.md) covers the whole
+  setup, which is three commands once you have Node 22, pnpm 10 and Docker.
+- **Security problems** go by email rather than into a public issue. The
+  [self-hosting page](https://syncle.dev/docs/self-hosting#reporting) explains how.
 
 ## License
 
