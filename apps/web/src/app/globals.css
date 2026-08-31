@@ -81,3 +81,39 @@
     background: transparent;
   }
 }
+
+@layer components {
+  /*
+   * React Flow ships its controls with a hard-coded white background, so on
+   * the workspace map and the ER diagram they render as a white block against
+   * the dark canvas. Theme them from the app's own tokens instead.
+   */
+  .react-flow__controls {
+    box-shadow: none;
+  }
+
+  .react-flow__controls-button {
+    background-color: hsl(var(--card));
+    border-bottom: 1px solid hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+
+  .react-flow__controls-button:first-child {
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+  }
+
+  .react-flow__controls-button:last-child {
+    border-bottom: 0;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+  }
+
+  .react-flow__controls-button:hover {
+    background-color: hsl(var(--accent));
+  }
+
+  .react-flow__controls-button svg {
+    fill: currentColor;
+  }
+}
