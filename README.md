@@ -33,9 +33,7 @@ when you need them.
 
 <br>
 
-<img src="docs/assets/media/syncle-live-sync.gif" width="100%" alt="A CDC bridge running in Syncle: rows inserted into PostgreSQL arrive in MongoDB while the delivered counter climbs, each row listed with the time it took">
-
-<sub>A real bridge, running. Rows are inserted into Postgres from outside the browser while the page is open — the counter is the bridge doing the work. <a href="docs/assets/media/syncle-demo.mp4">Full 46-second run</a> · <a href="docs/assets/media">more screenshots</a></sub>
+<img src="docs/assets/syncle-bridge-animation.svg" width="100%" alt="Animated: rows flowing live from a PostgreSQL source across a Syncle bridge into MongoDB, Redis and MySQL — insert, update and delete operations riding the lanes">
 
 </div>
 
@@ -116,7 +114,13 @@ The rest is the same whichever destination and trigger you pick:
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
   place — failed cells flip green.
 
-<img src="docs/assets/media/screenshots/01-bridge-live-cdc.png" width="100%" alt="A live CDC bridge in Syncle: running since 6:31pm, 2,580 delivered, 0 failed, 0 skipped, 100% success, and a table of the customer rows that crossed it with the time each took">
+### See it happen
+
+<img src="docs/assets/media/syncle-live-sync.gif" width="100%" alt="A newly built Syncle bridge delivering rows: the delivered counter climbs from zero as orders inserted into PostgreSQL arrive in MongoDB, each listed with the time it took">
+
+<sub><b>A bridge that was built seconds earlier, delivering.</b> Orders are inserted into Postgres from outside the browser while the page is open, so the counter climbing is the bridge doing the work — no cuts, nothing sped up. The <a href="https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/docs/assets/media/syncle-demo.mp4">full 70-second walkthrough</a> (downloads, 4.5 MB) starts from an empty workspace: naming the bridge, picking the source table, choosing event-based CDC, pointing it at MongoDB, and creating it — then the rows above. More stills in <a href="docs/assets/media">docs/assets/media</a>.</sub>
+
+<img src="docs/assets/media/screenshots/01-bridge-live-cdc.png" width="100%" alt="A live CDC bridge in Syncle: running, 2,580 delivered, 0 failed, 0 skipped, 100% success, and a table of the customer rows that crossed it with the time each took">
 
 <sub>A CDC bridge mid-flight, and every row that crossed it — what was written, when, and how long it took.</sub>
 
