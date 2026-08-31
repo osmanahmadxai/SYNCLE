@@ -4,6 +4,7 @@ import { CodeBlock } from '@/components/docs/code-block';
 import { InstallTranscript } from '@/components/install-transcript';
 import { SiteFooter } from '@/components/site-footer';
 import { SiteHeader } from '@/components/site-header';
+import { DemoVideo, Shot } from '@/components/shot';
 import { FAQ, GITHUB, INSTALL_COMMAND, SECURITY, USE_CASES } from '@/lib/content';
 import { DOC_PAGES, docHref } from '@/lib/docs';
 import { MEASURE } from '@/lib/layout';
@@ -136,7 +137,33 @@ export default function Home() {
               Source on GitHub
             </a>
           </p>
+
+          <Shot
+            src="/media/04-workspace-map.png"
+            alt="The Syncle workspace map: one PostgreSQL source feeding four bridges — on-demand, CDC and watch — into MySQL, MongoDB and Redis destinations"
+            caption="One source, four bridges, four destinations — the whole workspace on one canvas."
+          />
         </section>
+
+        {/* ── the walkthrough ─────────────────────────────────────────── */}
+        <Section title="One bridge, built and running">
+          <p className="mt-4">
+            Fifty-eight seconds, no cuts: an empty workspace, then a bridge
+            from a Postgres <code className="code">orders</code> table into
+            MongoDB — naming it, picking the source, choosing change data
+            capture, pointing it at the destination. It is started, rows are
+            inserted into Postgres from outside the browser, and they arrive.
+          </p>
+          <DemoVideo
+            caption={
+              <>
+                Recorded against a running instance. The counter climbing is
+                the bridge doing the work, and the collection at the end did
+                not exist when the recording started.
+              </>
+            }
+          />
+        </Section>
 
         {/* ── why ─────────────────────────────────────────────────────── */}
         <Section title="Why it exists">
@@ -164,6 +191,12 @@ export default function Home() {
               </p>
             ))}
           </div>
+          <Shot
+            src="/media/05-bridge-builder.png"
+            alt="The Syncle bridge builder: source table with selectable columns, a live preview of real rows, trigger configuration, the inferred schema and a sample payload"
+            caption="Picking the trigger in the builder, with a live preview of what will be sent."
+          />
+
           <p className="mt-5 text-[15px] text-muted-foreground">
             The honest edges: SQLite has no change log, so it syncs by watch
             rather than CDC; and Redis keyspace notifications are not durable,
@@ -199,7 +232,14 @@ export default function Home() {
             how long it took, and any error. Failed rows can be retried in
             place, without rerunning the job.
           </p>
-          <p className="mt-4">
+
+          <Shot
+            src="/media/01-bridge-live-cdc.png"
+            alt="A live CDC bridge in Syncle: running, 2,580 delivered, 0 failed, 0 skipped, 100% success, and the customer rows that crossed it with the time each took"
+            caption="A CDC bridge mid-flight, and every row that crossed it."
+          />
+
+          <p className="mt-8">
             Connecting a database for syncing also makes it browsable, so the
             same interface doubles as a small database workbench, for every
             connected engine and not just the ones in a bridge: browse, filter,
@@ -210,7 +250,19 @@ export default function Home() {
             portable JSON for any engine or a .sql script for the relational
             ones.
           </p>
-          <p className="mt-4">
+          <Shot
+            src="/media/06-workbench-data.png"
+            alt="The Syncle workbench browsing a customers table: the connection list, a schema tree with row counts, and a paginated grid of 5,060 rows"
+            caption="Browsing a source table, with the schema tree beside it."
+          />
+
+          <Shot
+            src="/media/09-workbench-diagram.png"
+            alt="The interactive ER diagram in Syncle showing customers, orders, order_items and products with their columns, types and foreign keys"
+            caption="The same database as an ER diagram, foreign keys drawn."
+          />
+
+          <p className="mt-8">
             <a href="/docs/workbench" className="link">
               More about the workbench
             </a>
