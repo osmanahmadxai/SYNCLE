@@ -19,14 +19,16 @@ stay sharp on high-density screens without carrying 3200px files in git.
 
 ## Motion
 
-**`syncle-live-sync.gif`** — 10 s · 800px · 1.4 MB. The payoff on a loop: a
+**`syncle-live-sync.gif`** — 11 s · 800px · 1.7 MB. The payoff on a loop: a
 bridge built seconds earlier delivering its first rows, the counter climbing
 from zero. Used in the project README, where a GIF plays and an MP4 does not.
 
 <img src="syncle-live-sync.gif" width="100%" alt="A newly built Syncle bridge delivering its first rows as the counter climbs">
 
-**`syncle-demo.mp4`** — 70 s · 1600×1000 · 4.5 MB. The whole job, start to
-finish, with nothing skipped:
+**`syncle-demo.mp4`** — 58 s · 1600×1000 · 3.6 MB. The whole job, start to
+finish, with nothing skipped, and the mouse visible throughout — headless
+Chrome draws no cursor, so the recording injects a ring that follows the real
+pointer and pulses on every click:
 
 1. An empty workspace, then **New bridge**.
 2. Naming it, and picking the source — connection, database, then `public.orders`
@@ -37,11 +39,18 @@ finish, with nothing skipped:
 5. **Create bridge**, then **Start listening**.
 6. Orders inserted into Postgres from outside the browser — the counter climbs
    and the rows appear as they cross.
-7. The MongoDB collection that did not exist 70 seconds earlier, holding them.
+7. The MongoDB collection that did not exist a minute earlier, holding them.
 
 Every click is against the running app and the inserts are real. No cuts,
-nothing sped up. GitHub cannot play a repo-hosted MP4 — clicking it in the
-file browser gives a size error — so link it from the README by its
+nothing sped up.
+
+If the GIF above looks frozen on one frame, check whether **Reduce motion** is
+enabled (macOS: System Settings → Accessibility → Display). GitHub honours it
+and serves animated images as a still.
+
+GitHub cannot play a repo-hosted MP4 either — clicking it in the file browser
+gives a size error, and the raw URL is served as `application/octet-stream` — so
+the README links it by its
 [raw URL](https://raw.githubusercontent.com/osmanahmadxai/SYNCLE/main/docs/assets/media/syncle-demo.mp4),
 which downloads, or host it on syncle.dev where a `<video>` element can play
 it inline.
