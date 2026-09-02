@@ -1,0 +1,29 @@
+{
+  "name": "syncle-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marketing site for Syncle — syncle.dev",
+  "scripts": {
+    "dev": "next dev -p 3010",
+    "build": "next build",
+    "start": "npx serve out",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "clsx": "^2.1.1",
+    "next": "^15.5.18",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.6.3"
+  }
+}
