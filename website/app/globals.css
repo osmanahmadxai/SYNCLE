@@ -1,0 +1,247 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4's default `dark:` variant follows the OS preference. Pinning it
+ * to a class that is never applied keeps any stray `dark:` utility inert —
+ * this site renders one way for everyone.
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * The whole design, in six values: paper, ink, a lighter ink for asides, a
+ * hairline, one faint wash behind code, and a link blue. There is no second
+ * surface colour, no shadow, no gradient and no button — the page is a
+ * document, and everything on it is text, a rule, or a link.
+ */
+:root {
+  --radius: 0.25rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.26 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+
+  /* the one wash: behind code, and nowhere else */
+  --muted: oklch(0.975 0 0);
+  --border: oklch(0.9 0 0);
+
+  --link: oklch(0.45 0.14 258);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-link: var(--link);
+
+  /*
+   * Nothing is downloaded. Body copy is the reader's own interface font;
+   * headings are the serif their machine already has, which is the whole of
+   * the site's "brand" and costs one line of CSS.
+   */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-serif: Georgia, 'Iowan Old Style', 'Times New Roman', Times, serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    background-color: var(--background);
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    overflow-x: clip;
+    font-synthesis-weight: none;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--link) 18%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* links look like links: blue and underlined, the way they always did */
+  .link {
+    color: var(--link);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklch, var(--link) 35%, transparent);
+    text-underline-offset: 3px;
+  }
+
+  .link:hover {
+    text-decoration-color: var(--link);
+  }
+
+  /* inline code, in prose and on the homepage alike */
+  .code {
+    background: var(--muted);
+    border-radius: var(--radius);
+    padding: 0.1rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+
+  /*
+   * Documentation typography. Doc pages are written as plain HTML elements
+   * inside <article class="prose-docs">, and this is the one place their
+   * rendering is decided.
+   */
+  .prose-docs {
+    font-size: 17px;
+    line-height: 1.8;
+  }
+
+  .prose-docs h1 {
+    font-size: 1.875rem;
+    line-height: 1.25;
+  }
+
+  .prose-docs h2 {
+    margin-top: 2.75rem;
+    font-size: 1.3rem;
+    line-height: 1.35;
+    scroll-margin-top: 2rem;
+  }
+
+  .prose-docs h3 {
+    margin-top: 2rem;
+    font-size: 1.05rem;
+    scroll-margin-top: 2rem;
+  }
+
+  .prose-docs p {
+    margin-top: 1rem;
+  }
+
+  .prose-docs > p:first-of-type {
+    margin-top: 1.25rem;
+    color: var(--muted-foreground);
+  }
+
+  .prose-docs ul,
+  .prose-docs ol {
+    margin-top: 1rem;
+    padding-left: 1.4rem;
+  }
+
+  .prose-docs ul {
+    list-style: disc;
+  }
+
+  .prose-docs ol {
+    list-style: decimal;
+  }
+
+  .prose-docs li {
+    margin-top: 0.4rem;
+    padding-left: 0.2rem;
+  }
+
+  .prose-docs li::marker {
+    color: var(--muted-foreground);
+  }
+
+  .prose-docs a {
+    color: var(--link);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklch, var(--link) 35%, transparent);
+    text-underline-offset: 3px;
+  }
+
+  .prose-docs a:hover {
+    text-decoration-color: var(--link);
+  }
+
+  /* inline code; blocks come from the CodeBlock component instead. Long
+     tokens (env vars) may wrap on narrow phones rather than clip. */
+  .prose-docs :not(pre) > code {
+    background: var(--muted);
+    border-radius: var(--radius);
+    padding: 0.1rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+
+  /* tables are rows of facts, not panels: hairlines only, no fills */
+  .prose-docs table {
+    margin-top: 1.25rem;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    text-align: left;
+  }
+
+  .prose-docs th {
+    border-bottom: 1px solid var(--foreground);
+    font-weight: 600;
+    padding: 0.45rem 0.75rem 0.45rem 0;
+  }
+
+  .prose-docs td {
+    padding: 0.45rem 0.75rem 0.45rem 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  /* a long value in a cell wraps rather than widening the whole table past
+     the column — a connection string used to push the notes off-screen */
+  .prose-docs td code,
+  .prose-docs th code {
+    overflow-wrap: anywhere;
+  }
+
+  /* except in the first column, which names the thing the row is about: a
+     variable or an endpoint is unreadable broken across two lines */
+  .prose-docs td:first-child code,
+  .prose-docs th:first-child code {
+    overflow-wrap: normal;
+  }
+
+  /* tables wider than the column pan inside their own scroll container */
+  .table-scroll {
+    overflow-x: auto;
+  }
+
+  .prose-docs hr {
+    margin-top: 2.5rem;
+    border-color: var(--border);
+  }
+}
