@@ -1,6 +1,7 @@
 import { CodeBlock } from '@/components/docs/code-block';
 import { DocArticle, docMetadata } from '@/components/docs/doc-article';
 import { Note } from '@/components/docs/note';
+import { Shot } from '@/components/shot';
 
 export const metadata = docMetadata('workbench');
 
@@ -93,6 +94,11 @@ export default function Page() {
         see <a href="/docs/configuration">Configuration</a> for the related
         settings and their current limits.
       </p>
+      <Shot
+        src="/media/08-workbench-query.webp"
+        alt="The Syncle query editor running a grouped aggregate over the customers table, with the result set below it in 11 milliseconds"
+        caption="The query editor, with the result set underneath."
+      />
 
       <h2 id="structure-and-the-er-diagram">Structure and the ER diagram</h2>
       <p>
@@ -105,6 +111,11 @@ export default function Page() {
         ones) get edges; MongoDB and Redis schemas render as unconnected
         nodes.
       </p>
+      <Shot
+        src="/media/09-workbench-diagram.webp"
+        alt="The interactive ER diagram in Syncle showing customers, orders, order_items and products with their columns, types and foreign keys"
+        caption="A whole schema as an ER diagram, foreign keys drawn."
+      />
 
       <h2 id="schema-operations">Schema operations</h2>
       <p>
