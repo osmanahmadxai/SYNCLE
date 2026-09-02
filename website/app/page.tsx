@@ -142,7 +142,8 @@ export default function Home() {
           </p>
 
           <Shot
-            src="/media/04-workspace-map.png"
+            eager
+            src="/media/04-workspace-map.webp"
             alt="The Syncle workspace map: one PostgreSQL source feeding four bridges — on-demand, CDC and watch — into MySQL, MongoDB and Redis destinations"
             caption="One source, four bridges, four destinations — the whole workspace on one canvas."
           />
@@ -198,7 +199,7 @@ export default function Home() {
             ))}
           </div>
           <Shot
-            src="/media/05-bridge-builder.png"
+            src="/media/05-bridge-builder.webp"
             alt="The Syncle bridge builder: source table with selectable columns, a live preview of real rows, trigger configuration, the inferred schema and a sample payload"
             caption="Picking the trigger in the builder, with a live preview of what will be sent."
           />
@@ -249,7 +250,7 @@ export default function Home() {
           </p>
 
           <Shot
-            src="/media/01-bridge-live-cdc.png"
+            src="/media/01-bridge-live-cdc.webp"
             alt="A live CDC bridge in Syncle: running, 2,580 delivered, 0 failed, 0 skipped, 100% success, and the customer rows that crossed it with the time each took"
             caption="A CDC bridge mid-flight, and every row that crossed it."
           />
@@ -266,26 +267,14 @@ export default function Home() {
             ones.
           </p>
           <Shot
-            src="/media/06-workbench-data.png"
+            src="/media/06-workbench-data.webp"
             alt="The Syncle workbench browsing a customers table: the connection list, a schema tree with row counts, and a paginated grid of 5,060 rows"
             caption="Browsing a source table, with the schema tree beside it."
           />
 
-          <Shot
-            src="/media/08-workbench-query.png"
-            alt="The Syncle query editor running a grouped aggregate over the customers table, with the result set below it in 11 milliseconds"
-            caption="The query editor, with the result set underneath."
-          />
-
-          <Shot
-            src="/media/09-workbench-diagram.png"
-            alt="The interactive ER diagram in Syncle showing customers, orders, order_items and products with their columns, types and foreign keys"
-            caption="The same database as an ER diagram, foreign keys drawn."
-          />
-
           <p className="mt-8">
             <a href="/docs/workbench" className="link">
-              More about the workbench
+              The query editor and the ER diagram
             </a>
           </p>
         </Section>

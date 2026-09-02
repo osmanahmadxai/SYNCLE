@@ -10,14 +10,17 @@ export function Shot({
   src,
   alt,
   caption,
-  width = 3200,
-  height = 2000,
+  width = 1600,
+  height = 1000,
+  eager = false,
 }: {
   src: string;
   alt: string;
   caption: React.ReactNode;
   width?: number;
   height?: number;
+  /** the one shot above the fold: lazy-loading it only delays it */
+  eager?: boolean;
 }) {
   return (
     <figure className="mt-6">
@@ -26,7 +29,8 @@ export function Shot({
         alt={alt}
         width={width}
         height={height}
-        loading="lazy"
+        loading={eager ? 'eager' : 'lazy'}
+        fetchPriority={eager ? 'high' : undefined}
         className="w-full rounded border"
       />
       <figcaption className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
@@ -46,7 +50,7 @@ export function DemoVideo({ caption }: { caption: React.ReactNode }) {
     <figure className="mt-6">
       <video
         src="/media/syncle-demo.mp4"
-        poster="/media/demo-poster.png"
+        poster="/media/demo-poster.webp"
         controls
         muted
         loop
