@@ -29,7 +29,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Does it sync in real time, or on a schedule?',
-    a: 'You choose per bridge. CDC reads the database change log directly — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications — so changes arrive without polling. Watch polls a cursor instead, which works on every engine, including SQLite, which has no change log to read. Replay is a one-shot pass for the initial backfill.',
+    a: 'You choose per bridge. CDC reads the database change log directly — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications — so changes arrive without polling. Watch polls a cursor instead, which works on every engine, including SQLite, which has no change log to read. The cursor can be an auto-increment id, a timestamp column, or a diff of the primary keys — so a table with no updated_at column can still be watched. Replay is a one-shot pass for the initial backfill.',
   },
   {
     q: 'Can it duplicate or lose rows?',

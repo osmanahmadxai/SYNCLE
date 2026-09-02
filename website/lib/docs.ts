@@ -60,6 +60,12 @@ export const DOC_PAGES: DocPage[] = [
       'The REST API under /api: authentication, response envelopes, and every endpoint for connections, bridges and jobs.',
   },
   {
+    slug: 'troubleshooting',
+    title: 'Troubleshooting',
+    description:
+      'The failures people actually hit: CDC that never fires, watch bridges that deliver nothing, connections that will not test, and rows that fail.',
+  },
+  {
     slug: 'self-hosting',
     title: 'Self-hosting & security',
     description:
