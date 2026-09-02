@@ -44,7 +44,7 @@ export function DocArticle({
         <p className="mt-5 text-xs text-muted-foreground">
           Found a mistake?{' '}
           <a
-            href={`${GITHUB}/edit/main/syncle-website/${sourcePath}`}
+            href={`${GITHUB}/edit/main/website/${sourcePath}`}
             rel="noopener"
             className="link"
           >
