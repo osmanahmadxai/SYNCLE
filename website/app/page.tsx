@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { CopyCommand } from '@/components/copy-command';
 import { CodeBlock } from '@/components/docs/code-block';
+import { formatReleaseDate, latestRelease } from '@/lib/release';
 import { InstallTranscript } from '@/components/install-transcript';
 import { SiteFooter } from '@/components/site-footer';
 import { SiteHeader } from '@/components/site-header';
@@ -92,6 +93,8 @@ function Section({
 }
 
 export default function Home() {
+  const release = latestRelease();
+
   return (
     <>
       <SiteHeader />
@@ -182,7 +185,10 @@ export default function Home() {
             A bridge is a saved sync path: a source table or query, the columns
             and mapping, the destinations, and a trigger. The trigger is how it
             notices that something changed — there are three, and you pick per
-            bridge. The rest of the pipeline is identical.
+            bridge. The rest of the pipeline is identical. The destination table
+            does not have to exist first: unless you turn it off, Syncle creates
+            it from the source schema on the first write, with the types
+            translated for whichever engine is receiving them.
           </p>
           <div className="mt-5 space-y-4">
             {TRIGGERS.map((t) => (
@@ -196,6 +202,15 @@ export default function Home() {
             alt="The Syncle bridge builder: source table with selectable columns, a live preview of real rows, trigger configuration, the inferred schema and a sample payload"
             caption="Picking the trigger in the builder, with a live preview of what will be sent."
           />
+
+          <p className="mt-5">
+            Choosing CDC checks the source before it lets you continue: whether
+            logical replication is on for Postgres, the binlog is set to row
+            format for MySQL, the Mongo deployment is a replica set, or Redis
+            has keyspace notifications enabled — and when something is missing,
+            it says which setting and what to change it to. You find out at the
+            builder rather than from a bridge that silently never fires.
+          </p>
 
           <p className="mt-5 text-[15px] text-muted-foreground">
             The honest edges: SQLite has no change log, so it syncs by watch
@@ -426,9 +441,18 @@ export default function Home() {
         <Section title="Under the hood">
           <p className="mt-4">
             The first stable release, 1.0.0, shipped on 23 July 2026, after
-            the project grew up under its working name, Data Bridge; there have
-            been releases since — the link below always points at the current
-            one. It is TypeScript throughout: a NestJS API and a Next.js
+            the project grew up under its working name, Data Bridge.{' '}
+            {/* the sentence already names 1.0.0; only add the clause once
+                the changelog has something newer to report */}
+            {release && release.version !== '1.0.0' ? (
+              <>
+                The current release is {release.version}, from{' '}
+                {formatReleaseDate(release.date)}.
+              </>
+            ) : (
+              <>The link below always points at the current release.</>
+            )}{' '}
+            It is TypeScript throughout: a NestJS API and a Next.js
             interface, running as four containers behind one published port,
             keeping their own state in a bundled PostgreSQL and Redis. The
             interface speaks English and Chinese, and the whole thing is MIT
