@@ -1,19 +1,15 @@
 import { cookies } from 'next/headers';
 import { getRequestConfig } from 'next-intl/server';
+import { defaultLocale, isLocale, locales } from './locales';
 
-// Supported UI locales. Chinese is the default so the app shows 中文 out of the
-// box; the language toggle writes a `NEXT_LOCALE` cookie to switch.
-export const locales = ['zh', 'en'] as const;
-export type Locale = (typeof locales)[number];
-export const defaultLocale: Locale = 'en';
+// Which locales exist is derived from src/messages/ — see ./locales.ts. The
+// language toggle writes a `NEXT_LOCALE` cookie to switch between them.
+export { defaultLocale, locales };
 
 export default getRequestConfig(async () => {
   const store = await cookies();
   const cookieLocale = store.get('NEXT_LOCALE')?.value;
-  const locale: Locale =
-    cookieLocale && (locales as readonly string[]).includes(cookieLocale)
-      ? (cookieLocale as Locale)
-      : defaultLocale;
+  const locale = isLocale(cookieLocale) ? (cookieLocale as string) : defaultLocale;
 
   return {
     locale,
