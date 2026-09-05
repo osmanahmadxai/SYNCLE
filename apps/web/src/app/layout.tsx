@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 import { Providers } from '@/components/providers';
+import { LocaleListProvider } from '@/i18n/locale-list';
+import { locales } from '@/i18n/locales';
 import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
@@ -22,8 +24,10 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning>
       <body className="bg-background text-foreground h-screen overflow-hidden antialiased">
         <NextIntlClientProvider messages={messages}>
-          <Providers>{children}</Providers>
-          <Toaster position="bottom-right" richColors />
+          <LocaleListProvider locales={locales}>
+            <Providers>{children}</Providers>
+            <Toaster position="bottom-right" richColors />
+          </LocaleListProvider>
         </NextIntlClientProvider>
       </body>
     </html>

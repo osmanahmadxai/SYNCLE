@@ -10,9 +10,7 @@
     "test": "Test"
   },
   "lang": {
-    "ariaLabel": "Switch language",
-    "en": "EN",
-    "zh": "中文"
+    "ariaLabel": "Switch language"
   },
   "theme": {
     "toggle": "Toggle theme"
