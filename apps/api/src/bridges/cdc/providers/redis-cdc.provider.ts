@@ -35,6 +35,22 @@ import type {
  * note `expire` (setting a TTL, key still live) is NOT here — only `expired`
  * (the TTL actually fired and removed the key) is a delete.
  */
+/** one keyspace notification waiting for its value to be read */
+interface PendingEvent {
+  key: string;
+  event: string;
+  isDelete: boolean;
+  op: CdcOperation;
+  cursor: string;
+}
+
+/**
+ * Keys whose values are fetched in one pipeline. Large enough that the round
+ * trip stops dominating, small enough that a burst does not build a reply the
+ * size of the keyspace before anything is delivered.
+ */
+const READ_BATCH = 512;
+
 const DELETE_EVENTS = new Set(['del', 'unlink', 'expired', 'evicted']);
 
 @Injectable()
@@ -167,17 +183,50 @@ export class RedisCdcProvider implements CdcProvider {
 
     const sub = this.newClient(conn); // subscriber connection (no normal commands)
     const reader = this.newClient(conn); // best-effort value reader
+    let stopped = false;
     await sub.connect();
     await reader.connect();
 
     let seq = 0;
     sub.on('error', (err: Error) => handlers.onError(err));
 
-    // admission chain: events must enter the pipeline in pmessage arrival
-    // order. buildRow awaits TYPE+GET for writes but resolves instantly for
-    // deletes, so firing them unchained lets a DEL overtake the SET before it
-    // and the destination applies delete-then-upsert, resurrecting the key
-    let chain: Promise<void> = Promise.resolve();
+    // Events must enter the pipeline in pmessage arrival order — a DEL that
+    // overtook the SET before it would have the destination apply
+    // delete-then-upsert and resurrect the key. So arrivals queue, and the
+    // drain loop reads and delivers them strictly in order.
+    //
+    // What the queue buys is batching the READS. A notification carries only
+    // the key, so each change needs a round trip to fetch its value, and doing
+    // that one event at a time — while also waiting for each delivery — is what
+    // made this source an order of magnitude slower than the others. One
+    // pipeline now covers a whole batch of keys.
+    const pending: PendingEvent[] = [];
+    let draining = false;
+
+    const drain = async (): Promise<void> => {
+      if (draining) return;
+      draining = true;
+      try {
+        while (pending.length > 0 && !stopped) {
+          const batch = pending.splice(0, READ_BATCH);
+          const rows = await this.buildRows(reader, batch);
+          for (let i = 0; i < batch.length; i++) {
+            const item = batch[i]!;
+            await handlers.onChange({
+              op: item.op,
+              row: rows[i] ?? { key: item.key, event: item.event },
+              cursor: item.cursor,
+            });
+          }
+        }
+      } catch (err) {
+        handlers.onError(err as Error);
+      } finally {
+        draining = false;
+        // anything that arrived while the last batch was in flight
+        if (pending.length > 0 && !stopped) void drain();
+      }
+    };
 
     sub.on('pmessage', (_pattern: string, channel: string, key: string) => {
       // channel: __keyevent@<db>__:<event>   message: <key>
@@ -189,24 +238,87 @@ export class RedisCdcProvider implements CdcProvider {
       const op: CdcOperation = isDelete ? 'delete' : 'update';
       const cursor = `${Date.now()}:${seq++}`; // synthetic, non-durable
 
-      // resolve the value off the subscriber socket, but chained: each event's
-      // read AND delivery complete before the next event's read begins
-      chain = chain
-        .then(async () => {
-          const row = await this.buildRow(reader, key, event, isDelete);
-          await handlers.onChange({ op, row, cursor });
-        })
-        .catch((err) => handlers.onError(err as Error));
+      pending.push({ key, event, isDelete, op, cursor });
+      void drain();
     });
 
     await sub.psubscribe(`__keyevent@${db}__:*`);
 
     return {
       stop: async () => {
+        stopped = true;
         sub.disconnect();
         reader.disconnect();
       },
     };
+  }
+
+  /**
+   * Values for a whole batch of changed keys, in one round trip.
+   *
+   * TYPE and GET are issued together for every non-deleted key. Strings — which
+   * is nearly everything in practice — are then complete; the other container
+   * types need a second, targeted read, which is why they are collected and
+   * fetched afterwards rather than pessimising the common case.
+   */
+  private async buildRows(
+    reader: Redis,
+    items: PendingEvent[],
+  ): Promise<Array<Record<string, unknown>>> {
+    const rows: Array<Record<string, unknown>> = items.map((i) => ({
+      key: i.key,
+      event: i.event,
+    }));
+
+    const probe = reader.pipeline();
+    const probed: number[] = [];
+    items.forEach((item, i) => {
+      if (item.isDelete) return; // the value is already gone
+      probe.type(item.key);
+      probe.get(item.key);
+      probed.push(i);
+    });
+    if (probed.length === 0) return rows;
+
+    const replies = await probe.exec();
+    const needsSecondRead: Array<{ index: number; type: string }> = [];
+
+    probed.forEach((rowIndex, n) => {
+      const typeReply = replies?.[n * 2];
+      const getReply = replies?.[n * 2 + 1];
+      const type = String(typeReply?.[1] ?? '');
+      if (!type || type === 'none') return; // vanished between event and read
+      if (type === 'string') {
+        rows[rowIndex] = {
+          ...rows[rowIndex],
+          type,
+          value: getReply?.[0] ? null : ((getReply?.[1] as string | null) ?? null),
+        };
+        return;
+      }
+      rows[rowIndex] = { ...rows[rowIndex], type };
+      needsSecondRead.push({ index: rowIndex, type });
+    });
+
+    // containers are rare; one more pipeline covers all of them
+    if (needsSecondRead.length > 0) {
+      const second = reader.pipeline();
+      for (const { index, type } of needsSecondRead) {
+        const key = items[index]!.key;
+        if (type === 'hash') second.hgetall(key);
+        else if (type === 'list') second.lrange(key, 0, -1);
+        else if (type === 'set') second.smembers(key);
+        else if (type === 'zset') second.zrange(key, 0, -1, 'WITHSCORES');
+        else second.get(key);
+      }
+      const secondReplies = await second.exec();
+      needsSecondRead.forEach(({ index }, n) => {
+        const reply = secondReplies?.[n];
+        if (!reply?.[0]) rows[index] = { ...rows[index], value: reply?.[1] };
+      });
+    }
+
+    return rows;
   }
 
   /** best-effort read of the current value for a changed key */
@@ -219,10 +331,29 @@ export class RedisCdcProvider implements CdcProvider {
     const base = { key, event };
     if (isDelete) return base; // value's gone
     try {
-      const type = await reader.type(key);
+      // TYPE and GET go together in one pipeline rather than one after the
+      // other. A notification carries only the key, so every change costs a
+      // round trip to find out what it is and another to read it — and that,
+      // not Redis, is what limits this source. Strings are the overwhelmingly
+      // common case, so speculatively reading one alongside the TYPE halves
+      // the cost for them; other types still pay the second read below.
+      const [typeRes, getRes] = await reader
+        .pipeline()
+        .type(key)
+        .get(key)
+        .exec()
+        .then((r) => [r?.[0], r?.[1]] as const);
+
+      const type = String(typeRes?.[1] ?? '');
       switch (type) {
         case 'string':
-          return { ...base, type, value: await reader.get(key) };
+          // GET already came back in the same round trip; only fall back to a
+          // second read if the pipeline reported an error for it
+          return {
+            ...base,
+            type,
+            value: getRes?.[0] ? await reader.get(key) : (getRes?.[1] as string | null),
+          };
         case 'hash':
           return { ...base, type, value: await reader.hgetall(key) };
         case 'list':

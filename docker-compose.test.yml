@@ -72,12 +72,25 @@ services:
     # members' host:port, and clients reconnect to whatever it advertises. With
     # a remapped port the driver would discover 127.0.0.1:27017 and dial the
     # wrong place from the host, so keep these two numbers the same.
-    command: ['--replSet', 'rs0', '--bind_ip_all', '--port', '57017']
+    # An explicit WiredTiger cache: the default takes half the HOST's RAM,
+    # which on a shared Docker VM running four engines gets the container
+    # OOM-killed under a large benchmark rather than simply evicting.
+    command:
+      - '--replSet'
+      - 'rs0'
+      - '--bind_ip_all'
+      - '--port'
+      - '57017'
+      - '--wiredTigerCacheSizeGB'
+      - '1'
     ports: ['127.0.0.1:57017:57017']
     # NOT tmpfs, unlike the others. A RAM-backed data directory cannot hold a
     # million documents plus their indexes, and the container gets OOM-killed
     # part way through a benchmark. The volume is still disposable.
     volumes: ['syncle-test-mongo:/data/db']
+    # 2g was not enough for million-document collections and the container
+    # was OOM-killed mid-run; the cache below keeps it from simply growing
+    mem_limit: 3g
     healthcheck:
       test:
         ['CMD', 'mongosh', '--port', '57017', '--quiet', '--eval', 'db.adminCommand("ping").ok']

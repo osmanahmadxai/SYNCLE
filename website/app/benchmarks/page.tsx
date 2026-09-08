@@ -33,6 +33,51 @@ function Detail({ detail }: { detail: BenchResult['detail'] }) {
   );
 }
 
+
+/**
+ * A suite whose scenarios are all "Source → Destination" reads far better as a
+ * grid than as twenty rows: the engine pairs are a matrix, and a matrix shows
+ * at a glance which combinations are fast and which are not.
+ */
+function asMatrix(results: BenchResult[]): {
+  sources: string[];
+  dests: string[];
+  cell: (s: string, d: string) => BenchResult | undefined;
+} | null {
+  const parsed = results.map((r) => {
+    const m = /^(.+?)\s*→\s*(.+?)(?:\s*·.*)?$/.exec(r.scenario);
+    return m ? { source: m[1].trim(), dest: m[2].trim(), r } : null;
+  });
+  if (parsed.some((p) => p === null) || parsed.length < 4) return null;
+  const rows = parsed as Array<{ source: string; dest: string; r: BenchResult }>;
+  const sources = [...new Set(rows.map((x) => x.source))];
+  const dests = [...new Set(rows.map((x) => x.dest))];
+  // only a reasonably filled grid is clearer as a grid
+  if (sources.length < 2 || dests.length < 2) return null;
+  return {
+    sources,
+    dests,
+    cell: (src, dst) => rows.find((x) => x.source === src && x.dest === dst)?.r,
+  };
+}
+
+/** rows/sec, coloured by magnitude so the shape of the grid reads instantly */
+function Rate({ result }: { result?: BenchResult }) {
+  if (!result) return <span className="text-muted-foreground/50">—</span>;
+  const v = result.rowsPerSec;
+  const tone =
+    v >= 50_000
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : v >= 10_000
+        ? 'text-foreground'
+        : 'text-amber-600 dark:text-amber-400';
+  return (
+    <span className={`font-semibold tabular-nums ${tone}`}>
+      {formatNumber(v)}
+    </span>
+  );
+}
+
 export default function BenchmarksPage() {
   const report = loadBenchmarks();
 
@@ -116,7 +161,55 @@ export default function BenchmarksPage() {
                   {suite.description}
                 </p>
 
-                <div className="mt-5 overflow-x-auto">
+                {(() => {
+                  const matrix = asMatrix(suite.results);
+                  if (!matrix) return null;
+                  return (
+                    <div className="mt-5 overflow-x-auto">
+                      <table className="w-full min-w-[40rem] border-collapse text-sm">
+                        <caption className="caption-bottom pt-3 text-left text-xs text-muted-foreground">
+                          Rows per second, source down the side, destination
+                          across the top. Every run was verified complete and
+                          duplicate-free before its time was recorded.
+                        </caption>
+                        <thead>
+                          <tr className="border-b text-left">
+                            <th className="py-2 pr-4 font-medium">
+                              Source \ Destination
+                            </th>
+                            {matrix.dests.map((d) => (
+                              <th key={d} className="py-2 pr-4 text-right font-medium">
+                                {d}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {matrix.sources.map((src) => (
+                            <tr key={src} className="border-b">
+                              <td className="py-3 pr-4 font-medium">{src}</td>
+                              {matrix.dests.map((d) => {
+                                const cell = matrix.cell(src, d);
+                                return (
+                                  <td key={d} className="py-3 pr-4 text-right">
+                                    <Rate result={cell} />
+                                    {cell ? (
+                                      <div className="text-xs text-muted-foreground">
+                                        {formatNumber(cell.rows)} rows
+                                      </div>
+                                    ) : null}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+
+                <div className={`mt-5 overflow-x-auto${asMatrix(suite.results) ? ' hidden' : ''}`}>
                   <table className="w-full min-w-[40rem] border-collapse text-sm">
                     <thead>
                       <tr className="border-b text-left">
