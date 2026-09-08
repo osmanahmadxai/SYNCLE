@@ -6,6 +6,42 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Redis bridges got a great deal faster, in both directions.
+
+### Changed
+
+- **Writing into Redis** no longer costs a round trip per row. The adapter
+  issued one `SET` per row with no pipelining, so a batch of a thousand rows
+  was a thousand round trips. A pipeline sends the batch as one write and reads
+  one reply. Measured against a million rows, a Redis destination now takes
+  around 90,000 to 110,000 rows/sec depending on the source.
+- **Reading from Redis** is roughly twenty times faster: about 2,000 rows/sec
+  before, 21,000 to 50,000 now.
+
+  A keyspace notification carries only the key, so every change needed a round
+  trip to learn its type and another to read its value — and those ran one
+  event at a time, each waiting for the previous event's delivery before its own
+  read could begin. Events now queue and drain in batches, with one pipeline
+  covering a whole batch's reads. Arrival order is unchanged, which is the part
+  that matters: a delete still cannot overtake the write before it and
+  resurrect a key.
+
+  This does not make Redis a durable source. Keyspace notifications remain
+  fire-and-forget with no backlog; the change only shrinks the window in which
+  events pile up unread. A watch bridge is still the right choice where losing
+  events is unacceptable.
+
+### Added
+
+- The benchmark suite covers every engine as a source and every engine as a
+  destination — twenty pairs, a million rows each — rather than the three
+  engines it started with. Results at
+  [syncle.dev/benchmarks](https://syncle.dev/benchmarks), rendered as a
+  source-by-destination grid.
+- An integration suite covering all twenty pairs against real engines, checking
+  the values that arrive rather than the row count, since a mapping that
+  transposed two columns would pass a count check.
+
 ## [1.3.0] - 2026-09-08
 
 Syncing got about four times faster, and there are now real numbers for it.
