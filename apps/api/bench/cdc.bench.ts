@@ -50,6 +50,13 @@ const LABEL: Record<string, string> = {
 const MODE = (process.env.BENCH_MODE ?? 'batched') as 'batched' | 'spool';
 const ROWS = Number(process.env.BENCH_ROWS ?? 1_000_000);
 const CHUNK = 25_000;
+/**
+ * Redis as a source is capped separately. Keyspace notifications are
+ * fire-and-forget with no backlog, so beyond some rate the server discards what
+ * the subscriber has not taken yet — and a benchmark that silently loses events
+ * is measuring nothing. Raise it to find where that point is on your hardware.
+ */
+const REDIS_SOURCE_ROWS = Number(process.env.BENCH_REDIS_ROWS ?? 1_000_000);
 
 let app: AppHandle;
 let mongo: MongoClient | null = null;
@@ -262,7 +269,8 @@ describe(`cdc throughput — ${MODE}`, () => {
   for (const source of SOURCES) {
     for (const dest of DESTS) {
       it(`${source} to ${dest}`, async () => {
-        const rows = source === 'redis' ? Math.min(ROWS, 100_000) : ROWS;
+        const rows =
+          source === 'redis' ? Math.min(ROWS, REDIS_SOURCE_ROWS) : ROWS;
         await measure(
           source,
           dest,

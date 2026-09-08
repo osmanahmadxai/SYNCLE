@@ -88,7 +88,9 @@ services:
     # million documents plus their indexes, and the container gets OOM-killed
     # part way through a benchmark. The volume is still disposable.
     volumes: ['syncle-test-mongo:/data/db']
-    mem_limit: 2g
+    # 2g was not enough for million-document collections and the container
+    # was OOM-killed mid-run; the cache below keeps it from simply growing
+    mem_limit: 3g
     healthcheck:
       test:
         ['CMD', 'mongosh', '--port', '57017', '--quiet', '--eval', 'db.adminCommand("ping").ok']

@@ -14,18 +14,67 @@ class FakeSub extends EventEmitter {
   disconnect(): void {}
 }
 
-/** value reader whose TYPE/GET round-trips take real (fake) time */
+/**
+ * Value reader whose round-trips take real (fake) time.
+ *
+ * The provider reads values through a PIPELINE — one round trip covering a
+ * whole batch of keys — so the double models that rather than single commands.
+ * `exec` keeps the delay that opens the window a DEL used to slip through, so
+ * the ordering tests still exercise the race they were written for.
+ */
 class FakeReader {
   constructor(private readonly values: Map<string, string>) {}
   async connect(): Promise<void> {}
   disconnect(): void {}
+
   async type(key: string): Promise<string> {
-    await delay(15); // the window the DEL used to slip through
+    await delay(15);
     return this.values.has(key) ? 'string' : 'none';
   }
   async get(key: string): Promise<string | null> {
     await delay(5);
     return this.values.get(key) ?? null;
+  }
+
+  pipeline(): FakePipeline {
+    return new FakePipeline(this.values);
+  }
+}
+
+/** the subset of ioredis's pipeline the provider uses */
+class FakePipeline {
+  private readonly queued: Array<() => unknown> = [];
+  constructor(private readonly values: Map<string, string>) {}
+
+  type(key: string): this {
+    this.queued.push(() => (this.values.has(key) ? 'string' : 'none'));
+    return this;
+  }
+  get(key: string): this {
+    this.queued.push(() => this.values.get(key) ?? null);
+    return this;
+  }
+  hgetall(key: string): this {
+    this.queued.push(() => ({ value: this.values.get(key) ?? null }));
+    return this;
+  }
+  lrange(key: string): this {
+    this.queued.push(() => [this.values.get(key) ?? null]);
+    return this;
+  }
+  smembers(key: string): this {
+    this.queued.push(() => [this.values.get(key) ?? null]);
+    return this;
+  }
+  zrange(key: string): this {
+    this.queued.push(() => [this.values.get(key) ?? null]);
+    return this;
+  }
+
+  /** ioredis shape: one [error, result] pair per queued command, in order */
+  async exec(): Promise<Array<[Error | null, unknown]>> {
+    await delay(15);
+    return this.queued.map((run) => [null, run()] as [Error | null, unknown]);
   }
 }
 
