@@ -16,6 +16,8 @@ import {
   bootstrapApp,
   connectionFor,
   makeBridge,
+  rowsFor,
+  writeSourceRows,
   type AppHandle,
 } from '../test/integration/app-harness';
 import { TEST_CONNECTIONS, waitFor, withAdapter } from '../test/integration/harness';
@@ -30,9 +32,20 @@ import {
   type BenchResult,
 } from './harness';
 
-type Engine = 'postgres' | 'mysql';
+type Engine = 'postgres' | 'mysql' | 'mongodb' | 'redis';
 /** destinations use their own databases — see TEST_CONNECTIONS for why */
-type Dest = 'postgres_dest' | 'mysql_dest' | 'mongodb';
+type Dest = 'postgres_dest' | 'mysql_dest' | 'mongodb' | 'sqlite' | 'redis_dest';
+
+const LABEL: Record<string, string> = {
+  postgres: 'PostgreSQL',
+  postgres_dest: 'PostgreSQL',
+  mysql: 'MySQL',
+  mysql_dest: 'MySQL',
+  mongodb: 'MongoDB',
+  sqlite: 'SQLite',
+  redis: 'Redis',
+  redis_dest: 'Redis',
+};
 
 const MODE = (process.env.BENCH_MODE ?? 'batched') as 'batched' | 'spool';
 const ROWS = Number(process.env.BENCH_ROWS ?? 1_000_000);
@@ -69,7 +82,18 @@ afterAll(async () => {
   await mongo?.close().catch(() => undefined);
   await app?.ctx.close().catch(() => undefined);
   publishSuite(
-    {
+    MODE === 'spool'
+      ? {
+          id: 'cdc-spool',
+          name: 'With the durable spool',
+          description:
+            'The same sync, with SYNCLE_CDC_SPOOL=on. Changes go to a Redis ' +
+            'stream first and the source is acknowledged as soon as they are ' +
+            'durably spooled, so a slow destination cannot hold the source’s ' +
+            'log open. It costs throughput; that is the trade it exists to make.',
+          results,
+        }
+      : {
       id: 'cdc-throughput',
       name: 'Change data capture, end to end',
       description:
@@ -86,7 +110,12 @@ afterAll(async () => {
 });
 
 /** run one source → destination pass and record it */
-async function measure(source: Engine, dest: Dest, label: string): Promise<void> {
+async function measure(
+  source: Engine,
+  dest: Dest,
+  label: string,
+  rowCount: number = ROWS,
+): Promise<void> {
   console.log(`  → ${label}: preparing bridge…`);
   const srcConn = await connectionFor(app, source);
   const dstConn = await connectionFor(app, dest);
@@ -130,6 +159,12 @@ async function measure(source: Engine, dest: Dest, label: string): Promise<void>
   const landedCount = async (): Promise<number> => {
     try {
       if (dest === 'mongodb') return await mongoCount(s.destTable);
+      if (dest === 'redis_dest') {
+        // { command, reply } — the count is the reply, not the first value
+        const res = await probe.query('DBSIZE');
+        const row = res.rows[0] as { reply?: unknown } | undefined;
+        return Number(row?.reply ?? 0);
+      }
       const q = dest.startsWith('mysql') ? '`' : '"';
       const res = await probe.query(`SELECT COUNT(*) AS c FROM ${q}${s.destTable}${q}`);
       return Number(Object.values(res.rows[0] ?? {})[0] ?? 0);
@@ -138,23 +173,21 @@ async function measure(source: Engine, dest: Dest, label: string): Promise<void>
     }
   };
 
-  console.log(`  → ${label}: writing ${ROWS} rows…`);
+  // Redis rows land as bare keys, so the key count is the row count — flush
+  // first or a previous scenario's keys would be counted as this one's
+  if (dest === 'redis_dest') {
+    await withAdapter('redis_dest', (a) => a.query('FLUSHDB'));
+  }
+
+  console.log(`  → ${label}: writing ${rowCount} rows…`);
   const started = performance.now();
-  for (let start = 0; start < ROWS; start += CHUNK) {
-    const size = Math.min(CHUNK, ROWS - start);
-    await withAdapter(source, (a) =>
-      a.insertRows!({
-        table: s.sourceTable,
-        rows: Array.from({ length: size }, (_, i) => ({
-          id: start + i + 1,
-          name: `row-${start + i}`,
-        })),
-      }),
-    );
+  for (let start = 0; start < rowCount; start += CHUNK) {
+    const size = Math.min(CHUNK, rowCount - start);
+    await writeSourceRows(source, s.sourceTable, rowsFor(source, size, start));
   }
   await waitFor(
-    `${ROWS} rows to reach ${dest}`,
-    async () => ((await landedCount()) === ROWS ? true : null),
+    `${rowCount} rows to reach ${dest}`,
+    async () => ((await landedCount()) === rowCount ? true : null),
     // Mongo's estimate updates lazily, and every poll is a round trip; a
     // slower cadence measures the pipeline rather than the polling
     { timeoutMs: 3_000_000, intervalMs: dest === 'mongodb' ? 1_000 : 100 },
@@ -167,15 +200,15 @@ async function measure(source: Engine, dest: Dest, label: string): Promise<void>
   const landed =
     dest === 'mongodb' ? await mongoCount(s.destTable, true) : await landedCount();
   await probe.close().catch(() => undefined);
-  if (landed !== ROWS) throw new Error(`expected ${ROWS} rows, found ${landed}`);
+  if (landed !== rowCount) throw new Error(`expected ${rowCount} rows, found ${landed}`);
 
   const detail: Record<string, string | number> = {
     verified: `${landed} rows, exactly once`,
     ...resourceDetail(usage, [source, dest]),
   };
   if (spool) detail['peak spool depth'] = peakSpool;
-  results.push(makeResult(label, ROWS, ms, detail));
-  console.log(`  ✓ ${label}: ${ROWS} rows in ${ms}ms (${Math.round(ROWS / (ms / 1000))}/s)`);
+  results.push(makeResult(label, rowCount, ms, detail));
+  console.log(`  ✓ ${label}: ${rowCount} rows in ${ms}ms (${Math.round(rowCount / (ms / 1000))}/s)`);
 
   // Stop this bridge before the next scenario starts. A stream left running
   // keeps decoding its source's log, so without this each scenario competes
@@ -183,29 +216,61 @@ async function measure(source: Engine, dest: Dest, label: string): Promise<void>
   // rather than throughput.
   await app.cdc.stop(s.bridgeId).catch(() => undefined);
   await app.cdc.cleanup(s.bridgeId).catch(() => undefined);
+
+  // And drop the data. Twenty scenarios of a million rows each, all left in
+  // place until the end of the run, is tens of millions of rows sitting in
+  // engines that share one host — it exhausted MongoDB's memory and had it
+  // OOM-killed mid-run. Dropping here also keeps each measurement independent
+  // of how much the scenarios before it left behind.
+  await withAdapter(source, (a) => a.dropTable(s.sourceTable)).catch(() => undefined);
+  if (dest === 'redis_dest') {
+    await withAdapter(dest, (a) => a.query('FLUSHDB')).catch(() => undefined);
+  } else {
+    await withAdapter(dest, (a) => a.dropTable(s.destTable)).catch(() => undefined);
+  }
 }
 
 describe(`cdc throughput — ${MODE}`, () => {
   if (MODE === 'spool') {
     it('postgres to postgres through the durable spool', async () => {
-      await measure('postgres', 'postgres_dest', 'PostgreSQL → PostgreSQL · batched + durable spool');
+      await measure('postgres', 'postgres_dest', 'PostgreSQL → PostgreSQL');
     });
     return;
   }
 
-  it('postgres to postgres', async () => {
-    await measure('postgres', 'postgres_dest', 'PostgreSQL → PostgreSQL · batched');
-  });
+  /**
+   * Every source engine against every destination engine.
+   *
+   * SQLite is a destination only: it has no change-capture path for external
+   * writers, so it cannot drive a bridge.
+   *
+   * Redis as a SOURCE rides keyspace notifications, which are fire-and-forget
+   * pub/sub with no backlog — under a firehose the server drops what the
+   * subscriber has not taken yet. It is therefore measured at a lower volume,
+   * and the figure says what that path can carry rather than pretending it is
+   * comparable to a durable log.
+   */
+  const SOURCES: Engine[] = ['postgres', 'mysql', 'mongodb', 'redis'];
+  const DESTS: Dest[] = [
+    'postgres_dest',
+    'mysql_dest',
+    'mongodb',
+    'sqlite',
+    'redis_dest',
+  ];
 
-  it('postgres to mysql', async () => {
-    await measure('postgres', 'mysql_dest', 'PostgreSQL → MySQL · batched');
-  });
+  for (const source of SOURCES) {
+    for (const dest of DESTS) {
+      it(`${source} to ${dest}`, async () => {
+        const rows = source === 'redis' ? Math.min(ROWS, 100_000) : ROWS;
+        await measure(
+          source,
+          dest,
+          `${LABEL[source]} → ${LABEL[dest]}`,
+          rows,
+        );
+      });
+    }
+  }
 
-  it('mysql to postgres', async () => {
-    await measure('mysql', 'postgres_dest', 'MySQL → PostgreSQL · batched');
-  });
-
-  it('postgres to mongodb', async () => {
-    await measure('postgres', 'mongodb', 'PostgreSQL → MongoDB · batched');
-  });
 });

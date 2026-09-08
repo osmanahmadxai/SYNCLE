@@ -15,11 +15,14 @@ import type {
   DatabaseAdapter,
   DatabaseSchema,
   DeleteRowParams,
+  DeleteRowsParams,
   InsertRowParams,
+  InsertRowsParams,
   QueryResult,
   RestoreResult,
   UpdateRowParams,
   UpsertRowParams,
+  UpsertRowsParams,
 } from '../types';
 import {
   BadRequestError,
@@ -304,6 +307,56 @@ export class RedisAdapter implements DatabaseAdapter {
   /** a SET is already idempotent, so upsert is just insert by key */
   async upsertRow(p: UpsertRowParams): Promise<QueryResult> {
     return this.insertRow({ table: p.table, schema: p.schema, values: p.values });
+  }
+
+  /* ----- set-based writes -------------------------------------------------
+   * Without these the sink issues one SET per row, which is a round trip per
+   * row — the thing that sets the ceiling on a change stream. A pipeline sends
+   * the whole batch as one write and reads one reply, so the cost per row stops
+   * being a round trip and becomes a few bytes.
+   */
+
+  /** the pipeline shared by every batched write; `SET` is already idempotent */
+  private async pipelineWrite(
+    rows: Array<Record<string, unknown>>,
+  ): Promise<QueryResult> {
+    if (rows.length === 0) return writeResult(0, 'pipeline');
+    const client = this.getClient();
+    if (client.status !== 'ready') await client.connect().catch(() => {});
+    const pipeline = client.pipeline();
+    for (const values of rows) {
+      const key = String(values.key ?? '');
+      if (!key) throw new QueryError('A "key" value is required');
+      pipeline.set(key, String(values.value ?? ''));
+    }
+    const results = await pipeline.exec();
+    // a pipeline reports per-command errors rather than throwing; surface the
+    // first one instead of silently reporting every row as written
+    const failed = results?.find(([err]) => err);
+    if (failed?.[0]) throw new QueryError(failed[0].message);
+    return writeResult(rows.length, 'pipeline set');
+  }
+
+  async insertRows(p: InsertRowsParams): Promise<QueryResult> {
+    return this.pipelineWrite(p.rows);
+  }
+
+  async upsertRows(p: UpsertRowsParams): Promise<QueryResult> {
+    // SET overwrites, so an upsert and an insert are the same operation here
+    return this.pipelineWrite(p.rows);
+  }
+
+  async deleteRows(p: DeleteRowsParams): Promise<QueryResult> {
+    if (p.identities.length === 0) return writeResult(0, 'pipeline');
+    const client = this.getClient();
+    if (client.status !== 'ready') await client.connect().catch(() => {});
+    const keys = p.identities
+      .map((identity) => String(identity.key ?? ''))
+      .filter((k) => k.length > 0);
+    if (keys.length === 0) return writeResult(0, 'del');
+    // DEL takes many keys in one command, so this needs no pipeline at all
+    const removed = await client.del(...keys);
+    return writeResult(removed, 'del');
   }
 
   /**

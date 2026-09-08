@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-07T11:01:33.287Z",
+  "generatedAt": "2026-09-08T05:54:32.821Z",
   "configuration": {
     "Rows per delivery": "100,000 (SYNCLE_CDC_BATCH_SIZE)",
     "Batch byte ceiling": "64 MB (SYNCLE_CDC_BATCH_BYTES)",
@@ -22,71 +22,272 @@
   },
   "suites": [
     {
+      "id": "cdc-spool",
+      "name": "With the durable spool",
+      "description": "The same sync, with SYNCLE_CDC_SPOOL=on. Changes go to a Redis stream first and the source is acknowledged as soon as they are durably spooled, so a slow destination cannot hold the source’s log open. It costs throughput; that is the trade it exists to make.",
+      "results": [
+        {
+          "scenario": "PostgreSQL → PostgreSQL",
+          "rows": 1000000,
+          "ms": 32237,
+          "rowsPerSec": 31020,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "255% / 32%",
+            "syncle memory (peak)": "678 MB",
+            "pg cpu / memory (peak)": "194% / 1361 MB",
+            "peak spool depth": 69629
+          }
+        }
+      ]
+    },
+    {
       "id": "cdc-throughput",
       "name": "Change data capture, end to end",
       "description": "A row is committed on the source, picked up from that database’s own change log (Postgres logical replication, MySQL binlog) and written to the destination. Timing starts when the writes begin and stops when the last row has landed, so it includes reading the log, delivery and the destination write. Every run is verified complete and duplicate-free before its time is recorded.",
       "results": [
         {
-          "scenario": "PostgreSQL → PostgreSQL · batched",
+          "scenario": "PostgreSQL → PostgreSQL",
           "rows": 1000000,
-          "ms": 15938,
-          "rowsPerSec": 62743,
+          "ms": 16612,
+          "rowsPerSec": 60197,
           "detail": {
             "verified": "1000000 rows, exactly once",
-            "syncle cpu (peak / avg)": "221% / 26%",
-            "syncle memory (peak)": "249 MB",
-            "pg cpu / memory (peak)": "176% / 1335 MB"
+            "syncle cpu (peak / avg)": "221% / 24%",
+            "syncle memory (peak)": "251 MB",
+            "pg cpu / memory (peak)": "216% / 1336 MB"
           }
         },
         {
-          "scenario": "PostgreSQL → MySQL · batched",
+          "scenario": "PostgreSQL → MySQL",
           "rows": 1000000,
-          "ms": 11130,
-          "rowsPerSec": 89847,
+          "ms": 17940,
+          "rowsPerSec": 55741,
           "detail": {
             "verified": "1000000 rows, exactly once",
-            "syncle cpu (peak / avg)": "205% / 46%",
-            "syncle memory (peak)": "287 MB",
-            "pg cpu / memory (peak)": "88% / 1420 MB",
-            "mysql cpu / memory (peak)": "53% / 1760 MB"
+            "syncle cpu (peak / avg)": "217% / 31%",
+            "syncle memory (peak)": "343 MB",
+            "pg cpu / memory (peak)": "138% / 1279 MB",
+            "mysql cpu / memory (peak)": "65% / 2235 MB"
           }
         },
         {
-          "scenario": "MySQL → PostgreSQL · batched",
+          "scenario": "PostgreSQL → MongoDB",
           "rows": 1000000,
-          "ms": 11391,
-          "rowsPerSec": 87789,
+          "ms": 48204,
+          "rowsPerSec": 20745,
           "detail": {
             "verified": "1000000 rows, exactly once",
-            "syncle cpu (peak / avg)": "224% / 29%",
-            "syncle memory (peak)": "369 MB",
-            "pg cpu / memory (peak)": "127% / 1609 MB",
-            "mysql cpu / memory (peak)": "82% / 1838 MB"
+            "syncle cpu (peak / avg)": "209% / 11%",
+            "syncle memory (peak)": "313 MB",
+            "pg cpu / memory (peak)": "86% / 1287 MB"
           }
         },
         {
-          "scenario": "PostgreSQL → MongoDB · batched",
+          "scenario": "PostgreSQL → SQLite",
           "rows": 1000000,
-          "ms": 46893,
-          "rowsPerSec": 21325,
+          "ms": 8404,
+          "rowsPerSec": 118991,
           "detail": {
             "verified": "1000000 rows, exactly once",
-            "syncle cpu (peak / avg)": "258% / 10%",
-            "syncle memory (peak)": "288 MB",
-            "pg cpu / memory (peak)": "105% / 1820 MB"
+            "syncle cpu (peak / avg)": "182% / 73%",
+            "syncle memory (peak)": "293 MB",
+            "pg cpu / memory (peak)": "121% / 1282 MB"
           }
         },
         {
-          "scenario": "PostgreSQL → PostgreSQL · batched + durable spool",
+          "scenario": "PostgreSQL → Redis",
           "rows": 1000000,
-          "ms": 21108,
-          "rowsPerSec": 47375,
+          "ms": 9531,
+          "rowsPerSec": 104921,
           "detail": {
             "verified": "1000000 rows, exactly once",
-            "syncle cpu (peak / avg)": "266% / 51%",
-            "syncle memory (peak)": "527 MB",
-            "pg cpu / memory (peak)": "138% / 1616 MB",
-            "peak spool depth": 83789
+            "syncle cpu (peak / avg)": "315% / 102%",
+            "syncle memory (peak)": "491 MB",
+            "pg cpu / memory (peak)": "129% / 1294 MB",
+            "redis cpu / memory (peak)": "129% / 285 MB"
+          }
+        },
+        {
+          "scenario": "MySQL → PostgreSQL",
+          "rows": 1000000,
+          "ms": 12043,
+          "rowsPerSec": 83036,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "244% / 28%",
+            "syncle memory (peak)": "401 MB",
+            "pg cpu / memory (peak)": "88% / 1277 MB",
+            "mysql cpu / memory (peak)": "78% / 2289 MB"
+          }
+        },
+        {
+          "scenario": "MySQL → MySQL",
+          "rows": 1000000,
+          "ms": 8345,
+          "rowsPerSec": 119832,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "286% / 49%",
+            "syncle memory (peak)": "403 MB",
+            "mysql cpu / memory (peak)": "108% / 2416 MB"
+          }
+        },
+        {
+          "scenario": "MySQL → MongoDB",
+          "rows": 1000000,
+          "ms": 38596,
+          "rowsPerSec": 25909,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "265% / 10%",
+            "syncle memory (peak)": "430 MB",
+            "mysql cpu / memory (peak)": "104% / 2456 MB"
+          }
+        },
+        {
+          "scenario": "MySQL → SQLite",
+          "rows": 1000000,
+          "ms": 8035,
+          "rowsPerSec": 124456,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "221% / 69%",
+            "syncle memory (peak)": "364 MB",
+            "mysql cpu / memory (peak)": "58% / 2462 MB"
+          }
+        },
+        {
+          "scenario": "MySQL → Redis",
+          "rows": 1000000,
+          "ms": 9434,
+          "rowsPerSec": 106000,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "293% / 112%",
+            "syncle memory (peak)": "550 MB",
+            "redis cpu / memory (peak)": "107% / 253 MB",
+            "mysql cpu / memory (peak)": "55% / 2562 MB"
+          }
+        },
+        {
+          "scenario": "MongoDB → PostgreSQL",
+          "rows": 1000000,
+          "ms": 40354,
+          "rowsPerSec": 24781,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "258% / 51%",
+            "syncle memory (peak)": "323 MB",
+            "pg cpu / memory (peak)": "167% / 1345 MB"
+          }
+        },
+        {
+          "scenario": "MongoDB → MySQL",
+          "rows": 1000000,
+          "ms": 32386,
+          "rowsPerSec": 30878,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "227% / 60%",
+            "syncle memory (peak)": "441 MB",
+            "mysql cpu / memory (peak)": "62% / 2611 MB"
+          }
+        },
+        {
+          "scenario": "MongoDB → MongoDB",
+          "rows": 1000000,
+          "ms": 93479,
+          "rowsPerSec": 10698,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "246% / 26%",
+            "syncle memory (peak)": "448 MB"
+          }
+        },
+        {
+          "scenario": "MongoDB → SQLite",
+          "rows": 1000000,
+          "ms": 25987,
+          "rowsPerSec": 38481,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "245% / 74%",
+            "syncle memory (peak)": "403 MB"
+          }
+        },
+        {
+          "scenario": "MongoDB → Redis",
+          "rows": 1000000,
+          "ms": 46619,
+          "rowsPerSec": 21450,
+          "detail": {
+            "verified": "1000000 rows, exactly once",
+            "syncle cpu (peak / avg)": "289% / 60%",
+            "syncle memory (peak)": "319 MB",
+            "redis cpu / memory (peak)": "144% / 262 MB"
+          }
+        },
+        {
+          "scenario": "Redis → PostgreSQL",
+          "rows": 100000,
+          "ms": 51691,
+          "rowsPerSec": 1935,
+          "detail": {
+            "verified": "100000 rows, exactly once",
+            "syncle cpu (peak / avg)": "197% / 19%",
+            "syncle memory (peak)": "388 MB",
+            "pg cpu / memory (peak)": "20% / 1266 MB",
+            "redis cpu / memory (peak)": "42% / 205 MB"
+          }
+        },
+        {
+          "scenario": "Redis → MySQL",
+          "rows": 100000,
+          "ms": 48534,
+          "rowsPerSec": 2060,
+          "detail": {
+            "verified": "100000 rows, exactly once",
+            "syncle cpu (peak / avg)": "278% / 20%",
+            "syncle memory (peak)": "404 MB",
+            "redis cpu / memory (peak)": "60% / 192 MB",
+            "mysql cpu / memory (peak)": "47% / 2507 MB"
+          }
+        },
+        {
+          "scenario": "Redis → MongoDB",
+          "rows": 100000,
+          "ms": 53775,
+          "rowsPerSec": 1860,
+          "detail": {
+            "verified": "100000 rows, exactly once",
+            "syncle cpu (peak / avg)": "261% / 20%",
+            "syncle memory (peak)": "332 MB",
+            "redis cpu / memory (peak)": "56% / 196 MB"
+          }
+        },
+        {
+          "scenario": "Redis → SQLite",
+          "rows": 100000,
+          "ms": 112197,
+          "rowsPerSec": 891,
+          "detail": {
+            "verified": "100000 rows, exactly once",
+            "syncle cpu (peak / avg)": "287% / 19%",
+            "syncle memory (peak)": "455 MB",
+            "redis cpu / memory (peak)": "130% / 202 MB"
+          }
+        },
+        {
+          "scenario": "Redis → Redis",
+          "rows": 100000,
+          "ms": 60714,
+          "rowsPerSec": 1647,
+          "detail": {
+            "verified": "100000 rows, exactly once",
+            "syncle cpu (peak / avg)": "299% / 21%",
+            "syncle memory (peak)": "375 MB",
+            "redis cpu / memory (peak)": "22% / 207 MB"
           }
         }
       ]
@@ -99,23 +300,39 @@
         {
           "scenario": "PostgreSQL · upsert",
           "rows": 1000000,
-          "ms": 8503,
-          "rowsPerSec": 117606,
+          "ms": 12768,
+          "rowsPerSec": 78321,
           "detail": {
-            "syncle cpu (peak / avg)": "86% / 8%",
-            "syncle memory (peak)": "130 MB",
-            "pg cpu / memory (peak)": "98% / 1227 MB"
+            "syncle cpu (peak / avg)": "116% / 5%",
+            "syncle memory (peak)": "129 MB",
+            "pg cpu / memory (peak)": "119% / 1244 MB"
           }
         },
         {
           "scenario": "MySQL · upsert",
           "rows": 1000000,
-          "ms": 3622,
-          "rowsPerSec": 276091,
+          "ms": 3451,
+          "rowsPerSec": 289771,
           "detail": {
-            "syncle cpu (peak / avg)": "82% / 22%",
-            "syncle memory (peak)": "176 MB",
-            "mysql cpu / memory (peak)": "110% / 1811 MB"
+            "syncle cpu (peak / avg)": "135% / 23%",
+            "syncle memory (peak)": "199 MB"
+          }
+        },
+        {
+          "scenario": "SQLite · upsert",
+          "rows": 1000000,
+          "ms": 783,
+          "rowsPerSec": 1277139,
+          "detail": {}
+        },
+        {
+          "scenario": "Redis · upsert",
+          "rows": 1000000,
+          "ms": 3611,
+          "rowsPerSec": 276932,
+          "detail": {
+            "syncle cpu (peak / avg)": "260% / 84%",
+            "syncle memory (peak)": "626 MB"
           }
         }
       ]

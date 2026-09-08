@@ -24,7 +24,8 @@ const ROWS = 1_000_000;
 const CHUNK = 50_000;
 
 const results: BenchResult[] = [];
-const created: Array<{ engine: 'postgres' | 'mysql'; table: string }> = [];
+type Engine = 'postgres' | 'mysql' | 'sqlite' | 'redis';
+const created: Array<{ engine: Engine; table: string }> = [];
 
 afterAll(async () => {
   for (const t of created) {
@@ -44,23 +45,31 @@ afterAll(async () => {
   );
 });
 
-describe.each(['postgres', 'mysql'] as const)('write ceiling — %s', (engine) => {
+describe.each(['postgres', 'mysql', 'sqlite', 'redis'] as const)(
+  'write ceiling — %s',
+  (engine) => {
   it(`absorbs ${ROWS.toLocaleString()} rows`, async () => {
     const table = uniqueTable('ceil');
     const types =
       engine === 'mysql'
         ? { int: 'int', text: 'varchar(255)' }
-        : { int: 'integer', text: 'text' };
+        : engine === 'sqlite'
+          ? { int: 'INTEGER', text: 'TEXT' }
+          : { int: 'integer', text: 'text' };
 
     await withAdapter(engine, async (a) => {
-      await a.createTable({
-        table,
-        columns: [
-          { name: 'id', type: types.int, nullable: false, primaryKey: true },
-          { name: 'name', type: types.text, nullable: true },
-        ],
-      });
-      created.push({ engine, table });
+      // Redis stores keys, not tables — nothing to create, and the rows below
+      // are shaped as key/value rather than id/name
+      if (engine !== 'redis') {
+        await a.createTable({
+          table,
+          columns: [
+            { name: 'id', type: types.int, nullable: false, primaryKey: true },
+            { name: 'name', type: types.text, nullable: true },
+          ],
+        });
+        created.push({ engine, table });
+      }
 
       const sampler = new ResourceSampler();
       sampler.start();
@@ -69,24 +78,29 @@ describe.each(['postgres', 'mysql'] as const)('write ceiling — %s', (engine) =
           const size = Math.min(CHUNK, ROWS - start);
           await a.upsertRows!({
             table,
-            keyColumns: ['id'],
-            rows: Array.from({ length: size }, (_, i) => ({
-              id: start + i + 1,
-              name: `row-${start + i}`,
-            })),
+            keyColumns: engine === 'redis' ? ['key'] : ['id'],
+            rows: Array.from({ length: size }, (_, i) =>
+              engine === 'redis'
+                ? { key: `bench:${start + i + 1}`, value: `row-${start + i}` }
+                : { id: start + i + 1, name: `row-${start + i}` },
+            ),
           });
         }
       });
       const usage = sampler.stop();
+      const label = {
+        postgres: 'PostgreSQL',
+        mysql: 'MySQL',
+        sqlite: 'SQLite',
+        redis: 'Redis',
+      }[engine];
       results.push(
-        makeResult(
-          `${engine === 'mysql' ? 'MySQL' : 'PostgreSQL'} · upsert`,
-          ROWS,
-          ms,
-          resourceDetail(usage, [engine]),
-        ),
+        makeResult(`${label} · upsert`, ROWS, ms, resourceDetail(usage, [engine])),
       );
-      console.log(`  ✓ ${engine} ceiling: ${ROWS} rows in ${ms}ms (${Math.round(ROWS / (ms / 1000))}/s)`);
+      console.log(
+        `  ✓ ${engine} ceiling: ${ROWS} rows in ${ms}ms (${Math.round(ROWS / (ms / 1000))}/s)`,
+      );
+      });
     });
-  });
-});
+  },
+);

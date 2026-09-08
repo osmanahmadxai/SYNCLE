@@ -50,6 +50,14 @@ export const TEST_CONNECTIONS: Record<string, ConnectionConfig> = {
     database: 'syncle_test',
   }),
   redis: base('redis', { host: '127.0.0.1', port: 56379 }),
+  // A SEPARATE Redis database for destinations. Writing into the same one the
+  // source watches would have the destination's own writes fire the keyspace
+  // notifications the source is subscribed to — an endless feedback loop.
+  redis_dest: base('redis', {
+    host: '127.0.0.1',
+    port: 56379,
+    options: { db: 1 },
+  }),
   // Destinations live in their OWN databases, which is both realistic and
   // necessary for measurement: a Postgres logical slot is database-scoped, so
   // writing the destination into the source's database makes the source's
