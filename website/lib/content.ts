@@ -45,7 +45,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'How is it different from Airbyte or Debezium?',
-    a: 'Scale of setup. Airbyte expects a platform deployment — Kubernetes, or Docker Compose at smaller scale — and a team to operate it; Debezium expects Kafka. Syncle is one command, four containers and a web interface, aimed at one operator who wants their databases kept in step without standing up a data platform first.',
+    a: 'What comes out the other end. Debezium writes change events into a Kafka topic — you run the broker, and you still build or configure the thing that consumes it and writes to your destination. Syncle writes to the destination itself; the bridge is the whole path. Airbyte expects a platform deployment, Kubernetes or Docker Compose at smaller scale, and a team to operate it. Both are built for organisations running pipelines as a discipline, and if that is you they will serve you better. Syncle is one command, four containers and a web interface, for one operator who wants their databases kept in step without standing up a data platform first.',
   },
   {
     q: 'How much can it move?',

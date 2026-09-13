@@ -11,7 +11,7 @@ import { ImageResponse } from 'next/og';
 export const dynamic = 'force-static';
 
 export const alt =
-  'Syncle — keep any databases in sync, live, across engines';
+  'Syncle — database sync that finishes the job. No Kafka, no platform, one command.';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -63,13 +63,23 @@ export default function OpengraphImage() {
               maxWidth: 980,
             }}
           >
-            Keep any databases in sync, live, across engines
+            Database sync that finishes the job
           </div>
           <div
             style={{
               display: 'flex',
-              marginTop: 30,
-              fontSize: 30,
+              marginTop: 26,
+              fontSize: 32,
+              color: '#262626',
+            }}
+          >
+            No Kafka · no platform · one command
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              marginTop: 14,
+              fontSize: 26,
               color: '#6b6b6b',
             }}
           >
