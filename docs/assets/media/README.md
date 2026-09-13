@@ -128,3 +128,33 @@ Syncle instance, a seed SQL file, and Playwright scripts that drive the real UI
 and wait on real text before each frame, so a slow render cannot produce an
 empty screenshot. They live outside this repo today; say the word and they can
 land under `scripts/demo/` so re-shooting is one command.
+
+---
+
+## Social preview
+
+**`social-preview.png`** — 1280×640. The card that appears when a link to the
+repository is pasted into Slack, Discord, X, Reddit or a self-hosted directory.
+
+It is the same card `syncle.dev` serves: the site's generated
+`opengraph-image`, padded from 1200×630 to the 1280×640 GitHub prefers. Padded
+rather than stretched, so nothing distorts, and sharing a source with the site
+means the two cannot drift apart.
+
+A screenshot was the obvious alternative and is worse. These cards render
+around 500px wide in a feed, where a full UI capture is an illegible dark
+rectangle; the typographic card still reads at that size, names all five
+engines, and carries the install command.
+
+Regenerate it after changing `website/app/opengraph-image.tsx`:
+
+```sh
+curl -sL https://syncle.dev/opengraph-image -o /tmp/og.png
+sips --padToHeightWidth 640 1280 --padColor FFFFFF /tmp/og.png \
+  --out docs/assets/media/social-preview.png
+```
+
+**It has to be uploaded by hand.** GitHub exposes no API for the social
+preview, so a new card only takes effect once someone sets it under
+*Settings → General → Social preview*. Keeping the file here is what makes that
+a two-minute job rather than a design exercise.
