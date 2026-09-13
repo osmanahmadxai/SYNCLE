@@ -5,13 +5,17 @@
   <img alt="Syncle" src="apps/web/public/logo-dark.png" width="400">
 </picture>
 
-### Keep any databases in sync — live, across engines.
+### Database sync that finishes the job. No Kafka, no platform, one command.
 
-Connect your databases, draw a **bridge** from a source to one or more
-destinations, and Syncle keeps them in sync: the moment a row changes in the
-source, it's written to every destination you linked. Any engine to any engine —
-**PostgreSQL · MySQL · SQLite · MongoDB · Redis** — plus HTTP endpoints
-when you need them.
+Most change-data-capture tools hand you a stream and leave the rest to you.
+Debezium gives you a Kafka topic — you still run the broker, and you still build
+the thing that reads it and writes to your database. **Syncle writes to your
+database.**
+
+Draw a **bridge** from a source to one or more destinations and rows go across
+it: the moment one changes in the source, it's written to every destination you
+linked. Any engine to any engine — **PostgreSQL · MySQL · SQLite · MongoDB ·
+Redis** — plus HTTP endpoints when you need them.
 
 <sub>A bridge is just: a source → one or more destinations → kept in sync.</sub>
 

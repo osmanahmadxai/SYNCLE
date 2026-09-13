@@ -102,16 +102,23 @@ export default function Home() {
       <main className={`mx-auto px-6 text-[18px] leading-[1.75] ${MEASURE}`}>
         {/* ── intro ───────────────────────────────────────────────────── */}
         <section className="pt-10 sm:pt-14">
-          <h1 className="max-w-[15ch] text-[2.4rem] leading-[1.1] sm:text-[2.9rem]">
-            Keep any databases in sync, live, across engines
+          <h1 className="max-w-[17ch] text-[2.4rem] leading-[1.1] sm:text-[2.9rem]">
+            Database sync that finishes the job
           </h1>
 
           <p className="mt-7 max-w-[62ch] text-pretty text-[19px] leading-[1.65]">
-            Syncle is a small, self-hosted sync tool. You draw a bridge from a
-            source database to one or more destinations, and rows are written
-            across it — as a one-off backfill, on a polling cursor, or the
-            moment they change, straight from the database&apos;s own change
-            log.
+            Most change-data-capture tools hand you a stream and leave the rest
+            to you. Debezium gives you a Kafka topic — you still run the broker,
+            and you still build the thing that reads it and writes to your
+            database. <strong>Syncle writes to your database.</strong> One
+            command, no broker, no DAGs, no account.
+          </p>
+
+          <p className="mt-4 max-w-[62ch] text-pretty">
+            You draw a bridge from a source to one or more destinations, and
+            rows go across it — as a one-off backfill, on a polling cursor, or
+            the moment they change, straight from the database&apos;s own
+            change log.
           </p>
 
           <p className="mt-4 max-w-[70ch]">

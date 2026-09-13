@@ -9,10 +9,13 @@ export default function DocsIndex() {
   return (
     <DocArticle slug="">
       <p>
-        Syncle keeps databases in sync — live, across engines. You connect
-        databases, draw a <strong>bridge</strong> from a source to one or more
-        destinations, and Syncle moves rows across it: once, on a schedule, or
-        the moment they change.
+        Syncle keeps databases in sync — live, across engines, and without a
+        data platform in the way. Most change-data-capture tools hand you a
+        stream and leave the rest to you; Debezium gives you a Kafka topic, and
+        you still run the broker and build the thing that writes to your
+        database. Syncle writes to your database. You connect databases, draw a{' '}
+        <strong>bridge</strong> from a source to one or more destinations, and
+        rows move across it: once, on a schedule, or the moment they change.
       </p>
 
       <p>
