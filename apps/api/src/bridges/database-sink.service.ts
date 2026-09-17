@@ -31,6 +31,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   UnsupportedError,
   mapRow,
+  parseColumnType,
   planTargetTable,
   rowConverterFor,
   transformedType,
@@ -41,6 +42,7 @@ import {
   type ColumnTypeWarning,
   type DatabaseEngine,
   type DatabaseTarget,
+  type PortableKind,
   type TargetColumnShape,
 } from '@syncle/core';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
@@ -488,6 +490,55 @@ export class DatabaseSinkService {
     }
     this.converters.set(cacheKey, convert);
     return convert;
+  }
+
+  /**
+   * a target's rows exactly as {@link deliver} would write them — converted for
+   * the target's engine, mapped to its columns, a soft-delete marker cleared —
+   * without writing anything. `rows` are shaped rows, as `deliver` takes them.
+   * (for verify: "what should be there" has to be worked out by the code that
+   * puts it there, or the two drift apart)
+   */
+  async expectedRows(bridge: ResolvedBridge, target: DatabaseTarget, rows: Row[]): Promise<Row[]> {
+    const convert = await this.converterFor(bridge, target);
+    const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+    return rows.map((row) => {
+      const out = mapRow(convert ? convert(row) : row, target.mapping);
+      if (soft) out[soft.column] = soft.value === 'boolean' ? false : null;
+      return out;
+    });
+  }
+
+  /**
+   * what KIND of value each column of a target holds, going by the source
+   * column it comes from (or by what a transform turned it into). a column of a
+   * source with no types — or one nothing is known about — is simply absent
+   */
+  async columnKinds(bridge: ResolvedBridge, target: DatabaseTarget): Promise<Record<string, PortableKind>> {
+    const source = await this.resolveSourceCols(bridge);
+    const engine = source ? await this.sourceEngine(bridge) : undefined;
+    const kinds: Record<string, PortableKind> = {};
+    if (!source || !engine) return kinds;
+    const steps = bridge.transform.columns;
+    const byName = new Map(source.map((c) => [c.name, c]));
+    const pairs =
+      target.mapping.length > 0
+        ? target.mapping.map((m) => ({ name: m.target, source: m.source }))
+        : [...source.map((c) => c.name), ...columnsAdded(steps, source.map((c) => c.name))].map((name) => ({ name, source: name }));
+    for (const { name, source: sourceName } of pairs) {
+      try {
+        const reshaped = transformedType(steps, sourceName);
+        if (reshaped) {
+          kinds[name] = parseColumnType(reshaped, 'postgres').kind;
+          continue;
+        }
+        const known = byName.get(copiedColumn(steps, sourceName) ?? sourceName);
+        if (known) kinds[name] = parseColumnType(known.sourceType, engine).kind;
+      } catch {
+        /* a type nothing can read: compared by what the values are */
+      }
+    }
+    return kinds;
   }
 
   /**

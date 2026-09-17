@@ -27,6 +27,7 @@ import type {
 import {
   BRIDGE_JOBS_QUEUE,
   BRIDGE_SCHEDULE_QUEUE,
+  BRIDGE_VERIFY_QUEUE,
   BRIDGE_WATCH_QUEUE,
   type ResolvedBridge,
 } from '../../bridges.types';
@@ -109,6 +110,7 @@ const OWN_KEY_PREFIXES = [
   `bull:${BRIDGE_JOBS_QUEUE}:`,
   `bull:${BRIDGE_WATCH_QUEUE}:`,
   `bull:${BRIDGE_SCHEDULE_QUEUE}:`,
+  `bull:${BRIDGE_VERIFY_QUEUE}:`,
 ];
 
 @Injectable()

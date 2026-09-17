@@ -406,6 +406,20 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_VERIFY_RECHECK_MS</code>
+              </td>
+              <td>
+                <code>1500</code>
+              </td>
+              <td>
+                <a href="/docs/bridges#verify">Verifying</a> a bridge that is
+                delivering: a row that looks wrong is looked at again this many
+                milliseconds later, from both ends, before it counts. A change
+                that was only in flight is not a difference.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
               </td>
               <td>

@@ -1172,6 +1172,75 @@ export default function Page() {
         </p>
       </Note>
 
+      <h2 id="verify">Verify and reconcile</h2>
+      <p>
+        A bridge that has streamed for a month has delivered millions of
+        changes, each of them green. That is evidence the pipe works — not that
+        the two ends agree. A row edited by hand at the destination, a delete
+        that happened while the bridge was paused past the source&apos;s log, a
+        target restored from last week&apos;s backup: none of those is a failed
+        delivery. <strong>Verify</strong> (the magnifier on a bridge&apos;s
+        page, or <code>POST /api/bridges/:id/verify</code>) looks:
+      </p>
+      <ol>
+        <li>
+          the source is read once, a page at a time. Each page is turned into
+          the rows the bridge <em>would</em> write — same filters, column
+          transforms, value conversion and mapping, by the code that writes
+          them — and the destination is asked for the rows with those keys.
+          That finds what is <strong>missing</strong> and what is{' '}
+          <strong>different</strong>;
+        </li>
+        <li>
+          the destination is read once, and the source asked for <em>its</em>{' '}
+          keys. That finds what is <strong>only in the destination</strong>.
+        </li>
+      </ol>
+      <p>
+        Values are compared by what kind of value the column holds, not as
+        text: a numeric that one driver hands over as <code>&apos;1.50&apos;</code>{' '}
+        and another as <code>1.5</code> is the same number, a{' '}
+        <code>timestamptz</code> is the same instant in any zone&apos;s
+        spelling, <code>jsonb</code> is the same document whatever its key
+        order. A TEXT key is never read as a number (<code>007</code> and{' '}
+        <code>7</code> are two rows). What is <em>not</em> forgiven is a
+        destination column narrower than the source — fewer decimals, no
+        fractional seconds: those rows are different, and saying so is the
+        point. A computed column that uses <code>{'{{$now}}'}</code> can never
+        be the same twice and is left out, with a note.
+      </p>
+      <p>
+        <strong>A bridge that is delivering is a moving target.</strong> A row
+        read a moment before its change arrives looks different, and is not. So
+        nothing counts at first sight: what looks wrong is read again from both
+        ends a little later (<code>SYNCLE_VERIFY_RECHECK_MS</code>, default
+        1.5 s), and only what is still wrong is reported.
+      </p>
+      <p>
+        <strong>Reconcile</strong> does the same and writes the rows that are
+        missing or different — from the source as it is at that second look,
+        through the bridge&apos;s own sink, and checks once more that the repair
+        was not overtaken by the stream. Rows that are only in the destination
+        are removed <em>only</em> when you tick the box (
+        <code>deleteExtra</code>), and then the way the target&apos;s{' '}
+        <a href="#delete-policy">delete policy</a> says: deleted, or marked.
+        For a target that ignores deletes they are not even looked for — they
+        are what such a target is for.
+      </p>
+      <Note>
+        <p>
+          What can be verified: a bridge that reads a <em>table</em> and writes
+          to PostgreSQL, MySQL/MariaDB, SQLite or MongoDB targets that have key
+          columns. An HTTP endpoint cannot be read back, a Redis destination
+          cannot be asked for rows by key, and an insert-only target has
+          nothing to find a row by — each says so instead of guessing. A
+          verification costs two full reads and runs in the background, one per
+          bridge at a time; the result, with up to 25 examples of each kind of
+          difference and both readings of every column that differs, is kept
+          for the last ten.
+        </p>
+      </Note>
+
       <h2 id="schema-changes">When the source table changes</h2>
       <p>
         A bridge is built against the columns a table has on the day it is

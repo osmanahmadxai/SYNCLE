@@ -130,13 +130,41 @@ model Bridge {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  jobs        BridgeJob[]
-  deadLetters BridgeDeadLetter[]
+  jobs          BridgeJob[]
+  deadLetters   BridgeDeadLetter[]
+  verifications BridgeVerification[]
   workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([connectionId])
   @@index([workspaceId])
   @@map("bridges")
+}
+
+// one look at whether a bridge's destination IS the copy of its source — and,
+// in reconcile mode, the repair of what was not. counts and a few examples are
+// kept; the rows themselves are not (a verification of a large table is large)
+model BridgeVerification {
+  id          String  @id
+  bridgeId    String  @map("bridge_id")
+  mode        String // 'verify' | 'reconcile'
+  deleteExtra Boolean @default(false) @map("delete_extra")
+  // 'queued' | 'running' | 'canceling' | 'completed' | 'failed' | 'canceled'
+  status      String
+  sourceRows  Int     @default(0) @map("source_rows")
+  sourceTotal Int?    @map("source_total")
+  resultJson  String? @map("result_json") // VerificationTargetResult[]
+  error       String?
+
+  startedAt   DateTime  @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  // touched while it runs: one that says `running` and has not been touched for
+  // minutes was cut off by a restart, and is said to have been
+  heartbeatAt DateTime  @default(now()) @map("heartbeat_at")
+
+  bridge Bridge @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+
+  @@index([bridgeId, startedAt])
+  @@map("bridge_verifications")
 }
 
 model BridgeJob {

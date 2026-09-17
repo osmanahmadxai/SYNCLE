@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { CopyPlus, Download, Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
+import { CopyPlus, Download, Pencil, Play, Radio, ScanSearch, Square, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { downloadText, fileSlug } from '@/lib/download';
@@ -24,6 +24,7 @@ import { JobDetail, JobStatusBadge } from './job-detail';
 import { JobStrip } from './job-strip';
 import { SchemaDriftNotice } from './schema-drift-notice';
 import { ScheduleNotice } from './schedule-notice';
+import { VerifyDialog } from './verify-dialog';
 import { WorkspaceMap } from './workspace-map';
 
 export function BridgesView() {
@@ -62,6 +63,8 @@ export function BridgesView() {
         bridge.trigger.kind === 'cdc' &&
         bridge.trigger.startFrom === 'beginning'
       }
+      // only a table that is copied into a database can be compared with its copy
+      verifiable={bridge.source.kind === 'table' && dest.kind === 'database'}
       onDeleted={() => selectBridge(null)}
     />
   );
@@ -75,6 +78,7 @@ function BridgePanel({
   endpoint,
   isWatch,
   copiesFirst,
+  verifiable,
   onDeleted,
 }: {
   bridgeId: string;
@@ -85,6 +89,7 @@ function BridgePanel({
   isWatch: boolean;
   /** a change-stream bridge that copies its table before it follows it */
   copiesFirst: boolean;
+  verifiable: boolean;
   onDeleted: () => void;
 }) {
   const confirm = useConfirm();
@@ -99,6 +104,7 @@ function BridgePanel({
   const clone = useCloneBridge();
   const { data: jobs } = useBridgeJobs(bridgeId);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const listening = !!jobs?.some((r) =>
     ['queued', 'running', 'canceling'].includes(r.status),
   );
@@ -290,6 +296,11 @@ function BridgePanel({
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
             {tc('edit')}
           </Button>
+          {verifiable && (
+            <Button size="sm" variant="ghost" title={t('verifyHint')} aria-label={t('verify')} onClick={() => setVerifying(true)}>
+              <ScanSearch className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button size="sm" variant="ghost" title={t('clone')} aria-label={t('clone')} disabled={clone.isPending} onClick={() => void handleClone()}>
             <CopyPlus className="h-3.5 w-3.5" />
           </Button>
@@ -301,6 +312,8 @@ function BridgePanel({
           </Button>
         </div>
       </div>
+
+      {verifiable && verifying && <VerifyDialog bridgeId={bridgeId} open={verifying} onOpenChange={setVerifying} />}
 
       {/* a replay that runs by itself: when next, and whether the last tick started one */}
       <ScheduleNotice bridgeId={bridgeId} enabled={!isWatch} />

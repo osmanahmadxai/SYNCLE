@@ -87,6 +87,12 @@ export interface BridgeSchedulePayload {
   bridgeId: string;
 }
 
+/** the BullMQ job payload for a `bridge-verify` run */
+export interface BridgeVerifyPayload {
+  verificationId: string;
+}
+
 export const BRIDGE_JOBS_QUEUE = 'bridge-jobs';
 export const BRIDGE_WATCH_QUEUE = 'bridge-watch';
 export const BRIDGE_SCHEDULE_QUEUE = 'bridge-schedule';
+export const BRIDGE_VERIFY_QUEUE = 'bridge-verify';

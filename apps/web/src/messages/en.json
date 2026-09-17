@@ -145,6 +145,8 @@
     "couldNotDelete": "Could not delete workspace"
   },
   "bridges": {
+    "verify": "Verify",
+    "verifyHint": "Verify: is the destination the copy of the source?",
     "customQuery": "custom query",
     "runJob": "Run job",
     "startListening": "Start listening",
@@ -502,6 +504,47 @@
     "notFiring": "not firing: the bridge is disabled, or the job queue was unreachable when it was saved",
     "skipped": "The run due {when} was skipped: the one before it was still going.",
     "failed": "The run due {when} could not be started: {error}"
+  },
+  "verify": {
+    "title": "Verify",
+    "description": "Is the destination the copy of the source this bridge says it is? Every row is read from both ends and compared by what kind of value each column holds. Deliveries that were all green do not answer this: a row edited by hand at the destination, or deleted while the bridge was stopped, is not a failed delivery.",
+    "verifyNow": "Verify now",
+    "reconcile": "Reconcile",
+    "cancel": "Stop",
+    "deleteExtra": "When reconciling, also remove rows that are only in the destination",
+    "deleteExtraHint": "As the target’s delete policy says: deleted, or marked as deleted. Off by default — it is the one thing a reconcile does that cannot be read back from the source.",
+    "never": "This bridge has not been verified yet.",
+    "earlier": "Earlier",
+    "couldNotStart": "Could not start",
+    "mode": {
+      "verify": "Verify",
+      "reconcile": "Reconcile"
+    },
+    "verdict": {
+      "running": "running…",
+      "inSync": "the destination is the copy of the source",
+      "differs": "the two ends differ",
+      "unknown": "no target of this bridge could be compared",
+      "failed": "failed",
+      "canceled": "stopped"
+    },
+    "rowsRead": "{count, plural, one {# source row read} other {# source rows read}}",
+    "targetInSync": "in sync",
+    "targetDiffers": "{count, plural, one {# row differs} other {# rows differ}}",
+    "checked": "Compared",
+    "missing": "Missing",
+    "different": "Different",
+    "extra": "Only in the destination",
+    "fixed": "Written",
+    "removed": "Removed",
+    "notLookedFor": "not looked for",
+    "missingSample": "In the source, not in the destination ({shown} of {count}):",
+    "extraSample": "In the destination, not in the source ({shown} of {count}):",
+    "differentSample": "Not the same at both ends ({shown} of {count}):",
+    "key": "key",
+    "column": "column",
+    "inSource": "as the bridge would write it",
+    "inDestination": "in the destination"
   },
   "dryRun": {
     "title": "Dry run",

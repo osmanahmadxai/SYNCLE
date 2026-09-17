@@ -145,6 +145,8 @@
     "couldNotDelete": "无法删除工作区"
   },
   "bridges": {
+    "verify": "校验",
+    "verifyHint": "校验：目标是否与源一致？",
     "customQuery": "自定义查询",
     "runJob": "运行任务",
     "startListening": "开始监听",
@@ -502,6 +504,47 @@
     "notFiring": "未触发：桥接已被禁用，或保存时无法连接任务队列",
     "skipped": "原定于 {when} 的运行已跳过：上一次运行仍在进行。",
     "failed": "原定于 {when} 的运行未能启动：{error}"
+  },
+  "verify": {
+    "title": "校验",
+    "description": "目标真的是此桥接所声称的源的副本吗？两端的每一行都会被读取，并按每列值的类型进行比较。交付全部为绿色并不能回答这个问题：在目标端被手工修改的行，或在桥接停止期间被删除的行，都不算交付失败。",
+    "verifyNow": "立即校验",
+    "reconcile": "修复差异",
+    "cancel": "停止",
+    "deleteExtra": "修复时，同时移除只存在于目标端的行",
+    "deleteExtraHint": "按目标的删除策略处理：删除，或标记为已删除。默认关闭——这是修复操作中唯一无法从源端重新读回的事情。",
+    "never": "此桥接尚未校验过。",
+    "earlier": "更早的记录",
+    "couldNotStart": "无法启动",
+    "mode": {
+      "verify": "校验",
+      "reconcile": "修复"
+    },
+    "verdict": {
+      "running": "进行中…",
+      "inSync": "目标与源一致",
+      "differs": "两端存在差异",
+      "unknown": "此桥接没有可比较的目标",
+      "failed": "失败",
+      "canceled": "已停止"
+    },
+    "rowsRead": "{count, plural, other {已读取 # 行源数据}}",
+    "targetInSync": "一致",
+    "targetDiffers": "{count, plural, other {# 行存在差异}}",
+    "checked": "已比较",
+    "missing": "缺失",
+    "different": "不同",
+    "extra": "仅在目标端",
+    "fixed": "已写入",
+    "removed": "已移除",
+    "notLookedFor": "未检查",
+    "missingSample": "在源中、不在目标中（显示 {shown} / {count}）：",
+    "extraSample": "在目标中、不在源中（显示 {shown} / {count}）：",
+    "differentSample": "两端不一致（显示 {shown} / {count}）：",
+    "key": "键",
+    "column": "列",
+    "inSource": "桥接将写入的值",
+    "inDestination": "目标中的值"
   },
   "dryRun": {
     "title": "试运行",

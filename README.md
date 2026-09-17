@@ -134,6 +134,12 @@ The rest is the same whichever destination and trigger you pick:
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
+- **Prove the copy is the copy.** Verify reads both ends and compares them row
+  by row — by what kind of value each column holds, so `'1.50'` and `1.5` are the
+  same number and `007` and `7` are not the same key — and reports what is
+  missing, different, or only in the destination, with both readings of every
+  column that differs. On a bridge that is delivering, nothing counts until a
+  second look. Reconcile repairs only the rows that are wrong.
 - **Run it on a schedule.** A replay bridge takes a cron line and a named time
   zone, and replays its source by itself — nightly, hourly, on weekdays. Never
   two runs at once (a tick that finds one still going is skipped, and said),
@@ -447,6 +453,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_LOG_LEVEL` | api | `error` \| `warn` \| `log` \| `debug` \| `verbose` (default `warn`; `log` adds lifecycle lines) |
 | `SYNCLE_METRICS_TOKEN` | api | Enables `GET /api/metrics` (Prometheus) for `Authorization: Bearer <token>`; unset = the endpoint does not exist |
 | `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
+| `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |

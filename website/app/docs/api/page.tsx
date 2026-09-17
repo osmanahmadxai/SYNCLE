@@ -1131,6 +1131,43 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>POST /api/bridges/:id/verify</code>
+              </td>
+              <td>
+                Start a{' '}
+                <a href="/docs/bridges#verify">verification</a> in the
+                background. Body{' '}
+                <code>{'{ mode: "verify" | "reconcile", deleteExtra?: boolean }'}</code>
+                ; answers <code>202</code> with the verification. <code>400</code>{' '}
+                (<code>{'details.reason: "not-verifiable"'}</code>) for a
+                bridge with a query source or an HTTP destination,{' '}
+                <code>409</code> while one is running or a replay of the bridge
+                is
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/verifications[/:verificationId]</code>
+              </td>
+              <td>
+                The last ten, newest first — or one. Each:{' '}
+                <code>
+                  {'{ id, mode, status, sourceRows, sourceTotal, inSync, error, targets: [{ target, unsupported, notes, checked, missing, different, extra, fixed, removed, samples }] }'}
+                </code>
+                . <code>inSync</code> is <code>null</code> until it has
+                completed; <code>extra</code> is <code>null</code> when rows
+                that are only in the destination were not looked for. Poll this
+                for progress
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/verifications/:verificationId/cancel</code>
+              </td>
+              <td>Stop one that is queued or running</td>
+            </tr>
+            <tr>
+              <td>
                 <code>GET /api/bridges/:id/schedule</code>
               </td>
               <td>

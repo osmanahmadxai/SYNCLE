@@ -197,6 +197,12 @@ export const runtimeConfig = {
    */
   snapshotHoldMax: Math.max(1, nonNegativeInt(env('SYNCLE_SNAPSHOT_HOLD_MAX'), 100_000)),
   /**
+   * Verifying a bridge that is delivering: a row that looks wrong is looked at
+   * again this many milliseconds later, from both ends, before it counts — a
+   * change that was only in flight is not a difference.
+   */
+  verifyRecheckMs: nonNegativeInt(env('SYNCLE_VERIFY_RECHECK_MS'), 1500),
+  /**
    * Alerts are throttled per channel, kind of event and bridge: a bridge that
    * fails every thirty seconds sends ONE alert per this many seconds, and the
    * next says how many were held back. 0 sends every one.

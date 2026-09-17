@@ -145,6 +145,8 @@
     "couldNotDelete": "Impossibile eliminare l'area di lavoro"
   },
   "bridges": {
+    "verify": "Verifica",
+    "verifyHint": "Verifica: la destinazione è la copia dell’origine?",
     "customQuery": "query personalizzata",
     "runJob": "Esegui processo",
     "startListening": "Avvia ascolto",
@@ -502,6 +504,47 @@
     "notFiring": "non attiva: il bridge è disabilitato, oppure la coda dei job non era raggiungibile al salvataggio",
     "skipped": "L’esecuzione prevista per {when} è stata saltata: quella precedente era ancora in corso.",
     "failed": "Non è stato possibile avviare l’esecuzione prevista per {when}: {error}"
+  },
+  "verify": {
+    "title": "Verifica",
+    "description": "La destinazione è davvero la copia dell’origine che questo bridge dichiara? Ogni riga viene letta da entrambi i lati e confrontata in base al tipo di valore di ciascuna colonna. Consegne tutte verdi non rispondono a questa domanda: una riga modificata a mano nella destinazione, o eliminata mentre il bridge era fermo, non è una consegna fallita.",
+    "verifyNow": "Verifica ora",
+    "reconcile": "Riconcilia",
+    "cancel": "Ferma",
+    "deleteExtra": "Durante la riconciliazione, rimuovi anche le righe presenti solo nella destinazione",
+    "deleteExtraHint": "Secondo la politica di eliminazione della destinazione: eliminate, o contrassegnate come eliminate. Disattivato per impostazione predefinita: è l’unica cosa fatta da una riconciliazione che non si può rileggere dall’origine.",
+    "never": "Questo bridge non è ancora stato verificato.",
+    "earlier": "Precedenti",
+    "couldNotStart": "Impossibile avviare",
+    "mode": {
+      "verify": "Verifica",
+      "reconcile": "Riconciliazione"
+    },
+    "verdict": {
+      "running": "in corso…",
+      "inSync": "la destinazione è la copia dell’origine",
+      "differs": "i due lati differiscono",
+      "unknown": "nessuna destinazione di questo bridge può essere confrontata",
+      "failed": "fallita",
+      "canceled": "fermata"
+    },
+    "rowsRead": "{count, plural, one {# riga di origine letta} other {# righe di origine lette}}",
+    "targetInSync": "allineata",
+    "targetDiffers": "{count, plural, one {# riga differisce} other {# righe differiscono}}",
+    "checked": "Confrontate",
+    "missing": "Mancanti",
+    "different": "Diverse",
+    "extra": "Solo nella destinazione",
+    "fixed": "Scritte",
+    "removed": "Rimosse",
+    "notLookedFor": "non cercate",
+    "missingSample": "Nell’origine, non nella destinazione ({shown} di {count}):",
+    "extraSample": "Nella destinazione, non nell’origine ({shown} di {count}):",
+    "differentSample": "Non uguali ai due lati ({shown} di {count}):",
+    "key": "chiave",
+    "column": "colonna",
+    "inSource": "come la scriverebbe il bridge",
+    "inDestination": "nella destinazione"
   },
   "dryRun": {
     "title": "Prova a vuoto",

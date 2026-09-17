@@ -46,6 +46,7 @@ import type {
   BridgeSourceHold,
   BridgeSchemaDrift,
   BridgeScheduleStatus,
+  BridgeVerification,
 } from '@syncle/core';
 
 /**
@@ -377,6 +378,17 @@ export const api = {
   /** what a CDC bridge is holding on its source; null when nothing */
   sourceHold: (id: string) =>
     request<BridgeSourceHold | null>(`/bridges/${id}/source-hold`),
+  /**
+   * is the destination the copy of the source? starts in the background (202);
+   * `reconcile` also writes what is missing or different, and with `deleteExtra`
+   * removes what is only in the destination, as the target's delete policy says
+   */
+  startVerification: (id: string, dto: { mode: 'verify' | 'reconcile'; deleteExtra?: boolean }) =>
+    request<BridgeVerification>(`/bridges/${id}/verify`, { method: 'POST', ...jsonBody(dto) }),
+  /** the last ten, newest first */
+  verifications: (id: string) => request<BridgeVerification[]>(`/bridges/${id}/verifications`),
+  cancelVerification: (id: string, verificationId: string) =>
+    request<BridgeVerification>(`/bridges/${id}/verifications/${verificationId}/cancel`, { method: 'POST' }),
   /** when a cron line fires next, by the library that fires it; 400 with the reason if it cannot be used */
   schedulePreview: (schedule: { cron: string; timezone: string }) =>
     request<{ nextRuns: string[] }>('/bridges/schedule-preview', {

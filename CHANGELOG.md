@@ -406,6 +406,29 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Verify and reconcile.** Is the destination the copy of the source? Every
+  delivery can be green and the answer still be no: a row edited by hand at the
+  destination, a delete made while the bridge was stopped, a restored backup.
+  *Verify* (on a bridge's page; `POST /api/bridges/:id/verify`) reads both ends
+  and reports rows that are missing, different, or only in the destination —
+  compared by the kind of value each column holds, through the same transforms,
+  value conversion and mapping the bridge writes with, with up to 25 examples of
+  each and both readings of every column that differs.
+  - On a bridge that is delivering, what looks wrong is read again from both
+    ends a moment later (`SYNCLE_VERIFY_RECHECK_MS`, default 1500) and only
+    what is still wrong counts.
+  - *Reconcile* writes what is missing or different, from the source as it is
+    then, and checks that the repair was not overtaken by the stream. Rows that
+    are only in the destination are removed only with `deleteExtra`, and then as
+    the target's delete policy says.
+  - For table sources and PostgreSQL, MySQL/MariaDB, SQLite and MongoDB targets
+    with key columns; anything else says why it cannot be compared. Runs in the
+    background in a queue of its own, one per bridge, cancellable; the last ten
+    results are kept.
+  - Verified against itself: every cross-engine replay in the type-fidelity and
+    engine-matrix test suites is now followed by a verification that must find
+    nothing — which is how the polling bug above was found.
+
 - **Scheduled replays.** A replay bridge can run by itself: *When it runs → On
   a schedule* in the builder, `trigger.schedule { cron, timezone, enabled }` in
   the API. Five-field cron with names, lists, ranges and steps; a named time

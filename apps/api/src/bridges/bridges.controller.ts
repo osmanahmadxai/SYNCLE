@@ -29,6 +29,8 @@ import {
   type SkipDTO,
   type BridgeScheduleStatus,
   type BridgeSourceHold,
+  type BridgeVerification,
+  type VerifyStartDTO,
   type ReplaySchedule,
   type CdcReadiness,
   type CdcReadinessDTO,
@@ -52,6 +54,7 @@ import {
   replayScheduleSchema,
   skipSchema,
   startJobSchema,
+  verifyStartSchema,
 } from '@syncle/core';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
@@ -67,6 +70,7 @@ import { shapeRows } from './row-shaping';
 import { BridgeTransferService } from './bridge-transfer.service';
 import { SchemaDriftService } from './schema-drift.service';
 import { BridgeScheduleService, nextRuns } from './bridge-schedule.service';
+import { BridgeVerifyService } from './bridge-verify.service';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -88,6 +92,7 @@ export class BridgesController {
     private readonly transfer: BridgeTransferService,
     private readonly drift: SchemaDriftService,
     private readonly schedule: BridgeScheduleService,
+    private readonly verify: BridgeVerifyService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -141,6 +146,9 @@ export class BridgesController {
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
   ): Promise<Bridge> {
     this.schedule.assertUsable(dto);
+    // a verification compares — and a reconcile writes — by the mapping as it
+    // WAS: it stops here, and is started again against what is saved
+    await this.verify.cancelAll(id).catch(() => undefined);
     // stop a live listener BEFORE the config changes, routed by the OLD trigger
     // kind — routing by the new one after an edit (say cdc → watch) would leave
     // the old stream running as a zombie, delivering into a finalized job
@@ -211,6 +219,34 @@ export class BridgesController {
   }
 
   /* ----- payload preview (no delivery) ----- */
+
+  /* ----- verify / reconcile: is the destination the copy of the source? ----- */
+
+  /** starts in the background; poll `GET :id/verifications/:verificationId` for progress and the result */
+  @Post(':id/verify')
+  @HttpCode(202)
+  startVerification(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(verifyStartSchema)) dto: VerifyStartDTO,
+  ): Promise<BridgeVerification> {
+    return this.verify.start(id, dto);
+  }
+
+  @Get(':id/verifications')
+  verifications(@Param('id') id: string): Promise<BridgeVerification[]> {
+    return this.verify.list(id);
+  }
+
+  @Get(':id/verifications/:verificationId')
+  verification(@Param('id') id: string, @Param('verificationId') verificationId: string): Promise<BridgeVerification> {
+    return this.verify.get(id, verificationId);
+  }
+
+  @Post(':id/verifications/:verificationId/cancel')
+  @HttpCode(200)
+  cancelVerification(@Param('id') id: string, @Param('verificationId') verificationId: string): Promise<BridgeVerification> {
+    return this.verify.cancel(id, verificationId);
+  }
 
   /* ----- scheduled replays ----- */
 

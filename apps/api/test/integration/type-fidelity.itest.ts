@@ -155,6 +155,49 @@ async function replay(bridgeId: string): Promise<void> {
     }
     return j.status === 'completed' ? j : null;
   });
+  await expectVerifiedIdentical(bridgeId);
+}
+
+/**
+ * the other half of every test here: a copy that has just been made IS the
+ * source, so verify must say so — for every engine pair and every type these
+ * tests move. a difference reported here is a false alarm in the comparison
+ * (two drivers spelling one value two ways), which is the thing that would make
+ * verify useless: nobody believes the third wrong alarm.
+ */
+async function expectVerifiedIdentical(bridgeId: string): Promise<void> {
+  const { BridgesController } =
+    await import('../../src/bridges/bridges.controller');
+  const controller = app.ctx.get(BridgesController);
+  const started = await controller.startVerification(bridgeId, {
+    mode: 'verify',
+    deleteExtra: false,
+  });
+  const v = await waitFor(`verification ${started.id}`, async () => {
+    const now = await controller.verification(bridgeId, started.id);
+    return ['completed', 'failed', 'canceled'].includes(now.status)
+      ? now
+      : null;
+  });
+  expect(v.error).toBeNull();
+  expect(v.status).toBe('completed');
+  for (const t of v.targets) {
+    expect(t.unsupported).toBeNull();
+    // (the samples say WHICH column and both readings: that is what a failure here needs to show)
+    expect({
+      target: t.target,
+      missing: t.samples.missing,
+      different: t.samples.different,
+      extra: t.samples.extra,
+    }).toEqual({
+      target: t.target,
+      missing: [],
+      different: [],
+      extra: [],
+    });
+    expect(t.checked).toBeGreaterThan(0);
+  }
+  expect(v.inSync).toBe(true);
 }
 
 /**

@@ -47,6 +47,7 @@ export const queryKeys = {
   sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
   schemaDrift: (id: string) => ['bridges', id, 'schemaDrift'] as const,
   bridgeSchedule: (id: string) => ['bridges', id, 'schedule'] as const,
+  verifications: (id: string) => ['bridges', id, 'verifications'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -503,6 +504,35 @@ export function useSourceHold(bridgeId: string | null, enabled: boolean) {
     refetchInterval: 30_000,
     // the source may be unreachable; that is reported elsewhere, louder
     retry: false,
+  });
+}
+
+const VERIFYING = ['queued', 'running', 'canceling'];
+
+/** a bridge's verifications, newest first. watched closely while one is running, and not at all otherwise */
+export function useVerifications(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.verifications(bridgeId) : ['verifications', 'none'],
+    queryFn: () => api.verifications(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: (query) => (query.state.data?.some((v) => VERIFYING.includes(v.status)) ? 1500 : false),
+    retry: false,
+  });
+}
+
+export function useStartVerification(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: { mode: 'verify' | 'reconcile'; deleteExtra?: boolean }) => api.startVerification(bridgeId, dto),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.verifications(bridgeId) }),
+  });
+}
+
+export function useCancelVerification(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (verificationId: string) => api.cancelVerification(bridgeId, verificationId),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.verifications(bridgeId) }),
   });
 }
 
