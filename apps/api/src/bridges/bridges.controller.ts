@@ -19,6 +19,7 @@ import {
   type BridgeExportDocument,
   type BridgeImportDTO,
   type BridgeImportResult,
+  type BridgeSchemaDrift,
   type BridgeInputDTO,
   type BridgeDraftPreviewDTO,
   type BridgePreview,
@@ -61,6 +62,7 @@ import { BridgeWatchService } from './bridge-watch.service';
 import type { ResolvedBridge } from './bridges.types';
 import { shapeRows } from './row-shaping';
 import { BridgeTransferService } from './bridge-transfer.service';
+import { SchemaDriftService } from './schema-drift.service';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -80,6 +82,7 @@ export class BridgesController {
     private readonly deadLetters: DeadLetterService,
     private readonly retention: RetentionService,
     private readonly transfer: BridgeTransferService,
+    private readonly drift: SchemaDriftService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -101,6 +104,12 @@ export class BridgesController {
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
   ): Promise<Bridge> {
     const bridge = await this.store.create(dto);
+    // the table as the builder showed it is what this bridge is built for. (an
+    // imported or cloned bridge has nobody looking at the table: its first run records it)
+    await this.store
+      .resolve(bridge.id)
+      .then((resolved) => this.drift.accept(resolved, { moved: true }))
+      .catch(() => undefined);
     // queue a draft job so the timeline shows the planned deliveries right away
     await this.jobs.prepare(bridge.id).catch(() => undefined);
     return bridge;
@@ -152,6 +161,19 @@ export class BridgesController {
 
     // the destination may have changed; drop the sink's ensured-table cache
     this.databaseSink.forget(id);
+    // whoever saved the bridge had the table as it IS in front of them: that is
+    // now what the bridge is built for — if what they saved no longer uses a
+    // column that went. (best-effort: an unreachable source leaves the old
+    // baseline, and the next run looks again)
+    const was = before.source;
+    const readsAnotherTable =
+      was.kind !== bridge.source.kind ||
+      was.connectionId !== bridge.source.connectionId ||
+      (was.database ?? '') !== (bridge.source.database ?? '') ||
+      (was.kind === 'table' &&
+        bridge.source.kind === 'table' &&
+        (was.table !== bridge.source.table || (was.schema ?? '') !== (bridge.source.schema ?? '')));
+    await this.drift.accept(await this.store.resolve(id), { moved: readsAnotherTable }).catch(() => undefined);
     // refresh an existing draft so its queued timeline reflects the new config
     await this.jobs.prepare(id, { onlyExisting: true }).catch(() => undefined);
 
@@ -178,6 +200,29 @@ export class BridgesController {
   }
 
   /* ----- payload preview (no delivery) ----- */
+
+  /* ----- schema drift: has the source table changed since the bridge was set up? ----- */
+
+  @Get(':id/schema-drift')
+  async schemaDrift(@Param('id') id: string): Promise<BridgeSchemaDrift> {
+    return this.drift.status(await this.store.resolve(id));
+  }
+
+  /** the table as it is NOW becomes what the bridge is built for */
+  @Post(':id/schema-drift/accept')
+  @HttpCode(200)
+  async acceptSchemaDrift(@Param('id') id: string): Promise<BridgeSchemaDrift> {
+    const bridge = await this.store.resolve(id);
+    const inTheWay = await this.drift.accept(bridge);
+    if (inTheWay.length > 0) {
+      throw new BadRequestError(
+        `This bridge still uses ${inTheWay.join(', ')}, which the table no longer has: accepting that would write NULL in ${inTheWay.length === 1 ? 'its' : 'their'} place. ` +
+          'Edit the bridge — re-map or remove it — and saving accepts the table as it is now.',
+        { reason: 'schema-drift', missingUsed: inTheWay },
+      );
+    }
+    return this.drift.status(bridge);
+  }
 
   /* ----- export / import / clone ----- */
 

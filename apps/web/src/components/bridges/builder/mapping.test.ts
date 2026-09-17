@@ -43,6 +43,7 @@ function httpBridge(overrides: Partial<Bridge> = {}): Bridge {
       timeoutMs: 20000,
       pageSize: 200,
       onError: 'abort',
+      onSchemaChange: 'stop',
     },
     trigger: { kind: 'replay' },
     enabled: false,
@@ -109,6 +110,7 @@ describe('loadBridge', () => {
       minDelayMs: 250,
       timeoutMs: 20000,
       onError: 'abort',
+      onSchemaChange: 'stop',
     });
     expect(d.enabled).toBe(false);
     // a replay trigger is a one-time job
@@ -398,6 +400,7 @@ describe('buildInput', () => {
         minDelayMs: 0,
         timeoutMs: 15000,
         onError: 'continue',
+        onSchemaChange: 'stop',
         backoffMs: 500,
         backoffMaxMs: 30000,
         pageSize: 200,
@@ -623,6 +626,33 @@ describe('buildInput', () => {
 /* -------------------------------------------------------------------------- */
 /* filters and column transforms                                              */
 /* -------------------------------------------------------------------------- */
+
+describe('what to do when the source table changes', () => {
+  it('a new bridge stops rather than write NULL; a saved choice survives an edit', () => {
+    expect(initialDraft().delivery.onSchemaChange).toBe('stop');
+    const saved = httpBridge();
+    saved.delivery = { ...saved.delivery, onSchemaChange: 'continue' };
+    const d = loadBridge(saved);
+    expect(d.delivery.onSchemaChange).toBe('continue');
+    expect(buildInput(d, ctx()).delivery?.onSchemaChange).toBe('continue');
+  });
+
+  it('a bridge saved before the setting existed loads as `stop`', () => {
+    const old = httpBridge();
+    delete (old.delivery as Partial<Bridge['delivery']>).onSchemaChange;
+    expect(loadBridge(old).delivery.onSchemaChange).toBe('stop');
+  });
+
+  it('`evolve` alters a destination table: switching to a webhook falls back to `stop`, and nothing else is touched', () => {
+    let d = builderReducer(initialDraft(), { type: 'setDestKind', destKind: 'database', sourcePk: 'id' });
+    d = builderReducer(d, { type: 'patchDelivery', patch: { onSchemaChange: 'evolve', maxAttempts: 9 } });
+    const http = builderReducer(d, { type: 'setDestKind', destKind: 'http', sourcePk: 'id' });
+    expect(http.delivery).toEqual({ ...d.delivery, onSchemaChange: 'stop' });
+    // `continue` is as valid for a webhook as for a table
+    d = builderReducer(d, { type: 'patchDelivery', patch: { onSchemaChange: 'continue' } });
+    expect(builderReducer(d, { type: 'setDestKind', destKind: 'http', sourcePk: 'id' }).delivery.onSchemaChange).toBe('continue');
+  });
+});
 
 describe('source filters', () => {
   const filtered = () =>

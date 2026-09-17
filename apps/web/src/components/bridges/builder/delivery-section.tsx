@@ -18,11 +18,11 @@ export function DeliverySection({
   draft,
   dispatch,
 }: {
-  draft: Pick<BuilderDraft, 'delivery' | 'syncMode'>;
+  draft: Pick<BuilderDraft, 'delivery' | 'syncMode' | 'destKind'>;
   dispatch: Dispatch<BuilderAction>;
 }) {
   const t = useTranslations('bridgeBuilder');
-  const { delivery, syncMode } = draft;
+  const { delivery, syncMode, destKind } = draft;
 
   return (
     <section className="space-y-2">
@@ -101,6 +101,37 @@ export function DeliverySection({
               : t('onFailureStopHint')}
           </p>
         )}
+      </div>
+      {/* a column the bridge maps, dropped or renamed at the source, used to
+          reach the destination as NULL — over the value it held. `stop` is the
+          default because that is the one outcome nobody chooses */}
+      <div className="grid gap-1.5">
+        <Label className="text-xs">{t('onSchemaChange')}</Label>
+        <Select
+          value={delivery.onSchemaChange}
+          onValueChange={(v) =>
+            dispatch({
+              type: 'patchDelivery',
+              patch: { onSchemaChange: v as 'stop' | 'continue' | 'evolve' },
+            })
+          }
+        >
+          <SelectTrigger className="h-8" aria-label={t('onSchemaChange')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="stop">{t('schemaChangeStop')}</SelectItem>
+            {destKind === 'database' && (
+              <SelectItem value="evolve">{t('schemaChangeEvolve')}</SelectItem>
+            )}
+            <SelectItem value="continue">
+              {t('schemaChangeContinue')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-muted-foreground text-xs">
+          {t(`schemaChangeHint.${delivery.onSchemaChange}`)}
+        </p>
       </div>
     </section>
   );

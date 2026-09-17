@@ -28,6 +28,7 @@ import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { JobRegistryService } from './job-registry.service';
 import { TableReaderService } from './table-reader.service';
+import { SchemaDriftService } from './schema-drift.service';
 import {
   BRIDGE_JOBS_QUEUE,
   type BridgeJobPayload,
@@ -74,6 +75,7 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
     private readonly registry: JobRegistryService,
     private readonly settings: SettingsStoreService,
     private readonly reader: TableReaderService,
+    private readonly drift: SchemaDriftService,
   ) {
     super();
   }
@@ -163,6 +165,13 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
   ): Promise<void> {
     await this.jobs.markRunning(jobId);
     const bridge = this.store.resolveSnapshot(snapshotJson, bridgeId);
+    // is the table still the one this bridge was built for? asked before the
+    // first row is read: a mapped column that is gone would be written as NULL
+    const verdict = await this.drift.check(bridge);
+    if (verdict.stop) {
+      await this.jobs.finalize(jobId, 'failed', verdict.stop, 'none');
+      return;
+    }
     const { delivery } = bridge;
     const batchSize = delivery.batchSize;
     const table = bridge.source.kind === 'table' ? bridge.source.table : '(query)';
@@ -199,12 +208,30 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
     // with the offset so a resume lands on the exact next row even when the
     // table mutated between attempts (an OFFSET re-seek cannot promise that)
     let lastKeyset: KeysetCheckpoint | undefined;
+    // a long replay can have its table changed UNDER it, too: a page that comes
+    // back with other columns than the page before is looked into before any
+    // of it is written
+    const watchesColumns = await this.drift.watches(bridge);
+    let columnSignature: string | null = null;
 
     try {
       for await (const item of this.streamRows(bridge, jobId, startOffset, resumeKey)) {
         if (await stopRequested()) {
           await this.jobs.finalize(jobId, 'canceled');
           return;
+        }
+        if (watchesColumns) {
+          const signature = Object.keys(item.row).sort().join('\u0000');
+          if (columnSignature !== null && columnSignature !== signature) {
+            const changed = await this.drift.check(bridge);
+            if (changed.stop) {
+              // what is in `buffer` was read before the change and not yet
+              // delivered: the cursor is behind it, and a resume reads it again
+              await this.jobs.finalize(jobId, 'failed', changed.stop, 'none');
+              return;
+            }
+          }
+          columnSignature = signature;
         }
         buffer.push(item.row);
         if (item.keyset) lastKeyset = item.keyset;

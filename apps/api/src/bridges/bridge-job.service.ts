@@ -1015,7 +1015,7 @@ export class BridgeJobService implements OnModuleInit {
     status: BridgeJobStatus,
     error?: string | null,
     /** what KIND of stop this is, when it is not an ordinary failure */
-    alertAs: 'bridge.failed' | 'bridge.position_lost' = 'bridge.failed',
+    alertAs: 'bridge.failed' | 'bridge.position_lost' | 'none' = 'bridge.failed',
   ): Promise<void> {
     const job = await this.prisma.bridgeJob.update({
       where: { id: jobId },
@@ -1036,8 +1036,10 @@ export class BridgeJobService implements OnModuleInit {
     status: BridgeJobStatus,
     error: string | null,
     failedCount: number,
-    alertAs: 'bridge.failed' | 'bridge.position_lost',
+    alertAs: 'bridge.failed' | 'bridge.position_lost' | 'none',
   ): void {
+    // whoever stopped it has already said why, in better words (schema drift)
+    if (alertAs === 'none') return;
     if (status === 'failed' || (status === 'paused' && error)) {
       this.alerts.emitForJob(jobId, {
         type: alertAs,

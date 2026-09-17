@@ -133,6 +133,7 @@ export function loadBridge(h: Bridge): BuilderDraft {
     minDelayMs: h.delivery.minDelayMs,
     timeoutMs: h.delivery.timeoutMs,
     onError: h.delivery.onError,
+    onSchemaChange: h.delivery.onSchemaChange ?? 'stop',
   };
   d.enabled = h.enabled;
   return d;
@@ -305,6 +306,7 @@ export function buildInput(
       minDelayMs: draft.delivery.minDelayMs,
       timeoutMs: draft.delivery.timeoutMs,
       onError: draft.delivery.onError,
+      onSchemaChange: draft.delivery.onSchemaChange,
       backoffMs: 500,
       backoffMaxMs: 30000,
       pageSize: 200,

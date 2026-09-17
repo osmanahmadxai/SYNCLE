@@ -165,6 +165,12 @@ function recorder(events: Event[]): CdcStreamHandlers & {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
+/** for what takes several timer turns (a run of retries): wait for it, not for a guess at how long it takes */
+async function until(done: () => boolean, withinMs = 3000): Promise<void> {
+  const deadline = Date.now() + withinMs;
+  while (!done() && Date.now() < deadline)
+    await new Promise((r) => setTimeout(r, 5));
+}
 const noWait = { holdMax: 1000, retryDelayMs: () => 0 };
 const USERS = [{ id: 1 }, { id: 2 }, { id: 3 }];
 
@@ -650,6 +656,12 @@ describe('a table that cannot be read for a moment', () => {
       snapshot: true,
       handlers,
     });
+    // five retries, each a timer turn: a fixed wait was too short on a busy machine
+    await until(
+      () =>
+        events.filter((e) => e.startsWith('insert')).length >= 6 ||
+        handlers.fatals.length > 0,
+    );
     await settle();
     expect(handlers.fatals).toEqual([]);
     expect(events.filter((e) => e.startsWith('insert'))).toHaveLength(6);

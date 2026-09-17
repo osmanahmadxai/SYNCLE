@@ -208,6 +208,21 @@ export const bridgeDeliverySchema = z.object({
    * instead of being lost when the source's change log advances.
    */
   onError: z.enum(['continue', 'abort']).default('abort'),
+  /**
+   * what happens when the SOURCE TABLE is found to have changed since the
+   * bridge was set up (see schema-drift.ts).
+   *
+   *   stop      (default) a column the bridge USES is gone — dropped, renamed:
+   *             the bridge stops, saying which, before it writes NULL over what
+   *             the destination holds. anything else (a column added, a type
+   *             changed) is noted on the timeline and the bridge carries on
+   *   continue  never stops; everything is noted. what a bridge did before
+   *   evolve    like `stop`, and a column ADDED to the source is added to every
+   *             target that takes the row as it comes (no explicit mapping) and
+   *             that Syncle may create tables on. nothing is ever dropped or
+   *             retyped at a destination
+   */
+  onSchemaChange: z.enum(['stop', 'continue', 'evolve']).default('stop'),
 });
 
 /* -------------------------------------------------------------------------- */

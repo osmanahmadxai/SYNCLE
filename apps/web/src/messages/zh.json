@@ -325,6 +325,15 @@
     "stopBridge": "停止桥接",
     "onFailureContinueHint": "失败的行会完整保存在该桥接的死信队列中，原因修复后可以重试。如果目标本身不可用，桥接仍会停止。",
     "onFailureStopHint": "桥接会在第一次失败处停止，不会越过它。重新启动后会重试相同的行，不会跳过任何数据。",
+    "onSchemaChange": "当源表结构变化时",
+    "schemaChangeStop": "如果桥接用到的列消失，则停止",
+    "schemaChangeEvolve": "同上——并把新增的列加到目标表",
+    "schemaChangeContinue": "无论如何继续",
+    "schemaChangeHint": {
+      "stop": "否则，被删除或重命名的列会以 NULL 写入目标，覆盖原有的值。桥接会在写入之前停止，并指出是哪一列。新增或类型变化的列只会被记录，不会使其停止。",
+      "evolve": "同上，并且源表新增的列会被添加到由 Syncle 创建并原样填充（无列映射）的目标表中。始终为可空列；目标表中绝不会删除列或更改类型。",
+      "continue": "旧的行为：消失的列会被写成 NULL。仅适用于无论源表如何变化都要跟随的目标。"
+    },
     "hashStandIn": "此处的哈希值以占位符显示。试运行会显示真实值。",
     "cdcFromNow": "仅从现在开始的变更",
     "cdcFromBeginning": "先复制现有数据，再跟随变更",
@@ -447,6 +456,19 @@
     "warnTitle": "此桥接正在占用源端的变更日志",
     "criticalTitle": "源端需要处理",
     "holding": "（已占用 {size}）"
+  },
+  "schemaDrift": {
+    "title": "自此桥接配置以来，源表结构已发生变化",
+    "help": "桥接用到的列都还在，因此它会继续运行。除非桥接另有设置，新增的列不会被复制。",
+    "harmfulTitle": "{count, plural, other {此桥接使用了源表已不存在的列：{columns}}}",
+    "harmfulHelp": "它会停止，而不是用 NULL 覆盖目标中已有的值。请编辑桥接——重新映射或移除该列——保存后即接受当前的表结构。",
+    "removed": "已移除：{columns}",
+    "added": "已新增：{columns}",
+    "retyped": "类型已变化：{columns}",
+    "accept": "接受",
+    "edit": "编辑桥接",
+    "accepted": "当前的表结构已成为此桥接的基准。",
+    "couldNotAccept": "无法接受该变化"
   },
   "dryRun": {
     "title": "试运行",
@@ -935,6 +957,10 @@
       "source_hold": {
         "title": "桥接使其源端保留变更日志",
         "help": "PostgreSQL 复制槽保留的 WAL 超过告警阈值。情况恶化时才通知，而不是每分钟一次。"
+      },
+      "bridge_schema_drift": {
+        "title": "桥接的源表结构发生变化",
+        "help": "列被删除、重命名、新增或更改类型。当桥接用到的列消失时为严重级别——它会停止，而不是把 NULL 写到副本上。"
       }
     },
     "enabled": "启用"

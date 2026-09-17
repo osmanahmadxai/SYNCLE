@@ -243,6 +243,8 @@ interface Harness {
   }[];
   recorded: { jobId: string; sequence: number; status: string }[];
   browses: FilterSpec[][];
+  /** what the schema-drift check says about the source table; a test may change it */
+  drift: { stop: string | null; missingUsed: string[]; drift: null };
 }
 
 function makeHarness(opts: {
@@ -268,6 +270,7 @@ function makeHarness(opts: {
     sinkCalls: [],
     recorded: [],
     browses: [],
+    drift: { stop: null, missingUsed: [], drift: null },
   };
 
   const adapter = {
@@ -343,6 +346,8 @@ function makeHarness(opts: {
     jobs as never,
     // alerts are fire-and-forget; what they say is tested with the alerts
     { emit: () => undefined, emitForJob: () => undefined } as never,
+    // the source table is what the bridge was built on, unless a test says otherwise
+    { check: async () => h.drift } as never,
   );
   return h;
 }
@@ -799,6 +804,30 @@ describe('retry: bookkeeping', () => {
     await expect(
       h.service.retry('b1', { force: false }),
     ).resolves.toBeDefined();
+  });
+
+  it('refuses while the source has lost a column the bridge maps: the re-read row would carry NULL for it', async () => {
+    const h = makeHarness({ sourceRows: [{ id: 1, name: 'Ada' }] });
+    await h.service.park([letter()]);
+    h.drift = {
+      stop: 'uses a column that is gone: email',
+      missingUsed: ['email'],
+      drift: null,
+    };
+    await expect(h.service.retry('b1', { force: false })).rejects.toMatchObject(
+      {
+        message: 'uses a column that is gone: email',
+        details: { reason: 'schema-drift', missingUsed: ['email'] },
+      },
+    );
+    // nothing was read, nothing written, the entry still waits — and the lock is not left held
+    expect(h.browses).toEqual([]);
+    expect(h.dbWrites).toEqual([]);
+    expect(h.letters.map((l) => l.status)).toEqual(['pending']);
+    h.drift = { stop: null, missingUsed: [], drift: null };
+    await expect(
+      h.service.retry('b1', { force: false }),
+    ).resolves.toMatchObject({ resolved: 1 });
   });
 
   it('an unreadable stored payload fails that entry without stopping the rest', async () => {

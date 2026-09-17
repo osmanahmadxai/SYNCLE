@@ -17,12 +17,15 @@ import { z } from 'zod';
  *   bridge.dead_letters   rows were set aside in a bridge's dead-letter queue
  *   source.hold           a bridge is making its SOURCE keep change log (a
  *                         PostgreSQL slot pinning WAL) beyond the warning level
+ *   bridge.schema_drift   the source table is no longer what the bridge was
+ *                         built for: a column added, removed or retyped
  */
 export const alertEventTypeSchema = z.enum([
   'bridge.failed',
   'bridge.position_lost',
   'bridge.dead_letters',
   'source.hold',
+  'bridge.schema_drift',
 ]);
 export type AlertEventType = z.infer<typeof alertEventTypeSchema>;
 export const ALERT_EVENT_TYPES = alertEventTypeSchema.options;

@@ -514,6 +514,13 @@ export interface DatabaseAdapter {
   /** run a user-authored statement in the engine's query language */
   query(statement: string, params?: unknown[]): Promise<QueryResult>;
   /**
+   * add columns to a table that exists — nullable, never a key, never with a
+   * default: the one alteration Syncle makes to a destination, and only when a
+   * bridge opted into `onSchemaChange: evolve`. absent on engines with no
+   * columns to add (a MongoDB collection, Redis)
+   */
+  addColumns?(spec: CreateTableSpec): Promise<void>;
+  /**
    * run a statement the ENGINE will refuse if it writes: inside a READ ONLY
    * transaction (PostgreSQL, MySQL), or after asking the prepared statement
    * whether it writes (SQLite). what a read-only connection's editor uses, on

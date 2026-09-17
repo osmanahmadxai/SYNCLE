@@ -134,6 +134,11 @@ The rest is the same whichever destination and trigger you pick:
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
+- **Survive a schema change.** Rename or drop a column a bridge maps and the
+  bridge stops *before* it writes `NULL` over what the destination holds, naming
+  the column. A harmless change — a column added, a type changed — is shown on
+  the bridge and sent to your alert channels; with `evolve`, a new column is
+  added to the tables Syncle created, too.
 - **Watch it happen.** A live timeline colours every delivery green (synced) ·
   red (failed) · amber (skipped) · slate (queued). Click any cell for the exact
   row written, the result, timing, and any error.

@@ -30,6 +30,7 @@ import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { DeadLetterService } from './dead-letter.service';
+import { SchemaDriftService } from './schema-drift.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobService } from './bridge-job.service';
@@ -72,7 +73,11 @@ export class BridgeWatchService implements OnModuleInit {
     private readonly registry: JobRegistryService,
     private readonly deadLetters: DeadLetterService,
     @InjectQueue(BRIDGE_WATCH_QUEUE) private readonly queue: Queue<BridgeWatchPayload>,
+    private readonly drift: SchemaDriftService,
   ) {}
+
+  /** the column names of the last row each bridge delivered: when they change, the table has */
+  private readonly columnSignatures = new Map<string, string>();
 
   /* ----- start / stop ----- */
 
@@ -90,6 +95,10 @@ export class BridgeWatchService implements OnModuleInit {
     if (active) {
       throw new ConflictError('This bridge is already running. Stop it first.');
     }
+    // is the table still the one this bridge was built for?
+    const verdict = await this.drift.check(bridge);
+    if (verdict.stop) throw new BadRequestError(verdict.stop, { reason: 'schema-drift' });
+    this.columnSignatures.delete(bridgeId);
 
     await this.ensureQueueReady();
     // one job per bridge: resume the existing (paused) job in place, keeping its
@@ -274,6 +283,20 @@ export class BridgeWatchService implements OnModuleInit {
 
         for (const row of newRows) {
           if (signal.aborted) return;
+          // the table has changed under the bridge (see SchemaDriftService):
+          // looked into BEFORE this row is written
+          const signature = Object.keys(row).sort().join('\u0000');
+          const before = this.columnSignatures.get(bridgeId);
+          if (before !== undefined && before !== signature) {
+            const verdict = await this.drift.check(bridge);
+            if (verdict.stop) {
+              await this.jobs.finalize(job.id, 'failed', verdict.stop, 'none');
+              await this.unschedule(bridgeId);
+              this.columnSignatures.delete(bridgeId);
+              return;
+            }
+          }
+          this.columnSignatures.set(bridgeId, signature);
           const now = new Date().toISOString();
           // idempotency keys on stable row identity, NOT the mutable sequence:
           // a crash that re-fetches this page redelivers under the same key so

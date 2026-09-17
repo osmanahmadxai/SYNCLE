@@ -7,6 +7,7 @@ import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobProcessor } from './bridge-job.processor';
 import { TableReaderService } from './table-reader.service';
 import { BridgeTransferService } from './bridge-transfer.service';
+import { SchemaDriftService } from './schema-drift.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeCdcService } from './bridge-cdc.service';
 import { BridgeLifecycleService } from './bridge-lifecycle.service';
@@ -49,6 +50,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     BridgeJobProcessor,
     TableReaderService,
     BridgeTransferService,
+    SchemaDriftService,
     BridgeWatchProcessor,
     CdcSpoolService,
     DeadLetterService,

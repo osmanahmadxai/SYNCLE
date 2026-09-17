@@ -336,6 +336,18 @@ export default function Page() {
           change log beyond the warning level. Sent when that gets worse, not
           on every check.
         </li>
+        <li>
+          <code>bridge.schema_drift</code> — a bridge&apos;s source table is
+          no longer the one it was built on. Critical when the bridge uses a
+          column that is gone and has stopped rather than write{' '}
+          <code>NULL</code> over the copy; a warning when the change is
+          harmless (a column added, a type changed). See{' '}
+          <a href="/docs/bridges#schema-changes">
+            When the source table changes
+          </a>
+          . (A stop of this kind is this one alert, not a second{' '}
+          <code>bridge.failed</code>.)
+        </li>
       </ul>
       <p>
         Alerts are <strong>throttled</strong> per channel, kind of event and

@@ -939,6 +939,23 @@ export default function Page() {
                 <a href="#when-a-delivery-fails">When a delivery fails</a>
               </td>
             </tr>
+            <tr>
+              <td>
+                <code>onSchemaChange</code>
+              </td>
+              <td>
+                <code>stop</code> | <code>evolve</code> |{' '}
+                <code>continue</code>
+              </td>
+              <td>
+                <code>stop</code>
+              </td>
+              <td>
+                what happens when the source table is no longer the one the
+                bridge was built on. See{' '}
+                <a href="#schema-changes">When the source table changes</a>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1084,6 +1101,109 @@ export default function Page() {
           A replay job does not use the queue. Its source is a table that is
           still there, so its failed rows are re-read from it:{' '}
           <em>Retry failed</em> re-streams exactly those rows.
+        </p>
+      </Note>
+
+      <h2 id="schema-changes">When the source table changes</h2>
+      <p>
+        A bridge is built against the columns a table has on the day it is
+        built, and the table goes on living. Syncle keeps the columns the
+        bridge was built for — recorded when the bridge is created, and again
+        every time it is saved — and compares them with the table before a
+        run starts, when a live bridge starts, and — on a live bridge and
+        during a replay alike — the moment a row arrives whose columns are not
+        the ones the row before it had. A{' '}
+        <a href="#dead-letter-queue">dead-letter retry</a> asks first as well:
+        it re-reads rows from the source, and is refused while the answer is
+        “a column this bridge uses is gone”.
+      </p>
+      <p>Two very different things can have happened:</p>
+      <ul>
+        <li>
+          <strong>A column the bridge uses is gone</strong> — dropped, or
+          renamed, which to a catalog is the same thing. “Uses” means: mapped by
+          name to a destination column, a key of a target with no mapping,
+          filtered or sorted by, read by a column transform, polled by, pinned
+          in an HTTP payload&apos;s field list, or named in its template (
+          <code>{'{{email}}'}</code>). Every row from then on has no value for
+          it, and an upsert would write <code>NULL</code> over the value the
+          destination holds, row by row, every delivery green. So the bridge{' '}
+          <strong>stops before that write</strong>: the job fails with the
+          column&apos;s name, the row is not delivered and not skipped (a live
+          bridge reads it again when it next starts), and the destination is
+          exactly as it was.
+        </li>
+        <li>
+          <strong>Anything else</strong> — a column added, a type changed, a
+          column the bridge never touched dropped. The bridge carries on. Its
+          page shows what changed, with an <em>Accept</em> button, because a
+          copy that is now narrower than its original is worth knowing about.
+        </li>
+      </ul>
+      <p>
+        The way out of a stop is to edit the bridge: re-map the column to its
+        new name, or remove it. Saving a bridge that no longer uses a missing
+        column accepts the table as it is now. Saving it <em>unchanged</em>{' '}
+        does not, and neither does <em>Accept</em> — there is deliberately no
+        button that turns the protection off for one column.
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <code>onSchemaChange</code>
+              </th>
+              <th>A used column is gone</th>
+              <th>A column was added</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>stop</code> (default)
+              </td>
+              <td>stops before writing; critical alert</td>
+              <td>noted on the bridge; warning alert; not copied</td>
+            </tr>
+            <tr>
+              <td>
+                <code>evolve</code>
+              </td>
+              <td>stops before writing; critical alert</td>
+              <td>
+                added to every destination table that Syncle creates{' '}
+                <em>and</em> fills without a column mapping — typed by the same
+                map an auto-created table uses, always nullable. A target
+                whose columns you chose is left alone. Nothing is ever dropped
+                or retyped at the destination
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>continue</code>
+              </td>
+              <td>
+                carries on, writing <code>NULL</code> for the column — the
+                behaviour before this setting existed; warning alert
+              </td>
+              <td>noted on the bridge; warning alert; not copied</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Each change is said once — in the log, and to every{' '}
+        <a href="/docs/self-hosting#alerts">alert channel</a> subscribed to{' '}
+        <em>a source table changes under a bridge</em> — not once per batch.
+      </p>
+      <Note>
+        <p>
+          This applies to sources that have a schema: PostgreSQL, MySQL/MariaDB
+          and SQLite tables. A MongoDB collection&apos;s or a Redis keyspace&apos;s
+          “columns” are whatever the last documents happened to hold, so there
+          is nothing to compare, and a saved-query source has no table to look
+          at.
         </p>
       </Note>
 

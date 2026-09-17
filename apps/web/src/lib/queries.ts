@@ -45,6 +45,7 @@ export const queryKeys = {
   bridgeJob: (id: string, jobId: string) => ['bridges', id, 'jobs', jobId] as const,
   deadLetters: (id: string) => ['bridges', id, 'deadLetters'] as const,
   sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
+  schemaDrift: (id: string) => ['bridges', id, 'schemaDrift'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -416,6 +417,9 @@ export function useStartWatch(bridgeId: string) {
   return useMutation({
     mutationFn: (opts: { fromNow?: boolean; recopy?: boolean } = {}) =>
       api.startWatch(bridgeId, opts),
+    // refused because the source table changed? the panel's notice says so for
+    // longer than a toast does: have it look now, not on its next minute
+    onError: () => qc.invalidateQueries({ queryKey: queryKeys.schemaDrift(bridgeId) }),
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: queryKeys.sourceHold(bridgeId) });
       upsertBridgeJob(qc, bridgeId, job);
@@ -498,6 +502,29 @@ export function useSourceHold(bridgeId: string | null, enabled: boolean) {
     refetchInterval: 30_000,
     // the source may be unreachable; that is reported elsewhere, louder
     retry: false,
+  });
+}
+
+/**
+ * has the source table changed since the bridge was set up? asked of the source
+ * itself, so slowly — a stopped bridge says why in its own job, at once. (saving
+ * the bridge invalidates everything under `bridges`, this included)
+ */
+export function useSchemaDrift(bridgeId: string | null) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.schemaDrift(bridgeId) : ['schemaDrift', 'none'],
+    queryFn: () => api.schemaDrift(bridgeId as string),
+    enabled: !!bridgeId,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+export function useAcceptSchemaDrift(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.acceptSchemaDrift(bridgeId),
+    onSuccess: (status) => qc.setQueryData(queryKeys.schemaDrift(bridgeId), status),
   });
 }
 

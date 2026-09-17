@@ -22,6 +22,7 @@ import { useConfirm } from '@/components/confirm';
 import { Button } from '@/components/ui/button';
 import { JobDetail, JobStatusBadge } from './job-detail';
 import { JobStrip } from './job-strip';
+import { SchemaDriftNotice } from './schema-drift-notice';
 import { WorkspaceMap } from './workspace-map';
 
 export function BridgesView() {
@@ -299,6 +300,12 @@ function BridgePanel({
           </Button>
         </div>
       </div>
+
+      {/* the source table is not the one this bridge was built on; silent otherwise */}
+      <SchemaDriftNotice
+        bridgeId={bridgeId}
+        onEdit={() => openBridgeEditor({ editingId: bridgeId })}
+      />
 
       {/* jobs strip */}
       <JobStrip jobs={jobs ?? []} selectedId={selectedJobId} onSelect={setSelectedJobId} locale={locale} />

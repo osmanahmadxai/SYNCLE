@@ -1100,6 +1100,37 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>GET /api/bridges/:id/schema-drift</code>
+              </td>
+              <td>
+                Has the source table{' '}
+                <a href="/docs/bridges#schema-changes">changed</a> since the
+                bridge was set up —{' '}
+                <code>
+                  {'{ baselineAt, checkedAt, drift: { added, removed, retyped } | null, missingUsed }'}
+                </code>
+                . <code>missingUsed</code> lists the columns the bridge uses
+                that the table no longer has: not empty means the bridge will
+                not run. Reads the source; changes nothing
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/schema-drift/accept</code>
+              </td>
+              <td>
+                The table as it is now becomes what the bridge is built for.{' '}
+                <code>400</code> with{' '}
+                <code>{'details.reason: "schema-drift"'}</code> and{' '}
+                <code>details.missingUsed</code> while the bridge still uses a
+                column that is gone — edit the bridge instead; a{' '}
+                <code>PUT</code> that no longer uses it accepts the table. The
+                same <code>reason</code> comes back from{' '}
+                <code>watch/start</code> when a live bridge is refused for it
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>POST /api/bridges/retention/run</code>
               </td>
               <td>

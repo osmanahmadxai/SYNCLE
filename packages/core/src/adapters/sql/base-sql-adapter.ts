@@ -756,6 +756,22 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     await this.runSql(`CREATE TABLE ${target} (${parts.join(', ')})`, []);
   }
 
+  /**
+   * one ALTER TABLE … ADD COLUMN per column (SQLite takes one at a time, and
+   * the others lose nothing by it). always nullable: the rows already there
+   * have no value for it
+   */
+  async addColumns(spec: CreateTableSpec): Promise<void> {
+    const target = this.qualify(
+      assertSafeIdentifier(spec.table),
+      spec.schema ? assertSafeIdentifier(spec.schema) : undefined,
+    );
+    for (const c of spec.columns) {
+      const column = this.columnSql({ ...c, nullable: true, primaryKey: false, autoIncrement: false, unique: false, defaultValue: undefined });
+      await this.runSql(`ALTER TABLE ${target} ADD COLUMN ${column}`, []);
+    }
+  }
+
   async dropTable(table: string, schema?: string): Promise<void> {
     await this.runSql(`DROP TABLE ${this.qualify(table, schema)}`, []);
   }

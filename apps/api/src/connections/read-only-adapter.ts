@@ -24,6 +24,7 @@ export const WRITING_METHODS = [
   'upsertRows',
   'ensureKeyIndex',
   'createTable',
+  'addColumns',
   'dropTable',
   'truncateTable',
   'createDatabase',

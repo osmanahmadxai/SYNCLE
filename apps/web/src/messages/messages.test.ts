@@ -61,6 +61,32 @@ function placeholders(message: string): string[] {
   return [...names].sort();
 }
 
+/**
+ * …and with the ones INSIDE a plural or select branch
+ * (`{count, plural, one {… {columns}} …}`), for formatting a message: a missing
+ * value fails the format. a branch whose whole text is one word is taken for a
+ * placeholder too — a value nobody asks for does no harm, which is why this is
+ * not what the locales are compared by
+ */
+function placeholdersDeep(message: string): string[] {
+  const names = new Set<string>();
+  // the text of every open brace, without what is nested inside it
+  const open: string[] = [];
+  for (const ch of message) {
+    if (ch === '{') {
+      open.push('');
+      continue;
+    }
+    if (ch === '}') {
+      const name = (open.pop() ?? '').split(',')[0]!.trim();
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) names.add(name);
+      continue;
+    }
+    if (open.length > 0) open[open.length - 1] += ch;
+  }
+  return [...names].sort();
+}
+
 const en = flatten(load('en'));
 
 describe('the three locales', () => {
@@ -121,7 +147,7 @@ describe('every message', () => {
     });
     for (const [key, message] of flatten(messages)) {
       const values: Record<string, unknown> = {};
-      for (const name of placeholders(message)) {
+      for (const name of placeholdersDeep(message)) {
         values[name] = new RegExp(`\\{\\s*${name}\\s*,\\s*(plural|number|selectordinal)`).test(message) ? 2 : 'x';
       }
       const tags = [...message.matchAll(/<([A-Za-z][\w-]*)>/g)].map((m) => m[1]!);

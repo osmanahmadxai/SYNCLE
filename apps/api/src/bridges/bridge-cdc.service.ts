@@ -59,6 +59,7 @@ import { rowMatchesFilters } from './cdc/filter-match';
 import { AlertsService } from '../alerts/alerts.service';
 import { SnapshotCdcProvider } from './cdc/snapshot-provider';
 import { TableReaderService } from './table-reader.service';
+import { SchemaDriftService, tracksSchema } from './schema-drift.service';
 import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
 
 /** live runtime state for one active CDC stream */
@@ -128,6 +129,8 @@ interface Stream {
    * `completeRow`
    */
   wholeValueTarget: boolean | null;
+  /** the column names of the last row that was not a delete: when they change, the table has */
+  columnSignature: string | null;
 }
 
 /** one change held in the pending batch */
@@ -259,6 +262,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly tunnels: SshTunnelService,
     private readonly reader: TableReaderService,
     private readonly alerts: AlertsService,
+    private readonly drift: SchemaDriftService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     // every engine's provider is handed out inside the wrapper that can copy a
@@ -450,6 +454,10 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         `CDC ${bridgeId}: continuing from now${recopy ? ', copying the table again' : ', accepting a gap'} (${gap})`,
       );
     }
+
+    // is the table still the one this bridge was built for?
+    const verdict = await this.drift.check(bridge);
+    if (verdict.stop) throw new BadRequestError(verdict.stop, { reason: 'schema-drift' });
 
     await provider.provision(bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
 
@@ -825,6 +833,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       halted: false,
       consecutiveFailures: 0,
       wholeValueTarget: null,
+      columnSignature: null,
       route,
     };
     this.streams.set(bridgeId, stream);
@@ -1174,6 +1183,26 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       change = { ...change, row };
     }
 
+    // a row whose columns are not the ones the last row had: the table has
+    // changed under the stream. looked into BEFORE the row is written — if a
+    // column the bridge maps is gone, this row would carry NULL for it
+    if (op !== 'delete' && tracksSchema(stream.provider.engine)) {
+      const signature = Object.keys(change.row).sort().join('\u0000');
+      if (stream.columnSignature !== null && stream.columnSignature !== signature) {
+        const verdict = await this.drift.check(bridge);
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        if (verdict.stop) {
+          // what was read before it is fine, and goes out first; this row does
+          // not, and its position is not passed: it is read again after the fix
+          await this.flush(bridgeId, stream);
+          if (stream.inflight) await stream.inflight.catch(() => undefined);
+          await this.halt(bridgeId, stream, 'failed', verdict.stop, 'none');
+          return;
+        }
+      }
+      stream.columnSignature = signature;
+    }
+
     // source filters: replay pushes them into SQL, but a CDC stream sees every
     // row of the table, so evaluate them in-process here. skipped rows still
     // advance the durable cursor (and the provider's server-side ack point) so
@@ -1500,7 +1529,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     stream: Stream,
     status: 'paused' | 'failed',
     message: string,
-    alertAs: 'bridge.failed' | 'bridge.position_lost' = 'bridge.failed',
+    alertAs: 'bridge.failed' | 'bridge.position_lost' | 'none' = 'bridge.failed',
   ): Promise<void> {
     if (stream.halted) return;
     stream.halted = true;

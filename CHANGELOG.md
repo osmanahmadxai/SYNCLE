@@ -377,8 +377,40 @@ can no longer lose a row to a failed delivery.
   literal, which made `grep`, `git diff` and some editors treat the whole file
   as binary. It is written as `\0` now; the row hashes it produces are
   byte-for-byte the same, so existing snapshot bridges do not re-send anything.
+- **A column renamed or dropped at the source emptied the copy of it, one row
+  at a time.** A bridge maps columns by name. When a mapped column went — and a
+  rename, to a catalog, is a drop and an add — every row from then on had no
+  value under that name, and the upsert wrote `NULL` over the value the
+  destination held. Each delivery was green; the only trace was the data.
+  A bridge now keeps the columns it was built for, compares them with the table
+  before a run and the moment a row arrives with different columns — on a live
+  bridge, in the middle of a replay, before a dead-letter retry — and
+  **stops before that write** — the job says which column, the row is neither
+  delivered nor skipped, and the destination is as it was. Accepting the change
+  cannot be used to wave it through: neither the button nor saving the bridge
+  unchanged forgets a column the bridge still uses. The same goes for a column
+  an HTTP payload pins or names in its template, a filter, a sort, a transform
+  or a watch column. See *Added* for the setting that governs it.
 
 ### Added
+
+- **Schema drift: a bridge knows when its source table changes.** New delivery
+  setting `onSchemaChange`, in the builder as *When the source table changes*:
+  - `stop` (default) — a column the bridge uses is gone: stop before writing.
+    Anything else (a column added, retyped, or an unused one dropped) is shown
+    on the bridge's page with an *Accept* button, and the bridge carries on.
+  - `evolve` — the same, and a column added at the source is added to every
+    destination table Syncle creates *and* fills without a column mapping:
+    typed by the map auto-created tables use, always nullable, on PostgreSQL,
+    MySQL/MariaDB and SQLite. Nothing is ever dropped or retyped.
+  - `continue` — the old behaviour, for a copy meant to follow the source
+    whatever it does.
+
+  New alert event `bridge.schema_drift` (critical on a stop, warning
+  otherwise), said once per change rather than once per batch. New routes
+  `GET /api/bridges/:id/schema-drift` and `POST …/schema-drift/accept`. Sources
+  with no schema to compare (MongoDB, Redis, saved queries) are left alone.
+  Existing bridges get their baseline at their next run or save.
 
 - **API keys.** A script or a CI job no longer needs the operator's password:
   create a key in *Settings › Security*, send it as `Authorization: Bearer

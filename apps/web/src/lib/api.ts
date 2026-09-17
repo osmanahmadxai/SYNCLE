@@ -44,6 +44,7 @@ import type {
   Workspace,
   WorkspaceInputDTO,
   BridgeSourceHold,
+  BridgeSchemaDrift,
 } from '@syncle/core';
 
 /**
@@ -375,6 +376,11 @@ export const api = {
   /** what a CDC bridge is holding on its source; null when nothing */
   sourceHold: (id: string) =>
     request<BridgeSourceHold | null>(`/bridges/${id}/source-hold`),
+  /** has the source table changed since the bridge was set up? reads, changes nothing */
+  schemaDrift: (id: string) => request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift`),
+  /** refused (400, reason `schema-drift`) while the bridge still uses a column that is gone */
+  acceptSchemaDrift: (id: string) =>
+    request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift/accept`, { method: 'POST' }),
   stopWatch: (id: string) =>
     request<BridgeJob | null>(`/bridges/${id}/watch/stop`, { method: 'POST' }),
   cdcReadiness: (body: CdcReadinessDTO) =>

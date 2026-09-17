@@ -35,6 +35,7 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  BadRequestError,
   ConflictError,
   type BridgeDeadLetter,
   type CdcOperation,
@@ -57,6 +58,7 @@ import { DatabaseSinkService, targetKey } from './database-sink.service';
 import type { DeliveryOutcome, ResolvedBridge } from './bridges.types';
 import { rowMatchesFilters } from './cdc/filter-match';
 import { shapeRows } from './row-shaping';
+import { SchemaDriftService } from './schema-drift.service';
 import { failedBeforeSending } from './bridge-sink.service';
 import { decodeRows, encodeRows, rowsForDisplay } from './row-codec';
 
@@ -102,6 +104,7 @@ export class DeadLetterService {
     private readonly databaseSink: DatabaseSinkService,
     private readonly jobs: BridgeJobService,
     private readonly alerts: AlertsService,
+    private readonly drift: SchemaDriftService,
   ) {}
 
   /* ----- writing ----- */
@@ -246,6 +249,16 @@ export class DeadLetterService {
     this.retrying.add(bridgeId);
     try {
       const bridge = await this.store.resolve(bridgeId);
+      // a retry re-reads each row from the source. from a table that has lost a
+      // column the bridge maps, that row comes back without it — and would be
+      // written with NULL in its place, by the very button meant to repair things
+      const verdict = await this.drift.check(bridge);
+      if (verdict.stop) {
+        throw new BadRequestError(verdict.stop, {
+          reason: 'schema-drift',
+          missingUsed: verdict.missingUsed,
+        });
+      }
       const entries = await this.prisma.bridgeDeadLetter.findMany({
         where: {
           bridgeId,

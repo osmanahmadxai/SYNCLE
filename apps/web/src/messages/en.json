@@ -325,6 +325,15 @@
     "stopBridge": "Stop the bridge",
     "onFailureContinueHint": "Rows that fail are kept in the bridge's dead-letter queue, in full, and can be retried once the cause is fixed. The bridge still stops if the destination itself is unavailable.",
     "onFailureStopHint": "The bridge stops at the first failure without moving past it. Start it again and the same rows are retried; nothing is skipped.",
+    "onSchemaChange": "When the source table changes",
+    "schemaChangeStop": "Stop, if a column the bridge uses is gone",
+    "schemaChangeEvolve": "Same — and add new columns to the destination",
+    "schemaChangeContinue": "Carry on regardless",
+    "schemaChangeHint": {
+      "stop": "A dropped or renamed column would otherwise reach the destination as NULL, over the value it holds. The bridge stops before that write and says which column. Added and retyped columns are noted, and do not stop it.",
+      "evolve": "As above, and a column added to the source is added to a destination table Syncle creates and fills as-is (no column mapping). Always as nullable; nothing is ever dropped or retyped there.",
+      "continue": "The old behaviour: a column that is gone is written as NULL. Only for a destination that is meant to follow the source whatever it does."
+    },
     "hashStandIn": "A hashed value is shown as a stand-in here. Dry run shows the real one.",
     "cdcFromNow": "Only changes from now on",
     "cdcFromBeginning": "Copy what is there, then follow changes",
@@ -447,6 +456,19 @@
     "warnTitle": "This bridge is holding change log on the source",
     "criticalTitle": "The source needs attention",
     "holding": "({size} held)"
+  },
+  "schemaDrift": {
+    "title": "The source table has changed since this bridge was set up",
+    "help": "Nothing the bridge uses is gone, so it carries on. A new column is not copied unless the bridge is told to.",
+    "harmfulTitle": "{count, plural, one {This bridge uses a column the source no longer has: {columns}} other {This bridge uses columns the source no longer has: {columns}}}",
+    "harmfulHelp": "It stops rather than write NULL over what the destination holds. Edit the bridge — re-map or remove the column — and saving it accepts the table as it is now.",
+    "removed": "removed: {columns}",
+    "added": "added: {columns}",
+    "retyped": "changed type: {columns}",
+    "accept": "Accept",
+    "edit": "Edit bridge",
+    "accepted": "The table as it is now is what this bridge is built for.",
+    "couldNotAccept": "Could not accept the change"
   },
   "dryRun": {
     "title": "Dry run",
@@ -935,6 +957,10 @@
       "source_hold": {
         "title": "a bridge makes its source keep change log",
         "help": "A PostgreSQL slot pinning WAL beyond the warning level. Said when it gets worse, not every minute."
+      },
+      "bridge_schema_drift": {
+        "title": "a source table changes under a bridge",
+        "help": "A column dropped, renamed, added or retyped. Critical when the bridge uses a column that is gone — it stops rather than write NULL over the copy."
       }
     },
     "enabled": "Enabled"

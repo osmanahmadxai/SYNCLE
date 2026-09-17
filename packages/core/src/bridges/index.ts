@@ -5,3 +5,4 @@ export * from './type-map';
 export * from './value-map';
 export * from './watch';
 export * from './column-transforms';
+export * from './schema-drift';

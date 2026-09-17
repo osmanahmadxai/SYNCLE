@@ -121,6 +121,10 @@ model Bridge {
   deliveryJson    String   @map("delivery_json")
   triggerJson     String?  @map("trigger_json") // null = { kind: 'replay' }
   enabled         Boolean  @default(true)
+  // the source table's columns as the bridge last saw them accepted: what a
+  // later look at the table is compared with (schema drift). null = not yet seen
+  sourceColumnsJson String?   @map("source_columns_json")
+  sourceColumnsAt   DateTime? @map("source_columns_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

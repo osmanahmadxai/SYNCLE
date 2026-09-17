@@ -47,6 +47,8 @@ export interface Delivery {
   minDelayMs: number;
   timeoutMs: number;
   onError: 'continue' | 'abort';
+  /** what to do when the source table is no longer the one the bridge was built on */
+  onSchemaChange: 'stop' | 'continue' | 'evolve';
 }
 
 export function blankDbTarget(): DbTarget {
@@ -85,6 +87,7 @@ export function blankDelivery(): Delivery {
     minDelayMs: 0,
     timeoutMs: 15000,
     onError: 'continue',
+    onSchemaChange: 'stop',
   };
 }
 
@@ -463,7 +466,16 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
                 : t,
             )
           : d.dbTargets;
-      return { ...d, destKind: action.destKind, dbTargets };
+      return {
+        ...d,
+        destKind: action.destKind,
+        dbTargets,
+        // `evolve` alters a destination TABLE: there is none behind a webhook
+        delivery:
+          action.destKind === 'http' && d.delivery.onSchemaChange === 'evolve'
+            ? { ...d.delivery, onSchemaChange: 'stop' }
+            : d.delivery,
+      };
     }
     case 'patchDest':
       return { ...d, dest: { ...d.dest, ...action.patch } };
