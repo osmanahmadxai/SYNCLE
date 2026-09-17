@@ -69,18 +69,24 @@ export class ConnectionsController {
   @Post('test')
   async testUnsaved(
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
-  ): Promise<{ success: true }> {
+    @Query('from') from?: string,
+  ): Promise<{ success: true; sshHostKey?: string }> {
     const now = new Date().toISOString();
+    // testing an EDIT of a saved connection: the form only ever saw its secrets
+    // redacted, so fill those back in from the stored copy — otherwise the test
+    // dials with the literal string "********" and always fails
+    const input = from ? await this.store.withStoredSecrets(from, dto) : dto;
     const config: ConnectionConfig = {
       id: 'test',
       createdAt: now,
       updatedAt: now,
-      ...dto,
+      ...input,
       // a throwaway config just for a connectivity check; workspace is irrelevant
       workspaceId: dto.workspaceId ?? 'test',
     };
-    await this.pool.test(config);
-    return { success: true };
+    // the jump host's fingerprint comes back so it can be checked, and saved
+    // with the connection, before anything is trusted on first use
+    return { success: true, ...(await this.pool.test(config)) };
   }
 
   @Get(':id')
@@ -127,9 +133,16 @@ export class ConnectionsController {
   }
 
   @Post(':id/test')
-  async testSaved(@Param('id') id: string): Promise<{ success: true }> {
-    await this.pool.test(await this.store.resolve(id));
-    return { success: true };
+  async testSaved(
+    @Param('id') id: string,
+  ): Promise<{ success: true; sshHostKey?: string }> {
+    const config = await this.store.resolve(id);
+    const result = await this.pool.test(config);
+    // a saved connection that just proved itself: pin the key it presented
+    if (result.sshHostKey && !config.ssh?.hostKey?.trim()) {
+      await this.store.pinSshHostKey(id, result.sshHostKey).catch(() => undefined);
+    }
+    return { success: true, ...result };
   }
 
   /* ----- data operations ----- */

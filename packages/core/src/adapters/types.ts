@@ -76,6 +76,14 @@ export interface SshTunnelConfig {
   privateKey?: string;
   /** passphrase protecting the private key, if any */
   passphrase?: string;
+  /**
+   * the jump host's public-key fingerprint, as OpenSSH prints it
+   * (`SHA256:…`, from `ssh-keygen -lf` or the first-connect prompt). when set,
+   * a host presenting any other key is refused. when empty, the key seen on the
+   * first successful connection is recorded here and enforced from then on —
+   * the same trust-on-first-use rule `ssh` itself follows with known_hosts.
+   */
+  hostKey?: string;
 }
 
 /**
@@ -83,6 +91,36 @@ export interface SshTunnelConfig {
  * shared shape keeps the store and UI uniform. `password` is only ever present
  * in decrypted form inside the server process, it's encrypted at rest
  */
+/**
+ * how far a TLS connection is trusted. the names and meanings are libpq's
+ * `sslmode`, because that is the vocabulary people already have:
+ *
+ *  - `disable`     no TLS
+ *  - `require`     encrypted, but the server's certificate is NOT checked — it
+ *                  stops a passive eavesdropper and nothing else: anyone who
+ *                  can sit in the path can present any certificate
+ *  - `verify-ca`   the certificate must chain to a trusted CA (the one given,
+ *                  or the system's), whatever name it was issued for
+ *  - `verify-full` …and it must have been issued for the host being dialled.
+ *                  the only mode that actually authenticates the server
+ */
+export type TlsMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
+
+export interface TlsConfig {
+  mode: TlsMode;
+  /** PEM CA certificate(s) to trust instead of the system store */
+  ca?: string;
+  /** PEM client certificate, for servers that require mutual TLS */
+  cert?: string;
+  /** PEM private key for `cert` (secret: encrypted at rest, returned redacted) */
+  key?: string;
+  /**
+   * the name the server's certificate must carry, when it is not the host
+   * being dialled — an IP address in `host`, say, or a load balancer's name
+   */
+  servername?: string;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -97,8 +135,14 @@ export interface ConnectionConfig {
   password?: string;
   /** database name, or file path for SQLite */
   database?: string;
-  /** use TLS. engine adapters interpret the specifics */
+  /**
+   * legacy on/off switch, kept in step with `tls` (true = any mode but
+   * `disable`). connections saved before `tls` existed carry only this; see
+   * `effectiveTls` for what it meant on each engine.
+   */
   ssl?: boolean;
+  /** TLS settings; takes precedence over `ssl` */
+  tls?: TlsConfig;
   /** full connection URI; when present, takes precedence over discrete fields */
   connectionString?: string;
   /** free-form engine-specific options (e.g. Mongo authSource, Redis db index) */
@@ -108,6 +152,12 @@ export interface ConnectionConfig {
    * engines (SQLite) may only open paths under this directory
    */
   fileBaseDir?: string;
+  /**
+   * server-set (never user input): the database's real host when `host` has
+   * been rewritten to an SSH tunnel's loopback end. TLS has to verify the
+   * certificate against THIS name — the tunnel's 127.0.0.1 is on no certificate.
+   */
+  tlsHostOverride?: string;
   /** reach the database through an SSH tunnel (network engines only) */
   ssh?: SshTunnelConfig;
   createdAt: string;

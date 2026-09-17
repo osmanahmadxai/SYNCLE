@@ -89,7 +89,8 @@ export default function Page() {
 
       <h2 id="master-key">Encryption and the master key</h2>
       <p>
-        Connection passwords, SSH secrets and bridge auth secrets are encrypted
+        Connection passwords, SSH secrets, TLS client keys and bridge auth
+        secrets are encrypted
         at rest with AES-256-GCM under <code>SYNCLE_MASTER_KEY</code>, and only
         ever returned to the browser redacted. Session cookies are signed with
         an HKDF-derived sub-key of the same master key, so encryption and

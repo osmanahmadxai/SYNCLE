@@ -13,6 +13,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { ZongJi, type BinLogEvent } from '@powersync/mysql-zongji';
+import { effectiveTls, mysqlTlsOptions, tlsServerName } from '@syncle/core/adapters';
 import type {
   CdcOperation,
   CdcReadiness,
@@ -73,6 +74,8 @@ interface ZongjiConn {
   port: number;
   user: string;
   password: string;
+  /** TLS options for the binlog connection; absent = plaintext */
+  ssl?: Record<string, unknown>;
 }
 
 /** row events we care about. `rotate`/`tablemap` are needed for bookkeeping */
@@ -235,12 +238,30 @@ export class MysqlCdcProvider implements CdcProvider {
   /* ----- connection details, zongji needs discrete fields ----- */
 
   private zongjiConn(conn: ConnectionConfig): ZongjiConn {
+    // the binlog stream is the connection every change travels over, and it
+    // was opened without any TLS options: with TLS switched on for the
+    // connection, the workbench was encrypted and the replication stream was
+    // not. it now gets the same trust decision. `verifyServerName` is read by
+    // our patch to the client (patches/@vlasky__mysql), which otherwise checks
+    // the certificate's chain but never the name it was issued for
+    const tls = mysqlTlsOptions(conn);
+    const ssl = tls
+      ? {
+          ssl: {
+            ...tls,
+            ...(effectiveTls(conn).mode === 'verify-full'
+              ? { verifyServerName: tlsServerName(conn) }
+              : {}),
+          },
+        }
+      : {};
     if (conn.host) {
       return {
         host: conn.host,
         port: conn.port ?? 3306,
         user: conn.user ?? 'root',
         password: conn.password ?? '',
+        ...ssl,
       };
     }
     if (conn.connectionString) {
@@ -250,6 +271,7 @@ export class MysqlCdcProvider implements CdcProvider {
         port: u.port ? Number(u.port) : 3306,
         user: decodeURIComponent(u.username),
         password: decodeURIComponent(u.password),
+        ...(conn.tls ? ssl : {}),
       };
     }
     throw new Error('MySQL connection is missing host/credentials.');

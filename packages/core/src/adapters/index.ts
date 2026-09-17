@@ -26,6 +26,16 @@ export {
   normalizeMongoDocument,
   normalizeMongoValue,
 } from './nosql/mongodb-adapter';
+export {
+  describeTls,
+  effectiveTls,
+  mongoTlsOptions,
+  mysqlTlsOptions,
+  nodeTlsOptions,
+  tlsServerName,
+  verifyPeerIdentity,
+  type NodeTlsOptions,
+} from './tls-options';
 import { RedisAdapter, REDIS_CAPABILITIES } from './nosql/redis-adapter';
 
 const hostPortUserPass = (

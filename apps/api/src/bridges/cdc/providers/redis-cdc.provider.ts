@@ -15,6 +15,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
+import { nodeTlsOptions } from '@syncle/core/adapters';
 import type {
   CdcOperation,
   CdcReadiness,
@@ -84,8 +85,13 @@ export class RedisCdcProvider implements CdcProvider {
   }
 
   private newClient(conn: ConnectionConfig): Redis {
+    const tls = nodeTlsOptions(conn);
     if (conn.connectionString) {
-      return new Redis(conn.connectionString, { lazyConnect: true, maxRetriesPerRequest: null });
+      return new Redis(conn.connectionString, {
+        ...(conn.tls && tls ? { tls } : {}),
+        lazyConnect: true,
+        maxRetriesPerRequest: null,
+      });
     }
     return new Redis({
       host: conn.host ?? 'localhost',
@@ -93,7 +99,7 @@ export class RedisCdcProvider implements CdcProvider {
       username: conn.user || undefined,
       password: conn.password || undefined,
       db: this.dbIndex(conn),
-      tls: conn.ssl ? {} : undefined,
+      tls,
       lazyConnect: true,
       maxRetriesPerRequest: null,
       connectTimeout: 8000,

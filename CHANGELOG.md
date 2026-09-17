@@ -32,6 +32,23 @@ can no longer lose a row to a failed delivery.
   - With `onError: abort`, the bridge stopped at the failed batch — but a batch
     already queued behind it could still be delivered in the instant before the
     stream shut down, and its checkpoint carried the cursor past the failure.
+- **"Use TLS" meant four different things, and none of them was "verified".**
+  MySQL and the PostgreSQL change stream encrypted but never checked the
+  certificate (`rejectUnauthorized: false`, hard-coded — the change stream
+  ignored even the `sslVerify` option the ordinary connection honoured). MongoDB
+  ignored the switch entirely with host and port fields and connected in
+  **plaintext**. And the MySQL binlog stream — the connection every change
+  travels over — was never given TLS options at all, so with TLS on, the
+  workbench was encrypted and the replication stream was not. Only Redis
+  verified. All of it now goes through one place, and is tested against real
+  TLS-only servers on all four engines.
+- **SSH tunnels accepted any host key**, so the hop a tunnel exists to protect
+  could be impersonated by whoever answered on that address.
+- Testing an *edit* of a saved connection always failed unless every secret was
+  retyped: the form only holds them redacted, and the test dialled with the
+  literal `********`.
+- A refused Redis connection reported only "Connection is closed"; it now gives
+  the reason (a rejected certificate, a wrong host name).
 - **Auto-created tables got the wrong column types, and values changed on the
   way across.** Both halves of cross-engine translation were rebuilt, and are
   now checked against real PostgreSQL, MySQL, MongoDB and SQLite — by replay and
@@ -111,6 +128,19 @@ can no longer lose a row to a failed delivery.
     (`SYNCLE_DEAD_LETTER_MAX_ROWS`, 10,000).
 - The builder offers **On failure** for watch and CDC bridges, where it was
   previously hidden and fixed to `continue`.
+- **TLS modes**: off, encrypt only, verify the authority, verify the authority
+  *and* the host name — PostgreSQL's `sslmode` names, meaning the same on every
+  engine and applied to every connection a bridge opens, the CDC streams
+  included. With a CA certificate for private CAs, an expected server name, and
+  a client certificate and key for mutual TLS (the key encrypted at rest).
+  Through an SSH tunnel the certificate is checked against the database's host
+  name, not the tunnel's `127.0.0.1`. Both MySQL clients lacked a host-name
+  check: the adapter now verifies after the handshake (mysql2 skips the check
+  for IP hosts), and the binlog client is patched to verify inside it.
+- **SSH host key pinning.** Give the jump host's `SHA256:…` fingerprint and any
+  other key is refused; leave it empty and the key from the first connection is
+  recorded and enforced (the Test button shows it first). A changed key refuses
+  to connect and says why.
 - **Type warnings.** Whenever a target column cannot hold everything the source
   column can — a time zone MySQL has nowhere to put, more precision than
   `DECIMAL(65,30)`, a key that had to be bounded to `VARCHAR(255)`, an enum
@@ -124,6 +154,10 @@ can no longer lose a row to a failed delivery.
   one. Bridges that already exist keep the value they were saved with, and the
   web app's builder still pre-selects `continue` — which, with the queue, no
   longer loses anything.
+- Connections saved under the old TLS switch keep exactly what it did on their
+  engine, shown as the matching mode — with one exception: a **MongoDB**
+  connection with the switch on now really uses TLS (it was plaintext), and
+  fails if the server does not offer it.
 - The workbench shows PostgreSQL dates and timestamps as PostgreSQL writes them
   (`2026-03-04 05:06:07.891234+00`) rather than as a JavaScript date rendered in
   UTC, which was off by the server's offset for columns without a time zone.

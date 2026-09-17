@@ -23,7 +23,7 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
-import { normalizeMongoDocument } from '@syncle/core/adapters';
+import { mongoTlsOptions, normalizeMongoDocument } from '@syncle/core/adapters';
 import type { ResolvedBridge } from '../../bridges.types';
 import { backoffMs, delay, type CdcChange, type CdcProvider, type CdcStreamContext, type CdcStreamHandle } from '../cdc-provider';
 
@@ -48,6 +48,15 @@ export class MongodbCdcProvider implements CdcProvider {
 
   /* ----- connection ----- */
 
+  /**
+   * the change stream gets the SAME TLS treatment as the adapter's connection.
+   * it was never told about TLS at all, so with "Use TLS" switched on every
+   * change still crossed the network in plaintext.
+   */
+  private clientOptions(conn: ConnectionConfig): Record<string, unknown> {
+    return { serverSelectionTimeoutMS: 8000, ...mongoTlsOptions(conn) };
+  }
+
   private uri(conn: ConnectionConfig): string {
     if (conn.connectionString) return conn.connectionString;
     const auth =
@@ -66,7 +75,7 @@ export class MongodbCdcProvider implements CdcProvider {
     const instructions: string[] = [];
     let client: MongoClient | null = null;
     try {
-      client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+      client = new MongoClient(this.uri(conn), this.clientOptions(conn));
       await client.connect();
       const hello = (await client.db('admin').command({ hello: 1 })) as {
         setName?: string;
@@ -119,7 +128,7 @@ export class MongodbCdcProvider implements CdcProvider {
   ): Promise<void> {
     if (bridge.source.kind !== 'table') return;
     const table = bridge.source.table;
-    const client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
     try {
       await client.connect();
       const db = client.db(bridge.source.database || conn.database || 'test');
@@ -152,7 +161,7 @@ export class MongodbCdcProvider implements CdcProvider {
     const ops = new Set<CdcOperation>(bridge.trigger.operations);
     const matchTypes = operationTypes(ops);
 
-    const client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
     await client.connect();
     const db = client.db(src.database || conn.database || 'test');
     const collection = db.collection(src.table);

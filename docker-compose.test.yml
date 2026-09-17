@@ -112,5 +112,155 @@ services:
       timeout: 3s
       retries: 30
 
+  # ── TLS ──────────────────────────────────────────────────────────────────
+  # The same four engines again, accepting TLS only, with certificates from a
+  # throwaway CA (scripts/test-certs.sh → .test-certs/). They exist so the TLS
+  # settings are tested against real handshakes: that `verify-full` really does
+  # refuse a certificate for another name or from another CA, that `require`
+  # really does not, and that every connection a bridge opens — including the
+  # change streams — is covered, not just the workbench's.
+
+  certs:
+    image: alpine:3.20
+    volumes:
+      - ./.test-certs:/certs
+      - ./scripts/test-certs.sh:/test-certs.sh:ro
+    command: ['sh', '-c', 'apk add --no-cache openssl >/dev/null && sh /test-certs.sh']
+
+  pg-tls:
+    image: postgres:16-alpine
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    environment:
+      POSTGRES_USER: syncle
+      POSTGRES_PASSWORD: syncle
+      POSTGRES_DB: syncle_test
+    volumes: ['./.test-certs:/certs:ro']
+    # Postgres refuses a private key it does not own with mode 0600, so the key
+    # is copied out of the read-only mount first. `hostssl` only in pg_hba would
+    # be stricter still, but ssl=on plus a client that insists is what is tested
+    entrypoint:
+      - sh
+      - -c
+      - >
+        cp /certs/server.crt /certs/server.key /var/lib/postgresql/ &&
+        chown postgres:postgres /var/lib/postgresql/server.* &&
+        chmod 600 /var/lib/postgresql/server.key &&
+        exec docker-entrypoint.sh postgres
+        -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/server.crt
+        -c ssl_key_file=/var/lib/postgresql/server.key
+        -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+        -c wal_sender_timeout=5s
+    ports: ['127.0.0.1:55433:5432']
+    tmpfs: ['/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U syncle -d syncle_test']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mysql-tls:
+    image: mysql:8.0
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    environment:
+      MYSQL_ROOT_PASSWORD: syncle
+      MYSQL_DATABASE: syncle_test
+    volumes: ['./.test-certs:/certs:ro']
+    command:
+      - --server-id=2
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --ssl-ca=/certs/ca.crt
+      - --ssl-cert=/certs/server.crt
+      - --ssl-key=/certs/server.key
+      # plaintext is REFUSED: a client that silently skips TLS fails here
+      # instead of passing
+      - --require-secure-transport=ON
+    ports: ['127.0.0.1:53307:3306']
+    tmpfs: ['/var/lib/mysql']
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-psyncle']
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  mongo-tls:
+    image: mongo:7
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    volumes: ['./.test-certs:/certs:ro']
+    command:
+      - '--bind_ip_all'
+      - '--tlsMode'
+      - 'requireTLS'
+      - '--tlsCertificateKeyFile'
+      - '/certs/server.pem'
+      - '--tlsCAFile'
+      - '/certs/ca.crt'
+      - '--tlsAllowConnectionsWithoutCertificates'
+      - '--wiredTigerCacheSizeGB'
+      - '0.25'
+    ports: ['127.0.0.1:57018:27017']
+    tmpfs: ['/data/db']
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --tls
+        - --tlsCAFile
+        - /certs/ca.crt
+        - --host
+        - localhost
+        - --quiet
+        - --eval
+        - 'db.adminCommand("ping").ok'
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  redis-tls:
+    image: redis:7-alpine
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    volumes: ['./.test-certs:/certs:ro']
+    # `--tls-auth-clients yes` makes this the MUTUAL-TLS server: a client with no
+    # certificate is refused, so the client cert/key fields are tested for real
+    command:
+      - redis-server
+      - --port
+      - '0'
+      - --tls-port
+      - '6379'
+      - --tls-cert-file
+      - /certs/server.crt
+      - --tls-key-file
+      - /certs/server.key
+      - --tls-ca-cert-file
+      - /certs/ca.crt
+      - --tls-auth-clients
+      - 'yes'
+      - --notify-keyspace-events
+      - KEA
+    ports: ['127.0.0.1:56380:6379']
+    tmpfs: ['/data']
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - --tls
+        - --cacert
+        - /certs/ca.crt
+        - --cert
+        - /certs/client.crt
+        - --key
+        - /certs/client.key
+        - ping
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   syncle-test-mongo:

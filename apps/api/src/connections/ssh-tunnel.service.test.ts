@@ -5,7 +5,11 @@ import { PassThrough, type Duplex } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { ConnectConfig } from 'ssh2';
 import { ConnectionError, type ConnectionConfig } from '@syncle/core';
-import { SshTunnelService, type SshClientLike } from './ssh-tunnel.service';
+import {
+  SshTunnelService,
+  hostKeyFingerprint,
+  type SshClientLike,
+} from './ssh-tunnel.service';
 
 /** in-memory ssh2 stand-in: no real SSH anywhere near these tests */
 class StubSshClient extends EventEmitter implements SshClientLike {
@@ -15,13 +19,21 @@ class StubSshClient extends EventEmitter implements SshClientLike {
   failWith?: Error;
   /** when set, every forwardOut() is refused with this */
   refuseForwardWith?: Error;
+  /** the host key this "server" presents during the handshake */
+  hostKey: Buffer = Buffer.from('the-bastion-public-key');
   ended = false;
 
   connect(config: ConnectConfig): this {
     this.connectConfig = config;
     queueMicrotask(() => {
-      if (this.failWith) this.emit('error', this.failWith);
-      else this.emit('ready');
+      if (this.failWith) return void this.emit('error', this.failWith);
+      // like ssh2: the verifier is asked about the key BEFORE authentication,
+      // and a refusal ends the handshake with an error
+      const verify = config.hostVerifier as ((key: Buffer) => boolean) | undefined;
+      if (verify && !verify(this.hostKey)) {
+        return void this.emit('error', new Error('Host denied (verification failed)'));
+      }
+      this.emit('ready');
     });
     return this;
   }
@@ -261,5 +273,62 @@ describe('SshTunnelService', () => {
     // a later deliberate close is a no-op, and never re-notifies
     await tunnel.close();
     expect(notified).toBe(1);
+  });
+});
+
+describe('host key verification', () => {
+  const withHostKey = (hostKey?: string): ConnectionConfig => {
+    const base = config();
+    return { ...base, ssh: { ...base.ssh!, hostKey } };
+  };
+
+  it('formats a fingerprint the way OpenSSH prints it', () => {
+    // sha256 of the key, base64, no padding, "SHA256:" in front
+    const fp = hostKeyFingerprint(Buffer.from('the-bastion-public-key'));
+    expect(fp).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
+    expect(hostKeyFingerprint(Buffer.from('the-bastion-public-key'))).toBe(fp);
+    expect(hostKeyFingerprint(Buffer.from('another-key'))).not.toBe(fp);
+  });
+
+  it('always installs a verifier: ssh2 on its own accepts any key', async () => {
+    const client = new StubSshClient();
+    const tunnel = await makeService(client).openFor(config());
+    expect(typeof client.connectConfig!.hostVerifier).toBe('function');
+    await tunnel!.close();
+  });
+
+  it('first use: accepts the key and reports it, so it can be pinned', async () => {
+    const client = new StubSshClient();
+    const tunnel = await makeService(client).openFor(withHostKey(undefined));
+    expect(tunnel!.hostKey).toBe(hostKeyFingerprint(client.hostKey));
+    await tunnel!.close();
+  });
+
+  it('a pinned key that matches connects', async () => {
+    const client = new StubSshClient();
+    const pinned = hostKeyFingerprint(client.hostKey);
+    const tunnel = await makeService(client).openFor(withHostKey(pinned));
+    expect(tunnel!.hostKey).toBe(pinned);
+    await tunnel!.close();
+  });
+
+  it('tolerates the padding and whitespace a pasted fingerprint can carry', async () => {
+    const client = new StubSshClient();
+    const pinned = `  ${hostKeyFingerprint(client.hostKey)}=  `;
+    const tunnel = await makeService(client).openFor(withHostKey(pinned));
+    expect(tunnel).toBeDefined();
+    await tunnel!.close();
+  });
+
+  it('a DIFFERENT key is refused, loudly, and nothing is forwarded', async () => {
+    const client = new StubSshClient();
+    const pinned = hostKeyFingerprint(Buffer.from('the-key-we-trusted-last-week'));
+    const opening = makeService(client).openFor(withHostKey(pinned));
+    await expect(opening).rejects.toThrow(/SSH: the host key of bastion\.example\.com has CHANGED/);
+    await expect(makeService(new StubSshClient()).openFor(withHostKey(pinned))).rejects.toThrow(
+      new RegExp(pinned.replace(/[+/]/g, '\\$&')),
+    );
+    expect(client.ended).toBe(true);
+    expect(client.forwardCalls).toEqual([]);
   });
 });

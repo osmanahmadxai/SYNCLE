@@ -458,6 +458,30 @@ credentials are encrypted at rest and returned redacted, exactly like
 connection passwords. Tunnels apply to the network engines (PostgreSQL, MySQL,
 MongoDB, Redis); SQLite is a local file and never tunnels.
 
+The jump host's key is checked the way `ssh` checks it: paste its fingerprint
+(`SHA256:…`) and any other key is refused, or leave it empty and the key seen on
+the first connection is recorded and enforced from then on. A host that later
+presents a different key is refused, loudly.
+
+### TLS to the database
+
+Each connection picks how far TLS is trusted, using the names PostgreSQL's
+`sslmode` made familiar — and they mean the same thing on every engine, for
+**every** connection Syncle opens with it, the CDC change streams included:
+
+| Mode | What it does | Protects against |
+| ---- | ------------ | ---------------- |
+| Off | no TLS | nothing |
+| Encrypt only (`require`) | encrypts, checks nothing | passive eavesdropping only |
+| Verify authority (`verify-ca`) | the certificate must chain to your CA | an impostor without a cert from that CA |
+| Verify authority and host (`verify-full`) | …and be issued for this host | impersonation. **Use this one.** |
+
+Give a CA certificate for a private CA (leave it empty to trust the system's), an
+expected server name if the certificate is for a different name than you dial,
+and a client certificate + key for servers that want mutual TLS. Through an SSH
+tunnel the certificate is still checked against the *database's* host name, not
+the tunnel's `127.0.0.1`.
+
 ## Benchmarks
 
 Syncle's throughput is measured, not asserted. The suite runs against real
@@ -537,8 +561,12 @@ React Flow · Zod · Vitest.
 
 ## Security
 
-- Connection passwords and bridge auth secrets are encrypted at rest (AES-256-GCM)
-  and only ever returned to the browser redacted.
+- Connection passwords, SSH credentials, TLS client keys and bridge auth secrets
+  are encrypted at rest (AES-256-GCM) and only ever returned to the browser
+  redacted.
+- TLS to a database can verify both the certificate authority and the host name,
+  on every engine and for every connection a bridge opens (the change streams
+  too). SSH tunnels pin the jump host's key.
 - All user values are passed as bound parameters; identifiers are dialect-quoted.
 - Bridge payloads are built by structured token substitution — no string injection,
   no code execution.

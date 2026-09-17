@@ -129,6 +129,22 @@ export default function Page() {
         An error beginning <code>SSH:</code> comes from the tunnel, not the
         database — the jump host refused the key, the user, or the forward.
         Check the SSH credentials on their own before looking at the database.
+        <code>SSH: the host key of … has CHANGED</code> means the jump host
+        presented a different key than the one recorded for this connection:
+        do not just clear the field — confirm the new fingerprint with whoever
+        runs the host first.
+      </p>
+      <p>
+        An error beginning <code>TLS:</code>, or mentioning a certificate,{' '}
+        <code>altname</code> or <code>self-signed</code>, is the verification
+        you asked for doing its job. <em>Self-signed certificate in chain</em>{' '}
+        means the server&apos;s CA is not one Syncle trusts: paste it into the
+        connection&apos;s CA certificate field. <em>Hostname/IP does not match
+        certificate&apos;s altnames</em> means the certificate was issued for a
+        different name than the one in the host field: dial the name on the
+        certificate, or set the expected server name. Dropping to{' '}
+        <em>Encrypt only</em> makes the error go away by no longer checking —
+        use it to confirm the diagnosis, not as the fix.
       </p>
       <p>
         Without a tunnel, the usual causes are the database not listening on an

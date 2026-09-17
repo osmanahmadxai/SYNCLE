@@ -3,6 +3,7 @@
  * is inferred by sampling documents (Mongo is schemaless). the query editor
  * speaks a small JSON dialect, see {@link MongodbAdapter.query}
  */
+import { mongoTlsOptions } from '../tls-options';
 import {
   Binary,
   Decimal128,
@@ -136,6 +137,9 @@ export class MongodbAdapter implements DatabaseAdapter {
       this.client = new MongoClient(this.uri(), {
         serverSelectionTimeoutMS: 8000,
         maxPoolSize: 5,
+        // with host/port fields the driver was never told about TLS: the
+        // "Use TLS" switch did nothing here and the connection was plaintext
+        ...mongoTlsOptions(this.config),
       });
       await this.client.connect();
       return this.client;

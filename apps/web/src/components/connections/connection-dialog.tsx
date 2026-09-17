@@ -36,6 +36,30 @@ import {
 
 type FormState = Record<string, string> & { name?: string; ssl?: string };
 
+type TlsMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
+
+const TLS_HINT: Record<TlsMode, string> = {
+  disable: 'tlsDisableHint',
+  require: 'tlsRequireHint',
+  'verify-ca': 'tlsVerifyCaHint',
+  'verify-full': 'tlsVerifyFullHint',
+};
+
+/**
+ * what the old on/off switch meant, per engine (mirrors `effectiveTls` on the
+ * server): encrypted-but-unverified everywhere except Redis, which verified.
+ */
+function legacyTlsMode(
+  engine: DatabaseEngine,
+  ssl: boolean,
+  options?: Record<string, unknown>,
+): TlsMode {
+  if (!ssl) return 'disable';
+  if (engine === 'redis') return 'verify-full';
+  if (engine === 'postgres' && options?.sslVerify === true) return 'verify-full';
+  return 'require';
+}
+
 export function ConnectionDialog() {
   const t = useTranslations('connections');
   const tc = useTranslations('common');
@@ -46,7 +70,7 @@ export function ConnectionDialog() {
 
   const [engine, setEngine] = useState<DatabaseEngine>('postgres');
   const [form, setForm] = useState<FormState>({ name: '' });
-  const [ssl, setSsl] = useState(false);
+  const [tlsMode, setTlsMode] = useState<TlsMode>('disable');
   const [sshEnabled, setSshEnabled] = useState(false);
   const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'privateKey'>(
     'password',
@@ -62,14 +86,17 @@ export function ConnectionDialog() {
     // previous connection's values behind
     setForm({ name: '' });
     setEngine('postgres');
-    setSsl(false);
+    setTlsMode('disable');
     setSshEnabled(false);
     setSshAuthMethod('password');
     if (!editing) return;
     void api.getConnection(editing).then(
       (c) => {
         setEngine(c.engine);
-        setSsl(!!c.ssl);
+        // a connection saved under the old on/off switch has no `tls` block.
+        // show what that switch actually did on its engine, so saving again
+        // changes nothing the user did not choose to change
+        setTlsMode(c.tls?.mode ?? legacyTlsMode(c.engine, !!c.ssl, c.options));
         setSshEnabled(!!c.ssh?.enabled);
         setSshAuthMethod(c.ssh?.authMethod ?? 'password');
         setForm({
@@ -88,6 +115,12 @@ export function ConnectionDialog() {
           sshPassword: c.ssh?.password ?? '',
           sshPrivateKey: c.ssh?.privateKey ?? '',
           sshPassphrase: c.ssh?.passphrase ?? '',
+          sshHostKey: c.ssh?.hostKey ?? '',
+          tlsCa: c.tls?.ca ?? '',
+          tlsCert: c.tls?.cert ?? '',
+          // redacted, like every secret; sent back unchanged it keeps the stored key
+          tlsKey: c.tls?.key ?? '',
+          tlsServername: c.tls?.servername ?? '',
         });
       },
       (err) => {
@@ -110,8 +143,21 @@ export function ConnectionDialog() {
     const payload: ConnectionInputDTO = {
       name: form.name?.trim() || engineMeta(engine).label,
       engine,
-      ssl,
+      ssl: tlsMode !== 'disable',
     };
+    if (engine !== 'sqlite') {
+      const verifies = tlsMode === 'verify-ca' || tlsMode === 'verify-full';
+      payload.tls = {
+        mode: tlsMode,
+        ...(verifies && form.tlsCa?.trim() ? { ca: form.tlsCa } : {}),
+        ...(tlsMode !== 'disable' && form.tlsCert?.trim()
+          ? { cert: form.tlsCert, key: form.tlsKey || undefined }
+          : {}),
+        ...(tlsMode === 'verify-full' && form.tlsServername?.trim()
+          ? { servername: form.tlsServername.trim() }
+          : {}),
+      };
+    }
     for (const field of driver?.fields ?? []) {
       const raw = form[field.key]?.trim();
       if (!raw) continue;
@@ -131,6 +177,7 @@ export function ConnectionDialog() {
               privateKey: form.sshPrivateKey || undefined,
               passphrase: form.sshPassphrase || undefined,
             }),
+        ...(form.sshHostKey?.trim() ? { hostKey: form.sshHostKey.trim() } : {}),
       };
     }
     return payload;
@@ -139,8 +186,18 @@ export function ConnectionDialog() {
   async function handleTest() {
     setTesting(true);
     try {
-      await api.testConnection(buildPayload());
-      toast.success(t('successful'));
+      const result = await api.testConnection(buildPayload(), editing ?? undefined);
+      // first contact with this jump host: show its key, and keep it, so the
+      // next connection is checked against it instead of trusting whoever answers
+      const seen = result.sshHostKey;
+      if (seen && !form.sshHostKey?.trim()) {
+        setForm((f) => ({ ...f, sshHostKey: seen }));
+        toast.success(t('successful'), {
+          description: t('sshHostKeySeen', { fingerprint: seen }),
+        });
+      } else {
+        toast.success(t('successful'));
+      }
     } catch (err) {
       toast.error(t('failed'), {
         description: err instanceof ApiError ? err.message : String(err),
@@ -246,14 +303,115 @@ export function ConnectionDialog() {
           ))}
 
           {engine !== 'sqlite' && (
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <div>
-                <Label htmlFor="ssl">{t('useTls')}</Label>
-                <p className="text-xs text-muted-foreground">
-                  {t('useTlsHint')}
+            <div className="rounded-md border">
+              <div className="grid gap-2 p-3">
+                <Label htmlFor="tlsMode">{t('tls')}</Label>
+                <Select
+                  value={tlsMode}
+                  onValueChange={(v) => setTlsMode(v as TlsMode)}
+                >
+                  <SelectTrigger id="tlsMode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="disable">{t('tlsDisable')}</SelectItem>
+                    <SelectItem value="require">{t('tlsRequire')}</SelectItem>
+                    <SelectItem value="verify-ca">{t('tlsVerifyCa')}</SelectItem>
+                    <SelectItem value="verify-full">
+                      {t('tlsVerifyFull')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {/* say what the chosen mode does NOT protect against: "TLS on"
+                    reads as "safe", and two of these three are not */}
+                <p
+                  className={
+                    tlsMode === 'require'
+                      ? 'text-xs text-amber-600 dark:text-amber-400'
+                      : 'text-xs text-muted-foreground'
+                  }
+                >
+                  {t(TLS_HINT[tlsMode])}
                 </p>
               </div>
-              <Switch id="ssl" checked={ssl} onCheckedChange={setSsl} />
+
+              {tlsMode !== 'disable' && (
+                <div className="grid gap-4 border-t p-3">
+                  {(tlsMode === 'verify-ca' || tlsMode === 'verify-full') && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="tlsCa">{t('tlsCa')}</Label>
+                      <Textarea
+                        id="tlsCa"
+                        rows={3}
+                        className="font-mono text-xs"
+                        value={form.tlsCa ?? ''}
+                        placeholder="-----BEGIN CERTIFICATE-----"
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, tlsCa: e.target.value }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('tlsCaHint')}
+                      </p>
+                    </div>
+                  )}
+                  {tlsMode === 'verify-full' && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="tlsServername">
+                        {t('tlsServername')}
+                      </Label>
+                      <Input
+                        id="tlsServername"
+                        value={form.tlsServername ?? ''}
+                        placeholder={form.host || 'db.example.com'}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            tlsServername: e.target.value,
+                          }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('tlsServernameHint')}
+                      </p>
+                    </div>
+                  )}
+                  <div className="grid gap-2">
+                    <Label htmlFor="tlsCert">{t('tlsClientCert')}</Label>
+                    <Textarea
+                      id="tlsCert"
+                      rows={3}
+                      className="font-mono text-xs"
+                      value={form.tlsCert ?? ''}
+                      placeholder="-----BEGIN CERTIFICATE-----"
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, tlsCert: e.target.value }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {t('tlsClientCertHint')}
+                    </p>
+                  </div>
+                  {form.tlsCert?.trim() && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="tlsKey">{t('tlsClientKey')}</Label>
+                      <Textarea
+                        id="tlsKey"
+                        rows={3}
+                        className="font-mono text-xs"
+                        value={form.tlsKey ?? ''}
+                        placeholder="-----BEGIN PRIVATE KEY-----"
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, tlsKey: e.target.value }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('tlsClientKeyHint')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -393,6 +551,21 @@ export function ConnectionDialog() {
                       </div>
                     </>
                   )}
+                  <div className="grid gap-2">
+                    <Label htmlFor="sshHostKey">{t('sshHostKey')}</Label>
+                    <Input
+                      id="sshHostKey"
+                      className="font-mono text-xs"
+                      value={form.sshHostKey ?? ''}
+                      placeholder="SHA256:…"
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, sshHostKey: e.target.value }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {t('sshHostKeyHint')}
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

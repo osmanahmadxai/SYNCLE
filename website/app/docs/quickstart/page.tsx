@@ -45,10 +45,12 @@ export default function Page() {
         sidebar — a full-screen overlay for connecting databases, browsing
         tables and managing schema. Add a connection: a display name, an
         engine — PostgreSQL, MySQL/MariaDB, SQLite, MongoDB or Redis — and
-        host, port, user and password. A <strong>Use TLS / SSL</strong>{' '}
-        toggle covers encrypted connections, and an <strong>SSH tunnel</strong>{' '}
-        option reaches a database through a jump host, authenticated by
-        password or PEM private key. The <strong>Test</strong> button tries
+        host, port, user and password. <strong>TLS</strong> sets how far
+        the connection is trusted — pick <em>Verify the authority and the host
+        name</em> unless you have a reason not to (
+        <a href="/docs/workbench#tls">what each mode protects against</a>) —
+        and an <strong>SSH tunnel</strong> option reaches a database through a
+        jump host, authenticated by password or PEM private key. The <strong>Test</strong> button tries
         the connection before you save it; credentials are encrypted at rest
         and come back to the browser redacted.
       </p>

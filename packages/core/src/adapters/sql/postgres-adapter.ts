@@ -6,6 +6,7 @@ import {
   type PoolConfig,
   type QueryResult as PgResult,
 } from 'pg';
+import { nodeTlsOptions } from '../tls-options';
 import type {
   InsertRowsParams,
   UpsertRowsParams,
@@ -125,11 +126,11 @@ export class PostgresAdapter extends BaseSqlAdapter {
     cfg.max = 5;
     cfg.idleTimeoutMillis = 30_000;
     cfg.connectionTimeoutMillis = 10_000;
-    // self-signed certs are the norm for dev databases, so verification is
-    // opt-in: set options.sslVerify to true to enforce a trusted CA chain
-    if (this.config.ssl) {
-      cfg.ssl = { rejectUnauthorized: this.config.options?.sslVerify === true };
-    }
+    // what "TLS" means is decided in one place for every driver (tls-options).
+    // a connection string that names its own sslmode keeps it: pg lets the
+    // string win over this field
+    const ssl = nodeTlsOptions(this.config);
+    if (ssl) cfg.ssl = ssl;
     this.pool = new Pool(cfg);
     // an idle client losing its connection emits 'error' on the pool; with no
     // listener Node treats it as an unhandled 'error' event and crashes the

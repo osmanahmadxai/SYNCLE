@@ -269,6 +269,103 @@ export default function Page() {
         </table>
       </div>
 
+      <h2 id="tls">TLS to the database</h2>
+      <p>
+        A connection&apos;s TLS setting applies to <em>every</em> connection
+        Syncle opens with it — the workbench, replay jobs, and the CDC change
+        streams, which are separate connections of their own. The four modes
+        are PostgreSQL&apos;s <code>sslmode</code> values, because those are
+        the names people already know, and they mean the same thing on every
+        engine:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Mode</th>
+              <th>Encrypted</th>
+              <th>Checks the CA</th>
+              <th>Checks the host name</th>
+              <th>Protects against</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Off</td>
+              <td>no</td>
+              <td>—</td>
+              <td>—</td>
+              <td>nothing; the password crosses the network in plain text</td>
+            </tr>
+            <tr>
+              <td>
+                Encrypt only (<code>require</code>)
+              </td>
+              <td>yes</td>
+              <td>no</td>
+              <td>no</td>
+              <td>
+                passive eavesdropping only — whoever can sit in the path can
+                present any certificate and be accepted
+              </td>
+            </tr>
+            <tr>
+              <td>
+                Verify the authority (<code>verify-ca</code>)
+              </td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>no</td>
+              <td>
+                an impostor without a certificate from your CA — but any
+                server holding one passes
+              </td>
+            </tr>
+            <tr>
+              <td>
+                Verify authority and host (<code>verify-full</code>)
+              </td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>
+                impersonation: the only mode that proves you reached the
+                server you meant to. Use this one
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Give a <strong>CA certificate</strong> (PEM) when the database uses a
+        private CA — a self-hosted server, or a cloud provider&apos;s own
+        root. Leave it empty to trust the system&apos;s authorities, which
+        is right for a managed database with a public certificate. The{' '}
+        <strong>expected server name</strong> is for the case where the
+        certificate was issued to a different name than the one you dial — an
+        IP address in the host field, say. A <strong>client certificate</strong>{' '}
+        and key are for servers that demand mutual TLS; the key is encrypted at
+        rest and comes back redacted, like a password.
+      </p>
+      <p>
+        Through an SSH tunnel the certificate is still checked against the{' '}
+        <em>database&apos;s</em> host name, not the tunnel&apos;s{' '}
+        <code>127.0.0.1</code> — so <code>verify-full</code> works through a
+        bastion without listing loopback addresses on your certificates.
+      </p>
+      <Note>
+        <p>
+          Connections saved before these modes existed had one on/off switch,
+          and it meant something different on each engine. They keep exactly
+          what they had, shown as the matching mode when you open them:
+          encrypted but unverified on PostgreSQL and MySQL, verified on Redis.
+          On <strong>MongoDB</strong> the switch did nothing at all with
+          host and port fields — the connection was plaintext — so a MongoDB
+          connection with it on now really uses TLS, and will fail if the
+          server does not offer it.
+        </p>
+      </Note>
+
       <h2 id="ssh-tunnels">SSH tunnels</h2>
       <p>
         A database on a private network can be reached through an SSH tunnel
@@ -278,6 +375,18 @@ export default function Page() {
         secrets are encrypted at rest alongside the database password — see{' '}
         <a href="/docs/self-hosting">Self-hosting &amp; security</a> for the
         wider posture.
+      </p>
+      <p>
+        The jump host&apos;s identity is checked the way <code>ssh</code>{' '}
+        itself checks it. Paste its <strong>host key fingerprint</strong>{' '}
+        (<code>SHA256:…</code>, as <code>ssh-keygen -lf</code> prints it) and
+        any other key is refused. Leave it empty and the key seen on the first
+        successful connection is recorded and enforced from then on — the
+        Test button shows you that fingerprint so you can compare it first.
+        If a host later presents a <em>different</em> key, the tunnel refuses
+        to open and says so: either the server was reinstalled or something
+        is answering in its place. Confirm the new fingerprint with whoever
+        runs the host before updating it.
       </p>
       <p>
         Two rules are enforced at validation time. SQLite connections cannot

@@ -308,7 +308,19 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               <td>
                 <code>POST /api/connections/test</code>
               </td>
-              <td>Test an unsaved config without storing it</td>
+              <td>
+                Test an unsaved config without storing it. Add{' '}
+                <code>?from=:id</code> when it is an edit of a saved
+                connection: secrets sent back redacted are then taken from the
+                stored copy. Returns <code>{'{ success, sshHostKey? }'}</code>{' '}
+                — the jump host&apos;s fingerprint, when a tunnel was used. The
+                body takes <code>tls</code> (<code>mode</code>:{' '}
+                <code>disable</code> | <code>require</code> |{' '}
+                <code>verify-ca</code> | <code>verify-full</code>, with
+                optional PEM <code>ca</code>, <code>cert</code>,{' '}
+                <code>key</code> and a <code>servername</code>) and{' '}
+                <code>ssh.hostKey</code>, as every connection body does
+              </td>
             </tr>
             <tr>
               <td>

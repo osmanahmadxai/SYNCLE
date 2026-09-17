@@ -26,7 +26,8 @@
       "esbuild"
     ],
     "patchedDependencies": {
-      "@powersync/mysql-zongji@0.6.0": "patches/@powersync__mysql-zongji@0.6.0.patch"
+      "@powersync/mysql-zongji@0.6.0": "patches/@powersync__mysql-zongji@0.6.0.patch",
+      "@vlasky/mysql@2.18.7": "patches/@vlasky__mysql@2.18.7.patch"
     }
   },
   "scripts": {

@@ -3,6 +3,7 @@
  * virtual relation ("keys") whose rows are { key, type, ttl, value }. the query
  * editor takes raw Redis commands, one per line
  */
+import { nodeTlsOptions } from '../tls-options';
 import Redis from 'ioredis';
 import type {
   AdapterCapabilities,
@@ -62,8 +63,12 @@ export class RedisAdapter implements DatabaseAdapter {
     const dbIndex = Number(
       this.config.options?.db ?? this.config.database ?? 0,
     );
+    // a `rediss://` string asks for TLS by itself; an explicit TLS setting
+    // beside it says how far to trust the certificate
+    const tls = nodeTlsOptions(this.config);
     this.client = this.config.connectionString
       ? new Redis(this.config.connectionString, {
+          ...(this.config.tls && tls ? { tls } : {}),
           lazyConnect: true,
           maxRetriesPerRequest: 2,
         })
@@ -73,7 +78,7 @@ export class RedisAdapter implements DatabaseAdapter {
           username: this.config.user || undefined,
           password: this.config.password || undefined,
           db: Number.isFinite(dbIndex) ? dbIndex : 0,
-          tls: this.config.ssl ? {} : undefined,
+          tls,
           lazyConnect: true,
           maxRetriesPerRequest: 2,
           connectTimeout: 8000,
@@ -82,16 +87,28 @@ export class RedisAdapter implements DatabaseAdapter {
     // away between commands); with no listener Node treats it as an unhandled
     // 'error' event and crashes the process. individual commands still reject
     // with their own errors, so swallowing here loses nothing
-    this.client.on('error', () => {});
+    // …but remember the last one: when a connection attempt fails, ioredis
+    // rejects with a bare "Connection is closed", and the REASON (a refused
+    // certificate, a wrong host name) only ever arrives on this event
+    this.client.on('error', (err: Error) => {
+      this.lastSocketError = err;
+    });
     return this.client;
   }
 
+  private lastSocketError: Error | null = null;
+
   async connect(): Promise<void> {
+    this.lastSocketError = null;
     try {
       await this.getClient().connect();
     } catch (err) {
+      const cause = this.lastSocketError as Error | null;
+      const message = (err as Error).message;
       throw new ConnectionError(
-        `Could not connect to Redis: ${(err as Error).message}`,
+        cause && cause.message !== message
+          ? `Could not connect to Redis: ${cause.message}`
+          : `Could not connect to Redis: ${message}`,
       );
     }
   }

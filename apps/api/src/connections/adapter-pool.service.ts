@@ -118,6 +118,13 @@ export class AdapterPoolService implements OnModuleDestroy {
       await tunnel?.close().catch(() => {});
       throw sshErr ?? err;
     }
+    // first successful tunnel for this connection: pin the jump host's key, so
+    // from now on a different key is refused instead of silently accepted
+    if (tunnel?.hostKey && !config.ssh?.hostKey?.trim()) {
+      await this.store
+        .pinSshHostKey(config.id, tunnel.hostKey)
+        .catch(() => undefined);
+    }
     // if the ssh connection drops mid-use, evict so the next use redials
     tunnel?.onClose(() => {
       const entry = this.entries.get(key);
@@ -146,14 +153,19 @@ export class AdapterPoolService implements OnModuleDestroy {
     return fn(await this.acquire(id, database));
   }
 
-  /** build a one-off adapter from a raw config (used by "test connection") */
-  async test(config: ConnectionConfig): Promise<void> {
+  /**
+   * build a one-off adapter from a raw config (used by "test connection").
+   * reports the SSH jump host's key fingerprint when a tunnel was used, so it
+   * can be shown — and pinned — before the connection is ever saved.
+   */
+  async test(config: ConnectionConfig): Promise<{ sshHostKey?: string }> {
     const restricted = withServerRestrictions(config);
     const tunnel = await this.tunnels.openFor(restricted);
     const adapter = createAdapter(this.tunnels.reroute(restricted, tunnel));
     try {
       await adapter.connect();
       await adapter.ping();
+      return tunnel?.hostKey ? { sshHostKey: tunnel.hostKey } : {};
     } catch (err) {
       // surface the ssh-level failure (e.g. refused forward) over the bare
       // socket error the adapter saw

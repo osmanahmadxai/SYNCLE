@@ -19,6 +19,7 @@ import type {
   DatabaseEngine,
 } from '@syncle/core';
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
+import { nodeTlsOptions } from '@syncle/core/adapters';
 import { AdapterPoolService } from '../../../connections/adapter-pool.service';
 import type { ResolvedBridge } from '../../bridges.types';
 import {
@@ -346,7 +347,10 @@ export class PostgresCdcProvider implements CdcProvider {
       user: conn.user,
       password: conn.password,
       database: database || conn.database,
-      ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+      // the same trust decision as the ordinary connection — this one used to
+      // hard-code `rejectUnauthorized: false`, so the change stream was never
+      // verified even where the connection it belongs to was
+      ssl: nodeTlsOptions(conn),
     } as Record<string, unknown>;
   }
 }

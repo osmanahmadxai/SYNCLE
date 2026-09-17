@@ -148,13 +148,18 @@ export const api = {
     }),
   deleteConnection: (id: string) =>
     request<{ id: string }>(`/connections/${id}`, { method: 'DELETE' }),
-  testConnection: (input: ConnectionInputDTO) =>
-    request<{ success: true }>('/connections/test', {
-      method: 'POST',
-      ...jsonBody(input),
-    }),
+  /**
+   * try a connection that is not (or not yet) saved. when it is an EDIT of a
+   * saved one, pass its id: secrets the form only holds redacted are then taken
+   * from the stored connection, so testing does not require retyping them
+   */
+  testConnection: (input: ConnectionInputDTO, editingId?: string) =>
+    request<{ success: true; sshHostKey?: string }>(
+      `/connections/test${editingId ? `?from=${encodeURIComponent(editingId)}` : ''}`,
+      { method: 'POST', ...jsonBody(input) },
+    ),
   testSavedConnection: (id: string) =>
-    request<{ success: true }>(`/connections/${id}/test`, { method: 'POST' }),
+    request<{ success: true; sshHostKey?: string }>(`/connections/${id}/test`, { method: 'POST' }),
 
   listDatabases: (id: string) =>
     request<string[]>(`/connections/${id}/databases`),

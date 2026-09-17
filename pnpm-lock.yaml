@@ -8,6 +8,9 @@ patchedDependencies:
   '@powersync/mysql-zongji@0.6.0':
     hash: f91dce89985988d93b1732c133c6801b8aab93650040dd0e4ef46269b1b1e10e
     path: patches/@powersync__mysql-zongji@0.6.0.patch
+  '@vlasky/mysql@2.18.7':
+    hash: 2cdda646d900b12adf19de4524c9b3b501f1ff3060fb101f3693b070f563d3b7
+    path: patches/@vlasky__mysql@2.18.7.patch
 
 importers:
 
@@ -5961,7 +5964,7 @@ snapshots:
 
   '@powersync/mysql-zongji@0.6.0(patch_hash=f91dce89985988d93b1732c133c6801b8aab93650040dd0e4ef46269b1b1e10e)':
     dependencies:
-      '@vlasky/mysql': 2.18.7
+      '@vlasky/mysql': 2.18.7(patch_hash=2cdda646d900b12adf19de4524c9b3b501f1ff3060fb101f3693b070f563d3b7)
       big-integer: 1.6.52
       iconv-lite: 0.6.3
 
@@ -7007,7 +7010,7 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 1.2.0
 
-  '@vlasky/mysql@2.18.7':
+  '@vlasky/mysql@2.18.7(patch_hash=2cdda646d900b12adf19de4524c9b3b501f1ff3060fb101f3693b070f563d3b7)':
     dependencies:
       bignumber.js: 9.1.1
       readable-stream: 2.3.7

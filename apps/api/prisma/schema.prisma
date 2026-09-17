@@ -79,6 +79,12 @@ model Connection {
   // the same split Bridge uses for destinationJson / authEnc
   sshJson             String?  @map("ssh_json")
   sshSecretsEnc       String?  @map("ssh_secrets_enc")
+  // TLS settings, split the same way: mode / CA / client certificate / server
+  // name as JSON, the client certificate's private key encrypted on its own.
+  // null = a connection saved before this existed; `ssl` alone then says what
+  // it always said (see effectiveTls in @syncle/core)
+  tlsJson             String?  @map("tls_json")
+  tlsSecretsEnc       String?  @map("tls_secrets_enc")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 

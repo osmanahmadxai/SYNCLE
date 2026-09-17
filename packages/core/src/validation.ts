@@ -27,7 +27,43 @@ export const sshConfigSchema = z.object({
   password: z.string().optional(),
   privateKey: z.string().optional(),
   passphrase: z.string().optional(),
+  hostKey: z
+    .string()
+    .trim()
+    .max(200)
+    .refine((v) => v === '' || /^SHA256:[A-Za-z0-9+/]{43}=?$/.test(v), {
+      message: 'Expected an OpenSSH fingerprint, e.g. SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8',
+    })
+    .optional(),
 });
+
+const pem = (what: string) =>
+  z
+    .string()
+    .max(64_000)
+    .refine((v) => v.trim() === '' || /-----BEGIN [A-Z0-9 ]+-----/.test(v), {
+      message: `${what} must be PEM text (it starts with "-----BEGIN …-----")`,
+    });
+
+export const tlsConfigSchema = z
+  .object({
+    mode: z.enum(['disable', 'require', 'verify-ca', 'verify-full']),
+    ca: pem('The CA certificate').optional(),
+    cert: pem('The client certificate').optional(),
+    // may also be the redaction sentinel on an update ("keep what is stored")
+    key: z.string().max(64_000).optional(),
+    servername: z.string().max(255).optional(),
+  })
+  .superRefine((val, ctx) => {
+    const has = (v?: string): boolean => !!v && v.trim() !== '';
+    if (has(val.cert) !== has(val.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [has(val.cert) ? 'key' : 'cert'],
+        message: 'A client certificate and its private key are given together, or not at all',
+      });
+    }
+  });
 
 export const connectionInputSchema = z
   .object({
@@ -42,6 +78,7 @@ export const connectionInputSchema = z
     password: z.string().optional(),
     database: z.string().optional(),
     ssl: z.boolean().optional(),
+    tls: tlsConfigSchema.optional(),
     connectionString: z.string().optional(),
     options: z.record(z.string(), z.unknown()).optional(),
     ssh: sshConfigSchema.optional(),
