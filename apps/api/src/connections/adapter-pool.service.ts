@@ -74,12 +74,13 @@ export class AdapterPoolService implements OnModuleDestroy {
     id: string,
     database?: string,
   ): Promise<DatabaseAdapter> {
-    const config = await this.store.resolve(id);
+    const stored = await this.store.resolve(id);
+    const config = this.withQueryCap(stored);
     const effectiveDb = database || config.database;
     const key = `${id}::${effectiveDb ?? ''}`;
     const existing = this.entries.get(key);
 
-    if (existing && existing.revision === config.updatedAt) {
+    if (existing && existing.revision === this.revisionOf(config)) {
       existing.lastUsedAt = Date.now();
       return existing.adapter;
     }
@@ -94,6 +95,27 @@ export class AdapterPoolService implements OnModuleDestroy {
     );
     this.pending.set(key, open);
     return open;
+  }
+
+  /**
+   * the instance-wide "max query rows" setting, for a connection that does not
+   * set its own. the setting was stored, shown in Settings and reported by the
+   * API, and nothing read it: every adapter used its built-in 5000 regardless.
+   */
+  private withQueryCap(config: ConnectionConfig): ConnectionConfig {
+    const own = Number(config.options?.maxQueryRows);
+    if (Number.isFinite(own) && own > 0) return config;
+    const cap = this.settings.snapshot().maxQueryRows;
+    return { ...config, options: { ...config.options, maxQueryRows: cap } };
+  }
+
+  /**
+   * what a cached adapter was built from. the cap is part of it, so changing
+   * the setting reaches connections that are already open instead of waiting
+   * for them to idle out
+   */
+  private revisionOf(config: ConnectionConfig): string {
+    return `${config.updatedAt}#${String(config.options?.maxQueryRows ?? '')}`;
   }
 
   private async open(
@@ -135,7 +157,7 @@ export class AdapterPoolService implements OnModuleDestroy {
     this.entries.set(key, {
       adapter,
       tunnel,
-      revision: config.updatedAt,
+      revision: this.revisionOf(config),
       lastUsedAt: Date.now(),
     });
     return adapter;

@@ -198,6 +198,22 @@ can no longer lose a row to a failed delivery.
   cannot be reached from this side — the first query timed out on a connection
   that had "tested" fine. A tunnelled connection now talks only to the address
   it was given.
+- **Most of the Settings dialog did nothing.** The default poll interval, rows
+  per poll and CDC operations, the query row cap and job concurrency were
+  stored, shown and reported by the API, and read by nothing — the docs carried
+  a note admitting it. New bridges now start from the saved defaults; the row
+  cap applies to every connection without its own, including ones already open;
+  and the replay worker follows the concurrency setting the moment it is saved.
+- **Opening a watch bridge in the builder and pressing Save reset parts of it.**
+  The builder has no control for rows-per-poll, the snapshot window or the
+  timestamp lookback, and wrote the constants 500 / 50,000 / 3,000 on every
+  save — undoing whatever had been set through the API. They are now carried
+  through an edit untouched.
+- `mssql` was listed as an engine with no driver behind it, on the understanding
+  that the API would refuse it; it did not, so such a connection could be saved
+  and then answered 501 to everything. It is gone from the list until an adapter
+  exists, a test holds the engine list and the drivers together, and the API
+  checks the driver registry before it saves a connection.
 - **The browser's Back button left Syncle** instead of returning to the bridge
   you were on. The app wrote its place into the URL with `replaceState`, so the
   whole session was a single history entry, and nothing listened for

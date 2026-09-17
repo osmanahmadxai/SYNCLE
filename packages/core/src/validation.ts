@@ -1,17 +1,18 @@
 /** shared Zod schemas for connection payloads (used on client and server) */
 import { z } from 'zod';
 
-// mirrors the DatabaseEngine union, including forward declarations that have
-// no adapter yet (mssql). the API re-validates the engine against the actual
-// driver registry before persisting, so a declared-but-unimplemented engine is
-// rejected there instead of being saved and 501ing on every later operation.
+// mirrors the DatabaseEngine union: the engines that HAVE an adapter. `mssql`
+// used to be listed as a forward declaration, on the understanding that the API
+// would refuse it until a driver existed — it never did, so such a connection
+// could be saved and then answered 501 to everything. an engine goes here when
+// its adapter does (a test holds the two lists together), and the API checks the
+// driver registry as well before it persists anything.
 export const engineSchema = z.enum([
   'postgres',
   'mysql',
   'sqlite',
   'mongodb',
   'redis',
-  'mssql',
 ]);
 
 /**

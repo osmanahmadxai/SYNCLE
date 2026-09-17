@@ -192,6 +192,71 @@ describe('loadBridge', () => {
     });
   });
 
+  it('carries the parts of a watch trigger it has no control for through an edit', () => {
+    // saving used to write 500 / 50,000 / 3,000 every time: opening a bridge
+    // and pressing Save undid whatever had been set through the API
+    const timestamp = loadBridge(
+      httpBridge({
+        trigger: {
+          kind: 'watch',
+          strategy: { strategy: 'timestamp', column: 'updated_at', lookbackMs: 45_000 },
+          pollIntervalMs: 30_000,
+          startFrom: 'beginning',
+          maxPerPoll: 2000,
+        },
+      }),
+    );
+    expect(buildInput(timestamp, ctx()).trigger).toEqual({
+      kind: 'watch',
+      strategy: { strategy: 'timestamp', column: 'updated_at', lookbackMs: 45_000 },
+      pollIntervalMs: 30_000,
+      startFrom: 'beginning',
+      maxPerPoll: 2000,
+    });
+
+    const snapshot = loadBridge(
+      httpBridge({
+        trigger: {
+          kind: 'watch',
+          strategy: { strategy: 'snapshot', maxTracked: 120_000 },
+          pollIntervalMs: 5000,
+          startFrom: 'now',
+          maxPerPoll: 50,
+        },
+      }),
+    );
+    expect(buildInput(snapshot, ctx()).trigger).toMatchObject({
+      strategy: { strategy: 'snapshot', maxTracked: 120_000 },
+      maxPerPoll: 50,
+    });
+  });
+
+  it('a new bridge starts from the saved defaults, not from constants', () => {
+    const d = initialDraft({
+      pollIntervalMs: 60_000,
+      maxPerPoll: 50,
+      cdcOperations: ['insert'],
+    });
+    expect(d.pollSeconds).toBe(60);
+    expect(d.maxPerPoll).toBe(50);
+    expect([...d.cdcOps]).toEqual(['insert']);
+    // and with none saved, from the built-in ones
+    const plain = initialDraft();
+    expect([plain.pollSeconds, plain.maxPerPoll, [...plain.cdcOps]]).toEqual([
+      5,
+      500,
+      ['insert', 'update', 'delete'],
+    ]);
+  });
+
+  it('never starts a bridge that captures nothing, whatever was saved', () => {
+    expect([...initialDraft({ pollIntervalMs: 5000, maxPerPoll: 500, cdcOperations: [] }).cdcOps]).toEqual([
+      'insert',
+      'update',
+      'delete',
+    ]);
+  });
+
   it('does not switch truncate on for a new bridge: it empties a table', () => {
     expect(initialDraft().cdcOps.has('truncate')).toBe(false);
   });

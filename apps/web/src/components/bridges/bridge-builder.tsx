@@ -15,6 +15,7 @@ import { api, ApiError } from '@/lib/api';
 import {
   useBrowse,
   useConnections,
+  useSettings,
   useCreateBridge,
   useDatabases,
   useSchema,
@@ -49,6 +50,7 @@ export function BridgeBuilder() {
     draft;
 
   const { data: connections } = useConnections();
+  const { data: settings } = useSettings();
   const { data: databases } = useDatabases(connectionId || null);
   const { data: schemaData } = useSchema(
     connectionId || null,
@@ -101,8 +103,18 @@ export function BridgeBuilder() {
       };
     }
     // a new bridge runs an on-demand job by default (the reset draft); the user
-    // can switch it to a live bridge in the "What runs in this bridge" selector
-    dispatch({ type: 'reset' });
+    // can switch it to a live bridge in the "What runs in this bridge" selector.
+    // it starts from the instance's saved defaults (Settings › Bridges)
+    dispatch({
+      type: 'reset',
+      defaults: settings
+        ? {
+            pollIntervalMs: settings.defaultPollIntervalMs,
+            maxPerPoll: settings.defaultMaxPerPoll,
+            cdcOperations: settings.defaultCdcOperations,
+          }
+        : undefined,
+    });
     if (bridgeEditor.seed) {
       dispatch({
         type: 'applySeed',

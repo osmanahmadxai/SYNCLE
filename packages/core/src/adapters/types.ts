@@ -15,8 +15,7 @@ export type DatabaseEngine =
   | 'mysql'
   | 'sqlite'
   | 'mongodb'
-  | 'redis'
-  | 'mssql';
+  | 'redis';
 
 /** the query dialect an engine exposes to the editor surface */
 export type QueryLanguage = 'sql' | 'mongo' | 'redis' | 'none';

@@ -14,7 +14,9 @@ import {
   type TlsConfig,
   DEFAULT_WORKSPACE_ID,
   NotFoundError,
+  BadRequestError,
 } from '@syncle/core';
+import { getDriver } from '@syncle/core/adapters';
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
 
@@ -192,7 +194,19 @@ export class ConnectionStoreService {
     return this.toConfig(await this.getRow(id), true);
   }
 
+  /**
+   * the schema lists the engines, the registry holds the drivers, and nothing
+   * used to check one against the other at the door — so a connection to an
+   * engine with no driver was saved, and every later use of it answered 501
+   */
+  private assertDriver(engine: string): void {
+    if (!getDriver(engine as ConnectionConfig['engine'])) {
+      throw new BadRequestError(`This build of Syncle has no driver for "${engine}".`);
+    }
+  }
+
   async create(input: ConnectionInput): Promise<ConnectionConfig> {
+    this.assertDriver(input.engine);
     const { sanitized: ssh, secrets: sshSecrets } = this.splitSsh(input.ssh);
     const { sanitized: tls, key: tlsKey } = this.splitTls(input.tls);
     const row = await this.prisma.connection.create({
@@ -223,6 +237,7 @@ export class ConnectionStoreService {
   }
 
   async update(id: string, input: ConnectionInput): Promise<ConnectionConfig> {
+    this.assertDriver(input.engine);
     const existing = await this.getRow(id);
 
     // keep stored secrets when the client sends the redaction sentinel

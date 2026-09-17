@@ -41,6 +41,12 @@ export function loadBridge(h: Bridge): BuilderDraft {
       h.trigger.strategy.strategy === 'snapshot' ? '' : h.trigger.strategy.column;
     d.pollSeconds = Math.round(h.trigger.pollIntervalMs / 1000);
     d.watchStartFrom = h.trigger.startFrom;
+    // no control for these: they ride through the edit as they are
+    d.maxPerPoll = h.trigger.maxPerPoll;
+    if (h.trigger.strategy.strategy === 'snapshot')
+      d.snapshotMaxTracked = h.trigger.strategy.maxTracked;
+    if (h.trigger.strategy.strategy === 'timestamp')
+      d.lookbackMs = h.trigger.strategy.lookbackMs;
   } else if (h.trigger.kind === 'cdc') {
     d.syncMode = 'live';
     d.triggerKind = 'cdc';
@@ -210,17 +216,17 @@ export function buildInput(
               kind: 'watch',
               strategy:
                 draft.watchStrategy === 'snapshot'
-                  ? { strategy: 'snapshot', maxTracked: 50000 }
+                  ? { strategy: 'snapshot', maxTracked: draft.snapshotMaxTracked }
                   : draft.watchStrategy === 'timestamp'
                     ? {
                         strategy: 'timestamp',
                         column: draft.watchColumn,
-                        lookbackMs: 3000,
+                        lookbackMs: draft.lookbackMs,
                       }
                     : { strategy: 'increment', column: draft.watchColumn },
               pollIntervalMs: Math.max(1000, Math.round(draft.pollSeconds * 1000)),
               startFrom: draft.watchStartFrom,
-              maxPerPoll: 500,
+              maxPerPoll: draft.maxPerPoll,
             }
           : { kind: 'replay' },
     enabled: draft.enabled,

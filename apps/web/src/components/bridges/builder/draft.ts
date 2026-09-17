@@ -109,6 +109,15 @@ export interface BuilderDraft {
   watchColumn: string;
   pollSeconds: number;
   watchStartFrom: 'now' | 'beginning';
+  /**
+   * parts of a watch trigger the builder has no control for. they are carried
+   * through an edit untouched: saving used to write the constants 500 / 50,000
+   * / 3,000 every time, so opening a bridge and pressing Save quietly undid
+   * whatever had been set through the API
+   */
+  maxPerPoll: number;
+  snapshotMaxTracked: number;
+  lookbackMs: number;
   cdcOps: Set<CdcOp>;
   readiness: CdcReadiness | null;
   checkingCdc: boolean;
@@ -122,7 +131,26 @@ export interface BuilderDraft {
   enabled: boolean;
 }
 
-export function initialDraft(): BuilderDraft {
+/**
+ * what a NEW bridge starts from: the instance's saved defaults (Settings ›
+ * Bridges). they were stored and shown for a year while the builder went on
+ * using 5 seconds, 500 rows and all three operations regardless
+ */
+export interface BuilderDefaults {
+  pollIntervalMs: number;
+  maxPerPoll: number;
+  cdcOperations: CdcOp[];
+}
+
+export const BUILT_IN_DEFAULTS: BuilderDefaults = {
+  pollIntervalMs: 5000,
+  maxPerPoll: 500,
+  cdcOperations: ['insert', 'update', 'delete'],
+};
+
+export function initialDraft(
+  defaults: BuilderDefaults = BUILT_IN_DEFAULTS,
+): BuilderDraft {
   return {
     name: '',
     connectionId: '',
@@ -138,9 +166,16 @@ export function initialDraft(): BuilderDraft {
     triggerKind: 'replay',
     watchStrategy: 'increment',
     watchColumn: '',
-    pollSeconds: 5,
+    pollSeconds: Math.max(1, Math.round(defaults.pollIntervalMs / 1000)),
     watchStartFrom: 'now',
-    cdcOps: new Set(['insert', 'update', 'delete']),
+    maxPerPoll: defaults.maxPerPoll,
+    snapshotMaxTracked: 50_000,
+    lookbackMs: 3000,
+    cdcOps: new Set(
+      defaults.cdcOperations.length > 0
+        ? defaults.cdcOperations
+        : BUILT_IN_DEFAULTS.cdcOperations,
+    ),
     readiness: null,
     checkingCdc: false,
     wrapKey: '',
@@ -154,7 +189,7 @@ export function initialDraft(): BuilderDraft {
 
 export type BuilderAction =
   /** back to a blank draft (opening the editor, or before an edit load) */
-  | { type: 'reset' }
+  | { type: 'reset'; defaults?: BuilderDefaults }
   /** replace the draft with a fully hydrated one (edit-mode load) */
   | { type: 'load'; draft: BuilderDraft }
   /** prefill source fields when opened from the schema tree */
@@ -200,7 +235,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
   switch (action.type) {
     case 'reset':
       // an in-flight readiness probe keeps its spinner; its own finally clears it
-      return { ...initialDraft(), checkingCdc: d.checkingCdc };
+      return { ...initialDraft(action.defaults), checkingCdc: d.checkingCdc };
     case 'load':
       return { ...action.draft, checkingCdc: d.checkingCdc };
     case 'applySeed':

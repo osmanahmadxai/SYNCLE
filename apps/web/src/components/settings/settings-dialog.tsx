@@ -387,7 +387,7 @@ function EngineTab({ settings }: { settings: AppSettings }) {
       <NumField
         id="job-concurrency"
         label="Job concurrency"
-        hint="How many jobs may execute at once. Applies after an API restart."
+        hint="How many replay jobs may run at once. Applies as soon as it is saved; jobs already running finish as they are."
         value={form.jobConcurrency}
         min={RANGES.jobConcurrency.min}
         max={RANGES.jobConcurrency.max}

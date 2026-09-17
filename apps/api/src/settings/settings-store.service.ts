@@ -19,6 +19,31 @@ const SETTINGS_KEY = 'app';
 export class SettingsStoreService implements OnModuleInit {
   private readonly logger = new Logger('Settings');
   private cache: AppSettings | null = null;
+  private readonly listeners = new Set<(settings: AppSettings) => void>();
+
+  /**
+   * be told when the settings change (and once, now, with what they are). for
+   * the parts of the engine that are configured at construction and have to be
+   * re-configured to follow a setting — a worker's concurrency, say
+   */
+  onChange(listener: (settings: AppSettings) => void): () => void {
+    this.listeners.add(listener);
+    void this.resolved().then(
+      (s) => listener(s),
+      () => undefined,
+    );
+    return () => this.listeners.delete(listener);
+  }
+
+  private announce(settings: AppSettings): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(settings);
+      } catch (err) {
+        this.logger.warn(`A settings listener failed: ${(err as Error).message}`);
+      }
+    }
+  }
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -74,6 +99,7 @@ export class SettingsStoreService implements OnModuleInit {
       create: { key: SETTINGS_KEY, valueJson: JSON.stringify(merged) },
     });
     this.cache = { ...this.defaults(), ...merged };
+    this.announce(this.cache);
     return this.cache;
   }
 

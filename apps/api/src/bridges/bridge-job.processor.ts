@@ -16,7 +16,7 @@
  * lines up across attempts.
  */
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import {
   BadRequestError,
   type BrowseParams,
@@ -25,6 +25,7 @@ import {
 import type { Job } from 'bullmq';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { runtimeConfig } from '../common/runtime-config';
+import { SettingsStoreService } from '../settings/settings-store.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobService } from './bridge-job.service';
@@ -61,9 +62,12 @@ function parseKeysetCheckpoint(cursorJson: string | null): KeysetCheckpoint | nu
   }
 }
 
+// the decorator is evaluated at import, before any saved setting can be read:
+// it carries the environment's value, and `followSettings` takes over at boot
 @Processor(BRIDGE_JOBS_QUEUE, { concurrency: runtimeConfig.jobConcurrency })
-export class BridgeJobProcessor extends WorkerHost {
+export class BridgeJobProcessor extends WorkerHost implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger('BridgeJobProcessor');
+  private unfollow: (() => void) | null = null;
 
   constructor(
     private readonly jobs: BridgeJobService,
@@ -71,8 +75,37 @@ export class BridgeJobProcessor extends WorkerHost {
     private readonly pool: AdapterPoolService,
     private readonly sink: BridgeSinkService,
     private readonly registry: JobRegistryService,
+    private readonly settings: SettingsStoreService,
   ) {
     super();
+  }
+
+  /**
+   * "Job concurrency" in Settings was stored and shown — with a note that it
+   * applied after a restart — and then never read: the worker ran with the
+   * environment's value whatever the dialog said. it now follows the setting,
+   * at boot and whenever it is changed. (a BullMQ worker's concurrency can be
+   * changed while it runs; jobs already in flight finish as they are.)
+   */
+  onApplicationBootstrap(): void {
+    this.unfollow = this.settings.onChange((settings) => this.applyConcurrency(settings.jobConcurrency));
+  }
+
+  onModuleDestroy(): void {
+    this.unfollow?.();
+    this.unfollow = null;
+  }
+
+  private applyConcurrency(wanted: number): void {
+    if (!Number.isInteger(wanted) || wanted < 1) return;
+    try {
+      if (this.worker.concurrency === wanted) return;
+      this.worker.concurrency = wanted;
+      this.logger.log(`Running up to ${wanted} replay job${wanted === 1 ? '' : 's'} at a time`);
+    } catch (err) {
+      // the worker is not up (no Redis yet): the decorator's value stands
+      this.logger.debug(`Could not apply job concurrency: ${(err as Error).message}`);
+    }
   }
 
   async process(job: Job<BridgeJobPayload>): Promise<void> {
@@ -385,8 +418,8 @@ export class BridgeJobProcessor extends WorkerHost {
     );
     if (result.truncated) {
       throw new BadRequestError(
-        `Query result was capped at ${result.rowCount} rows (limit ${runtimeConfig.maxQueryRows}). ` +
-          `Narrow the query, or use a table source to replay every row.`,
+        `Query result was capped at ${result.rowCount} rows — the "max query rows" limit (Settings › Engine, or the connection's own). ` +
+          `Narrow the query, raise the limit, or use a table source to replay every row.`,
       );
     }
     await this.jobs.setTotal(jobId, result.rows.length);

@@ -729,20 +729,25 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`}</C
         schedule; pending ones are data and are kept until you deal with them.
       </p>
       <p>
-        A candid note on what is wired up in 1.0.{' '}
-        <code>sessionTtlMinutes</code> takes effect immediately and has no
-        env var — it is edited only here, under Settings › Security. The
-        others are stored and reported back by the API, but do not yet steer
-        the engine: the bridge builder hard-codes a 5&nbsp;second poll, 500
-        rows per poll and all three CDC operations regardless of the{' '}
-        <code>default*</code> values; the working query cap is the built-in
-        5000 or the per-connection <code>maxQueryRows</code> option; and
-        worker concurrency comes solely from{' '}
-        <code>SYNCLE_JOB_CONCURRENCY</code> at boot. Treat those dialog
-        values as declarations of intent until a release wires them through.
-        A settings row persisted before the bridges rename under the old{' '}
+        All of them take effect without a restart. The three{' '}
+        <code>default*</code> values are what the bridge builder starts a{' '}
+        <em>new</em> bridge from; existing bridges keep their own.{' '}
+        <code>maxQueryRows</code> caps ad-hoc queries on every connection that
+        does not set its own <code>maxQueryRows</code> option, and reaches
+        connections that are already open. <code>jobConcurrency</code> is
+        applied to the replay worker as soon as it is saved (jobs already
+        running finish as they are). <code>sessionTtlMinutes</code> has no env
+        var and is edited only here, under Settings › Security. A settings row
+        persisted before the bridges rename under the old{' '}
         <code>hookConcurrency</code> key is migrated to{' '}
         <code>jobConcurrency</code> automatically.
+      </p>
+      <p>
+        Releases up to 1.3 stored these values and reported them back, but only{' '}
+        <code>sessionTtlMinutes</code> did anything: the builder used a 5
+        second poll, 500 rows per poll and all three CDC operations whatever
+        was saved, the query cap was the built-in 5000, and concurrency came
+        from <code>SYNCLE_JOB_CONCURRENCY</code> alone.
       </p>
     </DocArticle>
   );
