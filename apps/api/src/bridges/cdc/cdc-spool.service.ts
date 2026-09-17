@@ -35,6 +35,9 @@ import { decodeRows, encodeRows } from '../row-codec';
  */
 export type SpoolOp = CdcOperation | 'notice';
 
+/** every spool stream lives under this prefix, in Syncle's own Redis */
+export const SPOOL_KEY_PREFIX = 'syncle:cdc:spool:';
+
 /** one change as it is held in the spool */
 export interface SpoolEntry {
   op: SpoolOp;
@@ -100,7 +103,7 @@ export class CdcSpoolService implements OnModuleDestroy {
 
   /** one stream per bridge, so ordering is per-bridge and trimming is isolated */
   private key(bridgeId: string): string {
-    return `syncle:cdc:spool:${bridgeId}`;
+    return `${SPOOL_KEY_PREFIX}${bridgeId}`;
   }
 
   private conn(): Redis {

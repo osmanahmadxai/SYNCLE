@@ -183,6 +183,20 @@ can no longer lose a row to a failed delivery.
   fills it. MySQL is covered too: a purged binlog file, or a connection that
   now reaches a different server, is detected before the stream is opened
   instead of failing in a loop.
+- **A Redis CDC bridge captured Syncle's own writes.** A keyspace subscription
+  hears every write to the database, and when the Redis being bridged from is
+  the one Syncle itself runs on — a single shared Redis, which is also what the
+  test suite uses — that included Syncle's keys. With `SYNCLE_CDC_SPOOL=on` it
+  was a closed loop: each captured change was appended to the bridge's spool
+  stream, the `XADD` fired a keyspace event, and the bridge captured *that*.
+  Measured: 120,000 events in twenty seconds, all of them the spool's, while the
+  user's rows never arrived — every Redis source delivered nothing with the
+  spool on. Without the spool, a bridge with no key filter delivered the job
+  queues' bookkeeping keys as if they were data. Syncle's own keys are now
+  never treated as changes.
+- A Redis CDC bridge writing into the same Redis database it listens to fed on
+  its own output for ever. It is refused at start (and not resumed at boot),
+  with the fix spelled out: another database number is enough.
 - With the spool on, deleting a bridge left its Redis stream — and whatever
   undelivered rows were in it — behind for good: the method that clears it was
   never called. It is cleared on delete, and when a bridge leaves its source.

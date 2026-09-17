@@ -408,6 +408,20 @@ server_id        = 1   # any unique id`}</CodeBlock>
         cursor. When every change matters, use a watch bridge on Redis
         instead.
       </Note>
+      <p>
+        A keyspace subscription hears <em>every</em> write to the database,
+        including ones Syncle makes itself. Two consequences are handled for
+        you. If the Redis you bridge from is also the Redis Syncle runs on (
+        <code>REDIS_URL</code> — a single shared Redis is a common small
+        setup), Syncle&apos;s own keys — its job queues under{' '}
+        <code>bull:bridge-jobs:</code> and <code>bull:bridge-watch:</code>,
+        and the CDC spool under <code>syncle:cdc:spool:</code> — are never
+        treated as changes. And a bridge whose destination is the{' '}
+        <em>same</em> Redis database it listens to is refused when it
+        starts: every row it wrote would be captured as a new change and
+        written again, without end. A different database number on the same
+        server is enough to separate them.
+      </p>
 
       <h3 id="sqlite">SQLite</h3>
       <p>

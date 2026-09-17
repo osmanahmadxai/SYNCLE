@@ -310,7 +310,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`CDC ${bridgeId}: continuing from now, accepting a gap (${gap})`);
     }
 
-    await provider.provision(bridgeId, bridge, conn);
+    await provider.provision(bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
 
     const job = latest
       ? await this.prisma.bridgeJob.update({
@@ -1739,7 +1739,18 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           this.logger.warn(`CDC ${r.bridgeId}: ${lost}`);
           continue;
         }
-        await provider.provision(r.bridgeId, bridge, conn).catch(() => undefined);
+        try {
+          await provider.provision(r.bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
+        } catch (err) {
+          // a REFUSAL is not a hiccup: this bridge must not run (a table that
+          // cannot be served, a bridge that would feed itself). anything else —
+          // the source is briefly unreachable — is left to the stream's retries
+          if (err instanceof BadRequestError) {
+            await this.jobs.finalize(r.id, 'failed', err.message).catch(() => undefined);
+            this.logger.warn(`CDC ${r.bridgeId} not resumed: ${err.message}`);
+            continue;
+          }
+        }
         await this.beginStream(r.bridgeId, bridge, conn, provider, r.id, r.cursorOffset, readCursor(r.cursorJson));
         this.logger.log(`Resumed CDC stream for bridge ${r.bridgeId} (${conn.engine})`);
       } catch (err) {

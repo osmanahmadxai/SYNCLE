@@ -178,7 +178,17 @@ export interface CdcProvider {
    * most engines have nothing to provision (the binlog/oplog/keyspace stream
    * already exists) so they just no-op.
    */
-  provision(bridgeId: string, bridge: ResolvedBridge, conn: ConnectionConfig): Promise<void>;
+  provision(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+    /**
+     * look up one of the bridge's TARGET connections — for a provider that has
+     * to know where the bridge writes before it agrees to listen (Redis: a
+     * bridge that writes into the database it listens to never stops)
+     */
+    resolveTarget?: (connectionId: string) => Promise<ConnectionConfig>,
+  ): Promise<void>;
 
   /**
    * drop everything {@link provision} created: when a bridge is deleted, stops
