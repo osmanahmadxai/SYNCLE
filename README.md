@@ -428,6 +428,10 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
+On the Docker install these go in `~/.syncle/.env` (one `NAME=value` per line),
+followed by `syncle up` — not `syncle restart`, which keeps the environment the
+container was created with. Anything left out keeps its default.
+
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
 `apps/api/.syncle/` on first run — set it explicitly in production
 (generate one with `openssl rand -base64 32`).

@@ -183,6 +183,16 @@ can no longer lose a row to a failed delivery.
   fills it. MySQL is covered too: a purged binlog file, or a connection that
   now reaches a different server, is detected before the stream is opened
   instead of failing in a loop.
+- **On a Docker install, almost no setting could be changed.** The compose file
+  listed the API's environment by hand and passed two variables through, so the
+  CDC spool, the batch sizes, the dead-letter limits and everything since were
+  unreachable for anyone who installed Syncle the recommended way — the docs
+  said as much. Every setting the API reads is now passed through from
+  `~/.syncle/.env` (add a line, then `syncle up`), and a test fails if one is
+  added to the API and not to the compose file. The API also reads an empty or
+  non-numeric value as "use the default": `Number('')` is 0, so a variable
+  passed through unset would otherwise have meant a batch size, a query cap and
+  a pool timeout of zero.
 - **A Redis CDC bridge captured Syncle's own writes.** A keyspace subscription
   hears every write to the database, and when the Redis being bridged from is
   the one Syncle itself runs on — a single shared Redis, which is also what the

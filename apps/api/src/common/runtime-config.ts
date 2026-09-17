@@ -3,8 +3,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 function resolveDataDir(): string {
-  const dir = process.env.SYNCLE_DATA_DIR
-    ? resolve(process.env.SYNCLE_DATA_DIR)
+  const dir = process.env.SYNCLE_DATA_DIR?.trim()
+    ? resolve(process.env.SYNCLE_DATA_DIR.trim())
     : resolve(process.cwd(), '.syncle');
   // 0o700: the dir holds the master key, keep it out of reach of other users
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -12,6 +12,26 @@ function resolveDataDir(): string {
 }
 
 const dataDir = resolveDataDir();
+
+/**
+ * an environment variable that is set TO something. the Docker install passes
+ * every tunable through its compose file as `${NAME:-}`, so a variable nobody
+ * set arrives as an empty string, not as undefined — and `Number('')` is 0. read
+ * naively, an untouched install would run with a batch size, a query cap and a
+ * pool timeout of zero.
+ */
+function env(name: string): string | undefined {
+  const value = process.env[name];
+  return value === undefined || value.trim() === '' ? undefined : value;
+}
+
+/** a number from the environment; the default when unset, empty or not a number */
+function numberEnv(name: string, fallback: number): number {
+  const raw = env(name);
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 /** like positiveInt, but 0 is a meaningful value ("off") */
 function nonNegativeInt(raw: string | undefined, fallback: number): number {
@@ -36,24 +56,28 @@ export const runtimeConfig = {
    * exists only while the instance has no account.
    */
   setupTokenFile: resolve(dataDir, 'setup-token'),
-  masterKey: process.env.SYNCLE_MASTER_KEY ?? null,
-  maxQueryRows: Number(process.env.SYNCLE_MAX_QUERY_ROWS ?? 5000),
-  poolIdleMs: Number(process.env.SYNCLE_POOL_IDLE_MS ?? 300_000),
-  port: Number(process.env.PORT ?? 4000),
+  masterKey: env('SYNCLE_MASTER_KEY') ?? null,
+  maxQueryRows: numberEnv('SYNCLE_MAX_QUERY_ROWS', 5000),
+  poolIdleMs: numberEnv('SYNCLE_POOL_IDLE_MS', 300_000),
+  port: numberEnv('PORT', 4000),
   // never fall back to reflecting arbitrary origins: with credentialed CORS
   // that would let any web page the operator visits call this API
-  webOrigin: process.env.WEB_ORIGIN
-    ? process.env.WEB_ORIGIN.split(',').map((o) => o.trim())
-    : `http://localhost:${process.env.WEB_PORT ?? '3002'}`,
+  webOrigin: env('WEB_ORIGIN')
+    ? (env('WEB_ORIGIN') as string)
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean)
+    : `http://localhost:${env('WEB_PORT') ?? '3002'}`,
   /** Redis URL backing the BullMQ bridge-job queue */
-  redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
+  redisUrl: env('REDIS_URL') ?? 'redis://localhost:6379',
   /**
    * worker concurrency: how many bridge jobs may run in parallel.
    * SYNCLE_HOOK_CONCURRENCY is the legacy name (transition) — still honored
    * so existing deployments keep their setting across the rename.
    */
-  jobConcurrency: Number(
-    process.env.SYNCLE_JOB_CONCURRENCY ?? process.env.SYNCLE_HOOK_CONCURRENCY ?? 5,
+  jobConcurrency: numberEnv(
+    'SYNCLE_JOB_CONCURRENCY',
+    numberEnv('SYNCLE_HOOK_CONCURRENCY', 5),
   ),
   /**
    * CDC micro-batching. A change stream delivered one row at a time pays a
@@ -89,7 +113,7 @@ export const runtimeConfig = {
    * failures, because what actually bounds memory here is the byte budget
    * below, not the row count.
    */
-  cdcBatchSize: Number(process.env.SYNCLE_CDC_BATCH_SIZE ?? 100_000),
+  cdcBatchSize: numberEnv('SYNCLE_CDC_BATCH_SIZE', 100_000),
   /**
    * Ceiling on the bytes held in one batch. A row cap alone is unsafe: 20,000
    * narrow rows is a few megabytes, but 20,000 wide ones could be gigabytes.
@@ -97,9 +121,9 @@ export const runtimeConfig = {
    * stream carries one table's shape, so the rows are homogeneous — and the
    * batch is capped at whichever limit binds first.
    */
-  cdcBatchBytes: Number(process.env.SYNCLE_CDC_BATCH_BYTES ?? 64 * 1024 * 1024),
+  cdcBatchBytes: numberEnv('SYNCLE_CDC_BATCH_BYTES', 64 * 1024 * 1024),
   /** how long a partial batch waits for more changes before being flushed */
-  cdcLingerMs: Number(process.env.SYNCLE_CDC_LINGER_MS ?? 50),
+  cdcLingerMs: numberEnv('SYNCLE_CDC_LINGER_MS', 50),
   /**
    * Put a durable spool (a Redis Stream) between the change reader and the
    * destination writer. With it on, the source is acknowledged as soon as a
@@ -112,9 +136,9 @@ export const runtimeConfig = {
    * (appendonly) enabled. That is a durability trade nobody should make by
    * accident.
    */
-  cdcSpool: (process.env.SYNCLE_CDC_SPOOL ?? '') === 'on',
+  cdcSpool: (env('SYNCLE_CDC_SPOOL') ?? '').trim().toLowerCase() === 'on',
   /** cap on unwritten changes held in the spool before the reader is throttled */
-  cdcSpoolMax: Number(process.env.SYNCLE_CDC_SPOOL_MAX ?? 50_000),
+  cdcSpoolMax: numberEnv('SYNCLE_CDC_SPOOL_MAX', 50_000),
   /**
    * Dead-letter queue bound. A live bridge set to `onError: continue` parks the
    * rows it cannot deliver instead of losing them, but that must not turn a
@@ -122,23 +146,23 @@ export const runtimeConfig = {
    * bridge holds this many undelivered rows it stops (without moving its
    * cursor) and says why, exactly as `abort` would.
    */
-  deadLetterMaxRows: positiveInt(process.env.SYNCLE_DEAD_LETTER_MAX_ROWS, 10_000),
+  deadLetterMaxRows: positiveInt(env('SYNCLE_DEAD_LETTER_MAX_ROWS'), 10_000),
   /**
    * How many batches in a row may deliver NOTHING before a `continue` bridge
    * stops. One bad row fails one batch; a destination that is down fails all of
    * them, and carrying on would only move the whole change stream into the
    * dead-letter queue.
    */
-  maxConsecutiveFailures: positiveInt(process.env.SYNCLE_MAX_CONSECUTIVE_FAILURES, 5),
+  maxConsecutiveFailures: positiveInt(env('SYNCLE_MAX_CONSECUTIVE_FAILURES'), 5),
   /**
    * How often (seconds) to look at what each CDC bridge is holding on its
    * source: for PostgreSQL, how much WAL its replication slot is pinning. A
    * slot keeps WAL whether or not anything reads it, so a bridge that is paused
    * or failed fills the source's disk in silence. 0 turns the check off.
    */
-  sourceHoldCheckSeconds: nonNegativeInt(process.env.SYNCLE_SLOT_CHECK_SECONDS, 60),
+  sourceHoldCheckSeconds: nonNegativeInt(env('SYNCLE_SLOT_CHECK_SECONDS'), 60),
   /** WAL pinned by one bridge before it is flagged (bytes). default 1 GiB */
-  slotWarnBytes: nonNegativeInt(process.env.SYNCLE_SLOT_WARN_BYTES, 1024 ** 3),
+  slotWarnBytes: nonNegativeInt(env('SYNCLE_SLOT_WARN_BYTES'), 1024 ** 3),
   /**
    * WAL pinned by a bridge that is NOT running before Syncle gives the slot up
    * to protect the source (bytes). 0 = never, which is the default: dropping a
@@ -148,7 +172,7 @@ export const runtimeConfig = {
    * PostgreSQL 13+ the server-side `max_slot_wal_keep_size` does the same job
    * and also covers the time Syncle itself is down.
    */
-  slotMaxBytes: nonNegativeInt(process.env.SYNCLE_SLOT_MAX_BYTES, 0),
+  slotMaxBytes: nonNegativeInt(env('SYNCLE_SLOT_MAX_BYTES'), 0),
   /**
    * Delivery history. Every delivery is recorded with what was sent and what
    * came back, and nothing used to remove those rows: a live bridge writes them
@@ -156,10 +180,10 @@ export const runtimeConfig = {
    * can be changed in the UI): days a delivery's details are kept, and how many
    * a live job keeps however recent. 0 = no limit. Counters are never touched.
    */
-  deliveryRetentionDays: nonNegativeInt(process.env.SYNCLE_DELIVERY_RETENTION_DAYS, 30),
-  deliveryMaxPerJob: nonNegativeInt(process.env.SYNCLE_DELIVERY_MAX_PER_JOB, 100_000),
+  deliveryRetentionDays: nonNegativeInt(env('SYNCLE_DELIVERY_RETENTION_DAYS'), 30),
+  deliveryMaxPerJob: nonNegativeInt(env('SYNCLE_DELIVERY_MAX_PER_JOB'), 100_000),
   /** how often the retention sweep runs, in minutes. 0 = never */
-  retentionSweepMinutes: nonNegativeInt(process.env.SYNCLE_RETENTION_SWEEP_MINUTES, 60),
+  retentionSweepMinutes: nonNegativeInt(env('SYNCLE_RETENTION_SWEEP_MINUTES'), 60),
   /**
    * when true, HTTP destinations may not resolve to loopback/private/link-local
    * addresses (SSRF guard for network-exposed deployments). off by default —
@@ -167,10 +191,10 @@ export const runtimeConfig = {
    * cloud metadata endpoints are blocked regardless of this flag.
    */
   blockPrivateDestinations:
-    (process.env.SYNCLE_BLOCK_PRIVATE_DESTINATIONS ?? '') === 'true',
+    (env('SYNCLE_BLOCK_PRIVATE_DESTINATIONS') ?? '').trim().toLowerCase() === 'true',
   /** when set, SQLite connections may only open files under this directory */
-  sqliteBaseDir: process.env.SYNCLE_SQLITE_DIR
-    ? resolve(process.env.SYNCLE_SQLITE_DIR)
+  sqliteBaseDir: env('SYNCLE_SQLITE_DIR')
+    ? resolve(env('SYNCLE_SQLITE_DIR') as string)
     : null,
 } as const;
 

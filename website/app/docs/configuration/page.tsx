@@ -42,7 +42,8 @@ export default function Page() {
                 Written by <code>install.sh</code> with mode 600; passed to
                 Docker Compose as the env file. Holds{' '}
                 <code>SYNCLE_MASTER_KEY</code> and the pinned{' '}
-                <code>SYNCLE_IMAGE</code>.
+                <code>SYNCLE_IMAGE</code>, and is where you add any of the{' '}
+                <a href="#api-environment-variables">API settings</a> below.
               </td>
             </tr>
             <tr>
@@ -75,14 +76,23 @@ export default function Page() {
         every run.
       </p>
       <p>
-        In the Docker install the container environment is fixed inside{' '}
-        <code>docker-compose.app.yml</code> (<code>PORT=4002</code>, a{' '}
-        <code>DATABASE_URL</code> pointing at the bundled Postgres, and so on);
-        only <code>SYNCLE_MASTER_KEY</code> and <code>SYNCLE_IMAGE</code> flow
-        in from <code>$SYNCLE_HOME/.env</code>. The <code>syncle</code>{' '}
-        launcher itself reads <code>SYNCLE_PORT</code> and{' '}
-        <code>SYNCLE_HOME</code> from your shell — the{' '}
-        <a href="/docs/install">installation page</a> covers those.
+        In the Docker install, <code>docker-compose.app.yml</code> fixes the
+        wiring (<code>PORT=4002</code>, a <code>DATABASE_URL</code> pointing
+        at the bundled Postgres, the Redis URL, the data directory) and
+        passes every other API setting on this page through from{' '}
+        <code>$SYNCLE_HOME/.env</code>. To change one, add a line and bring
+        the stack up again:
+      </p>
+      <CodeBlock title="~/.syncle/.env">{`SYNCLE_CDC_SPOOL=on
+SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
+      <CodeBlock title="apply it">{`syncle up      # not "syncle restart": a restart keeps the old environment`}</CodeBlock>
+      <p>
+        A setting you leave out keeps its default. (Releases up to 1.3 passed
+        only <code>SYNCLE_MASTER_KEY</code> and <code>SYNCLE_IMAGE</code>, so
+        none of the others could be changed on a Docker install at all; run{' '}
+        <code>syncle update</code> to get the newer compose file.) The <code>syncle</code> launcher itself reads{' '}
+        <code>SYNCLE_PORT</code> and <code>SYNCLE_HOME</code> from your shell
+        — the <a href="/docs/install">installation page</a> covers those.
       </p>
 
       <h2 id="api-environment-variables">API environment variables</h2>

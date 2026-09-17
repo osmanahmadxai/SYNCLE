@@ -48,7 +48,7 @@ async function bootstrap(): Promise<void> {
   // this is the last thing to print after a `pnpm dev/start`, so show both
   // URLs here, the web one first since that's the one you actually open. the
   // plain console.log so it always shows regardless of the nest log level
-  const webPort = process.env.WEB_PORT ?? '3002';
+  const webPort = process.env.WEB_PORT?.trim() || '3002';
   console.log(
     `\n  Syncle · ready\n\n` +
       `    Web  http://localhost:${webPort}   ← open this\n` +
