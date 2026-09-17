@@ -34,6 +34,7 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { PAGE_SIZE, builderReducer, initialDraft } from './builder/draft';
+import { redisTargetProblem } from './builder/redis-target';
 import { buildInput, draftTransforms, loadBridge } from './builder/mapping';
 import { SourceSection } from './builder/source-section';
 import { TriggerSection } from './builder/trigger-section';
@@ -217,7 +218,13 @@ export function BridgeBuilder() {
           (t) =>
             !!t.connectionId &&
             t.table.trim().length > 0 &&
-            (t.writeMode === 'insert' || t.keyColumns.length > 0) &&
+            // a key per row in Redis: the key template says what the row is found by
+            (t.redisMode === 'template'
+              ? redisTargetProblem(
+                  t,
+                  includedList.map((s) => t.renames[s]?.trim() || s),
+                ) === null
+              : t.writeMode === 'insert' || t.keyColumns.length > 0) &&
             // a soft delete marks the row in a column of its own
             (t.onDelete !== 'soft' ||
               (t.softDeleteColumn.trim().length > 0 &&
@@ -424,6 +431,7 @@ export function BridgeBuilder() {
                 dispatch={dispatch}
                 includedList={includedList}
                 singlePk={singlePk}
+                sourceTable={table}
               />
               <DeliverySection draft={draft} dispatch={dispatch} />
             </div>

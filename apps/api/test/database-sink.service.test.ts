@@ -319,6 +319,111 @@ describe('a target that another live bridge reads (see EchoGuardService)', () =>
   });
 });
 
+describe('a Redis target that says how a row becomes a key', () => {
+  const asHash = (extra: Partial<DatabaseTarget> = {}) =>
+    makeTarget({
+      table: 'keys',
+      // (what the schema derives from the template)
+      keyColumns: ['id'],
+      redis: { keyTemplate: 'user:{{id}}', type: 'hash', ttlSeconds: 60 },
+      ...extra,
+    });
+
+  it('writes the key the row becomes, found by that key', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const outcome = await svc.deliver(makeBridge(), [asHash()], [{ id: 7, name: 'Ada', note: null }], undefined);
+    expect(outcome.status).toBe('success');
+    expect(calls.upsert).toEqual([
+      {
+        schema: undefined,
+        table: 'keys',
+        values: {
+          key: 'user:7',
+          type: 'hash',
+          value: { id: '7', name: 'Ada', note: null },
+          ttl: 60,
+          fields: true,
+        },
+        keyColumns: ['key'],
+      },
+    ]);
+    // what is recorded of the delivery is the ROW, so that re-sending it goes the same way
+    expect(JSON.parse(outcome.requestBody!)).toEqual({ id: 7, name: 'Ada', note: null });
+  });
+
+  it('a delete removes that key, and nothing but the key is asked of the row', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const outcome = await svc.deliver(makeBridge(), [asHash()], [{ id: 7 }], 'delete');
+    expect(outcome.status).toBe('success');
+    expect(calls.delete).toEqual([{ schema: undefined, table: 'keys', identity: { key: 'user:7' } }]);
+  });
+
+  it('a row that cannot say its key fails — by name — instead of landing under half a key', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const target = asHash({
+      keyColumns: ['tenant', 'id'],
+      redis: { keyTemplate: 't:{{tenant}}:u:{{id}}', type: 'hash' },
+    });
+    for (const op of [undefined, 'delete'] as const) {
+      const outcome = await svc.deliver(makeBridge(), [target], [{ id: 7, tenant: null }], op);
+      expect(outcome.status).toBe('failed');
+      expect(outcome.error).toMatch(/no value for "tenant".*t:\{\{tenant\}\}:u:\{\{id\}\}/);
+    }
+    expect(calls.upsert).toEqual([]);
+    expect(calls.delete).toEqual([]);
+  });
+
+  it('the row is mapped FIRST: the key and the fields use the names the target has', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const target = asHash({
+      keyColumns: ['user_id'],
+      mapping: [
+        { source: 'id', target: 'user_id' },
+        { source: 'name', target: 'full_name' },
+      ],
+      redis: { keyTemplate: 'user:{{user_id}}', type: 'json' },
+    });
+    await svc.deliver(makeBridge(), [target], [{ id: 7, name: 'Ada', secret: 'not mapped' }], undefined);
+    expect(calls.upsert[0]!.values).toEqual({
+      key: 'user:7',
+      type: 'string',
+      value: '{"user_id":7,"full_name":"Ada"}',
+      ttl: 0,
+    });
+  });
+
+  it('what another bridge would read back is announced as the KEY that was written', async () => {
+    const told: Array<{ keyColumns: string[]; rows: unknown; mode: string }> = [];
+    const echo = {
+      announce: async (_b: unknown, t: DatabaseTarget, rows: unknown, _s: unknown, mode: string) => {
+        told.push({ keyColumns: t.keyColumns, rows, mode });
+        return { receipt: null, unchanged: new Set<number>() };
+      },
+      announceTruncate: async () => null,
+      retract: async () => undefined,
+    };
+    const svc = makeService({ dst: makeAdapter().adapter }, { dst: 'redis' }, echo);
+    await svc.deliver(makeBridge(), [asHash()], [{ id: 7 }], 'delete');
+    expect(told).toEqual([{ keyColumns: ['key'], rows: [{ key: 'user:7' }], mode: 'delete' }]);
+  });
+
+  it('a Redis target WITHOUT a template is handed its row as it always was', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget({ table: 'keys', keyColumns: ['key'] })],
+      [{ key: 'k1', value: 'v1', type: 'premium' }],
+      undefined,
+    );
+    expect(calls.upsert[0]!.values).toEqual({ key: 'k1', value: 'v1', type: 'premium' });
+  });
+});
+
 describe('DatabaseSinkService.deliver', () => {
   it('routes a delete op to deleteRow keyed by the target key columns', async () => {
     const { adapter, calls } = makeAdapter();

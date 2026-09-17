@@ -47,6 +47,36 @@ describe('timestamp with time zone', () => {
     );
   });
 
+  it('reaches a Redis target as the text it was — unless the target keeps rows for something to READ', () => {
+    // a `key`/`value` target: the string it has always been given
+    expect(convert('timestamptz', 'postgres', 'redis', PG)).toBe(PG);
+    // a hash or a JSON document per row: ISO-8601, which every date parser takes
+    const iso = valueConverterFor('timestamptz', 'postgres', 'redis', {
+      isoInstants: true,
+    });
+    expect(iso?.(PG)).toBe('2026-03-04T05:06:07.891234Z');
+    expect(iso?.('2026-03-04 10:36:07.5+05:30')).toBe(
+      '2026-03-04T05:06:07.500000Z',
+    );
+    expect(iso?.('not a moment')).toBe('not a moment');
+    // …and it is an option of REDIS targets: nothing else changes its spelling for it
+    expect(
+      valueConverterFor('timestamptz', 'postgres', 'postgres', {
+        isoInstants: true,
+      }),
+    ).toBeNull();
+    const row = rowConverterFor(
+      [{ name: 'seen', sourceType: 'timestamptz' }],
+      'postgres',
+      'redis',
+      { isoInstants: true },
+    );
+    expect(row?.({ id: 1, seen: PG })).toEqual({
+      id: 1,
+      seen: '2026-03-04T05:06:07.891234Z',
+    });
+  });
+
   it('reaches MongoDB as a Date (BSON dates are millisecond-precise)', () => {
     const d = convert('timestamptz', 'postgres', 'mongodb', PG) as Date;
     expect(d).toBeInstanceOf(Date);

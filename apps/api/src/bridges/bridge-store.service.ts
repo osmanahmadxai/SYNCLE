@@ -159,6 +159,21 @@ export class BridgeStoreService {
           'Pick another connection, or untick "Read-only" on it.',
       );
     }
+    // "how a row becomes a Redis key" means nothing to a table: said now, not
+    // quietly dropped (the bridge would write columns where a hash was asked for)
+    const asKeys = destination.targets.filter((t) => t.redis);
+    if (asKeys.length > 0) {
+      const engines = await this.prisma.connection.findMany({
+        where: { id: { in: asKeys.map((t) => t.connectionId) } },
+        select: { id: true, name: true, engine: true },
+      });
+      const wrong = engines.filter((c) => c.engine !== 'redis');
+      if (wrong.length > 0) {
+        throw new BadRequestError(
+          `${wrong.map((c) => `"${c.name}"`).join(', ')} is not a Redis connection: a key template, a key type and an expiry only apply to a target in Redis.`,
+        );
+      }
+    }
   }
 
   async create(input: BridgeInputDTO): Promise<Bridge> {

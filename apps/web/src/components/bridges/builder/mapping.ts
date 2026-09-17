@@ -108,6 +108,11 @@ export function loadBridge(h: Bridge): BuilderDraft {
       onDelete: t.onDelete ?? 'delete',
       softDeleteColumn: t.softDelete?.column ?? 'deleted_at',
       softDeleteValue: t.softDelete?.value ?? 'timestamp',
+      redisMode: t.redis ? ('template' as const) : ('columns' as const),
+      redisKeyTemplate: t.redis?.keyTemplate ?? '',
+      redisType: t.redis?.type ?? 'hash',
+      redisValueColumn: t.redis?.valueColumn ?? '',
+      redisTtlSeconds: t.redis?.ttlSeconds ?? null,
     }));
     d.dest = blankDestination();
   } else {
@@ -269,9 +274,24 @@ export function buildInput(
             // kept only while it means something: a marker column left over from
             // an earlier choice is not part of a target that removes its rows
             softDelete:
-              t.onDelete === 'soft'
+              t.onDelete === 'soft' && t.redisMode !== 'template'
                 ? { column: t.softDeleteColumn.trim(), value: t.softDeleteValue }
                 : undefined,
+            // a key per row (only ever set for a target in Redis: the card
+            // resets it when another connection is picked). the key's columns
+            // become the target's key columns on the way in
+            ...(t.redisMode === 'template'
+              ? {
+                  onDelete: t.onDelete === 'soft' ? ('delete' as const) : t.onDelete,
+                  redis: {
+                    keyTemplate: t.redisKeyTemplate.trim(),
+                    type: t.redisType,
+                    valueColumn:
+                      t.redisType === 'string' ? t.redisValueColumn : undefined,
+                    ttlSeconds: t.redisTtlSeconds ?? undefined,
+                  },
+                }
+              : {}),
           })),
         }
       : {

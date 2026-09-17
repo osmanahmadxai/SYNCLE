@@ -8,5 +8,6 @@ export * from './column-transforms';
 export * from './schema-drift';
 export * from './schedule';
 export * from './loops';
+export * from './redis-target';
 export * from './row-compare';
 export * from './verification';

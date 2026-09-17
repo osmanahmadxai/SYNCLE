@@ -555,9 +555,121 @@ export default function Page() {
                 <a href="#delete-policy">below</a>
               </td>
             </tr>
+            <tr>
+              <td>
+                <code>redis</code>
+              </td>
+              <td>none</td>
+              <td>
+                a target in Redis: how a row becomes a key — see{' '}
+                <a href="#redis-targets">Rows in Redis</a>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+
+      <h3 id="redis-targets">Rows in Redis</h3>
+      <p>
+        Redis has no tables, so a target there says how a row becomes a{' '}
+        <em>key</em>. Pick a Redis connection in the builder and the target
+        card asks for exactly that:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Default</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>redis.keyTemplate</code>
+              </td>
+              <td>required</td>
+              <td>
+                the key, built from the row&apos;s (target) columns:{' '}
+                <code>{'user:{{id}}'}</code>,{' '}
+                <code>{'tenant:{{tenant_id}}:user:{{id}}'}</code>. It has to
+                contain at least one column, and only columns —{' '}
+                <code>{'{{$now}}'}</code> is refused, because the same row has
+                to be the same key every time
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>redis.type</code>
+              </td>
+              <td>
+                <code>hash</code>
+              </td>
+              <td>
+                <code>hash</code>: a field per column, so{' '}
+                <code>HGETALL</code> gives the row back. A <code>NULL</code>{' '}
+                column is a field that is not there, and fields your
+                application adds beside the row&apos;s are left alone.{' '}
+                <code>json</code>: the whole row as one JSON document in a
+                string (<code>NULL</code>s included). <code>string</code>: one
+                column&apos;s value
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>redis.valueColumn</code>
+              </td>
+              <td>—</td>
+              <td>
+                <code>string</code> only: the column whose value is stored
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>redis.ttlSeconds</code>
+              </td>
+              <td>never</td>
+              <td>
+                the key expires this long after its <em>last</em> write — every
+                update renews it. Without it the key does not expire (an
+                expiry it had is removed)
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The columns in the key are the target&apos;s key columns — you do not
+        pick them separately. So a delete at the source removes that key (or
+        leaves it, with <code>onDelete: ignore</code>; a key cannot be{' '}
+        <em>marked</em> deleted, so <code>soft</code> is refused), an{' '}
+        <code>UPDATE</code> that changes a key column moves the row to its new
+        key and removes the old one, and a row that has no value for a key
+        column fails — by name — instead of landing under half a key. A key
+        that already exists as another type is replaced.
+      </p>
+      <p>
+        Values are kept as text, as Redis keeps everything: numbers as their
+        digits, booleans as <code>true</code>/<code>false</code>, a JSON
+        column as its JSON, binary as the bytes themselves (in a JSON
+        document: base64), and a moment in time as ISO-8601 in UTC —{' '}
+        <code>2026-03-01T10:20:30.123000Z</code>, to the microsecond the
+        source keeps — which is what date parsers take.
+      </p>
+      <Note>
+        <p>
+          A Redis target <em>without</em> a <code>redis</code> block works as
+          it always did: the row has to carry a column named <code>key</code>{' '}
+          and one named <code>value</code> (rename them in the mapping), and
+          the value is stored as a string. That is also what a bridge from
+          Redis <em>to</em> Redis uses — and there a hash arrives as a hash, a
+          list as a list, a set as a set and a sorted set as one, each with
+          the time it has left to live. A Redis stream cannot be copied as a
+          row, and says so.
+        </p>
+      </Note>
+
       <h3 id="delete-policy">When a row is deleted at the source</h3>
       <p>
         A live bridge that captures deletes applies them, and each target

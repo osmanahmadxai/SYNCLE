@@ -27,11 +27,14 @@ export function DestinationSection({
   dispatch,
   includedList,
   singlePk,
+  sourceTable,
 }: {
   draft: Pick<BuilderDraft, 'destKind' | 'dest' | 'dbTargets'>;
   dispatch: Dispatch<BuilderAction>;
   includedList: string[];
   singlePk: string | null;
+  /** the table being read: what a Redis key starts with, unless told otherwise */
+  sourceTable?: string | null;
 }) {
   const t = useTranslations('bridgeBuilder');
   const { destKind, dest, dbTargets } = draft;
@@ -74,6 +77,7 @@ export function DestinationSection({
           dispatch={dispatch}
           sourceColumns={includedList}
           sourcePk={singlePk}
+          sourceTable={sourceTable}
         />
       )}
 

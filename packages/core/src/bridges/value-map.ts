@@ -109,7 +109,21 @@ function toHex(bytes: Uint8Array): string {
 const isInteger = (k: PortableKind): boolean =>
   k === 'smallint' || k === 'integer' || k === 'bigint';
 
-function timestamptzTo(target: DatabaseEngine): ValueConverter | null {
+/** ISO-8601 in UTC, with every digit of the second the source had: what anything can parse */
+const isoInstant: ValueConverter = (v) => {
+  const i = instantOf(v);
+  return i ? `${utcWallClock(i, 'T')}Z` : v;
+};
+
+function timestamptzTo(
+  target: DatabaseEngine,
+  opts: ConvertOptions = {},
+): ValueConverter | null {
+  // a row kept in Redis for an application to read (a hash, a JSON document):
+  // PostgreSQL's own spelling, '2026-03-01 10:20:30.123+00', is one few date
+  // parsers take. (a Redis target WITHOUT a key template keeps the text it was
+  // always given)
+  if (target === 'redis' && opts.isoInstants) return isoInstant;
   switch (target) {
     case 'mysql':
       // DATETIME has no zone and MySQL refuses '+00': store the UTC reading
@@ -209,10 +223,16 @@ function integerTo(target: DatabaseEngine): ValueConverter | null {
  * the converter for ONE column, or null when its values need nothing done.
  * `source` is the source engine and `dataType` that column's native type.
  */
+export interface ConvertOptions {
+  /** a Redis target: moments in time as ISO-8601 (see `timestamptzTo`) */
+  isoInstants?: boolean;
+}
+
 export function valueConverterFor(
   dataType: string,
   source: DatabaseEngine,
   target: DatabaseEngine,
+  opts: ConvertOptions = {},
 ): ValueConverter | null {
   const { kind } = parseColumnType(dataType, source);
   // the one conversion a same-engine bridge still needs: see JsonColumnValue
@@ -220,7 +240,7 @@ export function valueConverterFor(
   if (source === target) return null;
 
   let convert: ValueConverter | null = null;
-  if (kind === 'timestamptz') convert = timestamptzTo(target);
+  if (kind === 'timestamptz') convert = timestamptzTo(target, opts);
   else if (kind === 'boolean') convert = booleanTo(target);
   else if (kind === 'json') convert = jsonTo(source, target);
   else if (isInteger(kind)) convert = integerTo(target);
@@ -257,10 +277,11 @@ export function rowConverterFor(
   columns: ReadonlyArray<{ name: string; sourceType: string }>,
   source: DatabaseEngine,
   target: DatabaseEngine,
+  opts: ConvertOptions = {},
 ): ((row: Row) => Row) | null {
   const converters: Array<[string, ValueConverter]> = [];
   for (const c of columns) {
-    const convert = valueConverterFor(c.sourceType, source, target);
+    const convert = valueConverterFor(c.sourceType, source, target, opts);
     if (convert) converters.push([c.name, convert]);
   }
   if (converters.length === 0) return null;

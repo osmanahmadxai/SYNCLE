@@ -31,6 +31,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   UnsupportedError,
   mapRow,
+  renderRedisKey,
+  toRedisRow,
   parseColumnType,
   planTargetTable,
   rowConverterFor,
@@ -154,7 +156,13 @@ export class DatabaseSinkService {
         // a table another live bridge reads: what is about to be written there
         // is said first, so that bridge knows this instance's writes when they
         // come back to it (see EchoGuardService). anywhere else this does nothing
-        const heard = await this.echo.announce(bridge, target, announced(target, mapped, op), rows, writeModeOf(target, op));
+        const heard = await this.echo.announce(
+          bridge,
+          target.redis ? { ...target, keyColumns: identityColumns(target) } : target,
+          announced(target, mapped, op),
+          rows,
+          writeModeOf(target, op),
+        );
         const writing = heard.unchanged.size > 0 ? mapped.filter((_, i) => !heard.unchanged.has(i)) : mapped;
         let affected = 0;
         try {
@@ -225,6 +233,7 @@ export class DatabaseSinkService {
       target.database,
       async (adapter) => {
         const { schema, table } = target;
+        const keyColumns = identityColumns(target);
 
         // one set-based statement per batch where the engine supports it,
         // otherwise the original row-at-a-time loop. Both paths must produce
@@ -233,19 +242,19 @@ export class DatabaseSinkService {
         const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
         const writeBatch = async (): Promise<void> => {
           const isUpsert = op !== 'delete' && target.writeMode !== 'insert';
-          if (isUpsert && target.keyColumns.length === 0) {
+          if (isUpsert && keyColumns.length === 0) {
             throw new Error(
               'Upsert needs at least one key column; set keys or use insert mode',
             );
           }
 
           if (op === 'delete') {
-            const identities = mapped.map((m) => pick(m, target.keyColumns));
+            const identities = mapped.map((m) => pick(m, keyColumns));
             // a delete that does not say WHICH row is not a smaller delete: it
             // matches nothing, reports "deleted 0", and the row stays for ever.
             // that is a failure, and it has to look like one
             for (const identity of identities) {
-              const blank = target.keyColumns.find(
+              const blank = keyColumns.find(
                 (k) => identity[k] === undefined || identity[k] === null,
               );
               if (blank !== undefined) {
@@ -299,7 +308,7 @@ export class DatabaseSinkService {
               schema,
               table,
               rows: mapped,
-              keyColumns: target.keyColumns,
+              keyColumns: keyColumns,
             });
             affected += res.affectedRows ?? mapped.length;
             return;
@@ -309,7 +318,7 @@ export class DatabaseSinkService {
               schema,
               table,
               values,
-              keyColumns: target.keyColumns,
+              keyColumns: keyColumns,
             });
             affected += res.affectedRows ?? 1;
           }
@@ -494,8 +503,11 @@ export class DatabaseSinkService {
           const origin = byName.get(copiedColumn(transforms, name) ?? name);
           if (origin) untouched.push({ ...origin, name });
         }
-        const first = rowConverterFor(untouched, source, engine);
-        const second = reshaped.length ? rowConverterFor(reshaped, 'postgres', engine) : null;
+        // (a row kept in Redis under a key template is there to be READ by
+        // something: moments in time go as ISO-8601)
+        const opts = { isoInstants: !!target.redis };
+        const first = rowConverterFor(untouched, source, engine, opts);
+        const second = reshaped.length ? rowConverterFor(reshaped, 'postgres', engine, opts) : null;
         convert = first && second ? (row) => second(first(row)) : (first ?? second);
       }
     } catch {
@@ -750,15 +762,33 @@ export class DatabaseSinkService {
 /* ----- helpers ----- */
 
 /** the rows as one target takes them: its column names, and its soft-delete mark taken off */
-function mapForTarget(target: DatabaseTarget, rows: Row[], op: CdcOperation | undefined): Row[] {
+export function mapForTarget(target: DatabaseTarget, rows: Row[], op: CdcOperation | undefined): Row[] {
   const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
   return rows.map((row) => {
     const out = mapRow(row, target.mapping);
+    // a Redis target that says how a row becomes a key: from here on the row IS
+    // that key — `{ key, type, value, ttl }`, which is what the adapter writes.
+    // a delete only has to say which key (and says so, if it cannot)
+    if (target.redis) {
+      return op === 'delete'
+        ? { key: renderRedisKey(target.redis.keyTemplate, out) }
+        : { ...toRedisRow(target.redis, out) };
+    }
     // a row that is written exists at the source: whatever a delete
     // marked it with before is taken off by the write that brings it back
     if (soft && op !== 'delete') out[soft.column] = soft.value === 'boolean' ? false : null;
     return out;
   });
+}
+
+/**
+ * the columns a written row is found by. a Redis key template's target is keyed
+ * on the COLUMNS of the template everywhere else (what a delete has to carry,
+ * what makes an update a move); once the row has become a key, it is found by
+ * that key
+ */
+function identityColumns(target: DatabaseTarget): string[] {
+  return target.redis ? ['key'] : target.keyColumns;
 }
 
 function writeModeOf(target: DatabaseTarget, op: CdcOperation | undefined): WriteMode {
@@ -776,7 +806,7 @@ function announced(target: DatabaseTarget, mapped: Row[], op: CdcOperation | und
   if (op !== 'delete') return mapped;
   const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
   return mapped.map((row) => ({
-    ...pick(row, target.keyColumns),
+    ...pick(row, identityColumns(target)),
     ...(soft?.value === 'boolean' ? { [soft.column]: true } : {}),
   }));
 }

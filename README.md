@@ -53,6 +53,8 @@ A **bridge** reads rows from a source database and writes each one to its
   **several databases at once**, bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C),
   and two bridges can feed each other (DB&nbsp;A ⇄ DB&nbsp;B): Syncle knows its
   own writes when they come back, so a change crosses once instead of for ever.
+  In Redis a row is a key of its own — `user:{{id}}` as a hash, a JSON document
+  or a string, with an expiry if you want one.
 - **an HTTP endpoint** — POST/PUT/PATCH each row to a URL with a payload you
   design, for the times you're feeding a service instead of a database.
 

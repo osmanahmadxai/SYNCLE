@@ -39,6 +39,17 @@ export interface DbTarget {
   /** the target column a soft delete marks the row with, and what with */
   softDeleteColumn: string;
   softDeleteValue: 'timestamp' | 'boolean';
+  /**
+   * a target in REDIS: `template` = a key per row, built from its columns (a
+   * hash, a JSON document or one column's value); `columns` = the row's own
+   * `key` and `value` columns, which is all there was before
+   */
+  redisMode: 'columns' | 'template';
+  redisKeyTemplate: string;
+  redisType: 'hash' | 'json' | 'string';
+  redisValueColumn: string;
+  /** seconds after its last write at which the key expires; null = it does not */
+  redisTtlSeconds: number | null;
 }
 
 export interface Delivery {
@@ -64,6 +75,11 @@ export function blankDbTarget(): DbTarget {
     onDelete: 'delete',
     softDeleteColumn: 'deleted_at',
     softDeleteValue: 'timestamp',
+    redisMode: 'columns',
+    redisKeyTemplate: '',
+    redisType: 'hash',
+    redisValueColumn: '',
+    redisTtlSeconds: null,
   };
 }
 

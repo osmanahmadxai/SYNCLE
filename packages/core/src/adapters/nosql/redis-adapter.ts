@@ -5,6 +5,7 @@
  */
 import { nodeTlsOptions } from '../tls-options';
 import { redisKeyPattern } from './redis-key-pattern';
+import { redisText } from '../../bridges/redis-target';
 import Redis from 'ioredis';
 import type {
   AdapterCapabilities,
@@ -346,13 +347,12 @@ export class RedisAdapter implements DatabaseAdapter {
     };
   }
 
+  /** one key, written the way a batch of them is (see {@link pipelineWrite}) */
   async insertRow(p: InsertRowParams): Promise<QueryResult> {
-    const client = this.getClient();
-    if (client.status !== 'ready') await client.connect().catch(() => {});
     const key = String(p.values.key ?? '');
     if (!key) throw new QueryError('A "key" value is required');
-    await client.set(key, String(p.values.value ?? ''));
-    return writeResult(1, 'set');
+    const res = await this.pipelineWrite([p.values]);
+    return writeResult(res.affectedRows ?? 1, 'set');
   }
 
   async updateRow(p: UpdateRowParams): Promise<QueryResult> {
@@ -387,7 +387,21 @@ export class RedisAdapter implements DatabaseAdapter {
    * being a round trip and becomes a few bytes.
    */
 
-  /** the pipeline shared by every batched write; `SET` is already idempotent */
+  /**
+   * the pipeline shared by every batched write. a row is `{ key, value }` — a
+   * string, as it always was — and may say more:
+   *
+   *   type   'string' (default) · 'hash' · 'list' · 'set' · 'zset': what a row
+   *          read FROM Redis carries, so that Redis -> Redis copies a hash as a
+   *          hash (it used to arrive as the text "[object Object]")
+   *   ttl    seconds until the key expires; 0, negative or absent = it does not
+   *   fields a hash whose `value` is only SOME of its fields (null = remove that
+   *          field): written into the hash that is there. without it a hash, like
+   *          a list, a set and a sorted set, REPLACES the key — atomically, so
+   *          nobody reading meanwhile finds it gone
+   *
+   * every write is idempotent: the same batch twice leaves the same keys
+   */
   private async pipelineWrite(
     rows: Array<Record<string, unknown>>,
   ): Promise<QueryResult> {
@@ -395,17 +409,81 @@ export class RedisAdapter implements DatabaseAdapter {
     const client = this.getClient();
     if (client.status !== 'ready') await client.connect().catch(() => {});
     const pipeline = client.pipeline();
+    /** the hashes written field by field, and where each one's HSET sits in the pipeline */
+    const merged: Array<{ at: number; row: TypedRow }> = [];
+    /** rows that replace their key: each its own MULTI, after the pipeline */
+    const replaced: TypedRow[] = [];
+    let queued = 0;
     for (const values of rows) {
-      const key = String(values.key ?? '');
-      if (!key) throw new QueryError('A "key" value is required');
-      pipeline.set(key, String(values.value ?? ''));
+      const row = typedRow(values);
+      if (row.type === 'string') {
+        if (row.ttl > 0) pipeline.set(row.key, row.text, 'EX', row.ttl);
+        else pipeline.set(row.key, row.text);
+        queued++;
+        continue;
+      }
+      if (row.type === 'hash' && row.merge) {
+        if (row.set.length > 0) {
+          merged.push({ at: queued, row });
+          pipeline.hset(row.key, ...row.set);
+          queued++;
+        }
+        if (row.unset.length > 0) {
+          pipeline.hdel(row.key, ...row.unset);
+          queued++;
+        }
+        if (row.ttl > 0) pipeline.expire(row.key, row.ttl);
+        else pipeline.persist(row.key);
+        queued++;
+        continue;
+      }
+      replaced.push(row);
     }
-    const results = await pipeline.exec();
+    const results = queued > 0 ? await pipeline.exec() : [];
     // a pipeline reports per-command errors rather than throwing; surface the
     // first one instead of silently reporting every row as written
+    for (const [i, result] of (results ?? []).entries()) {
+      const err = result[0];
+      if (!err) continue;
+      // the key is there as something else (a string from an earlier setup of
+      // the bridge): what the bridge writes is what the key is — replaced below
+      const wrongType = merged.find((m) => m.at === i);
+      if (wrongType && /WRONGTYPE/.test(err.message)) {
+        replaced.push(wrongType.row);
+        continue;
+      }
+      throw new QueryError(err.message);
+    }
+    for (const row of replaced) await this.replaceKey(client, row);
+    return writeResult(rows.length, 'pipeline set');
+  }
+
+  /** DEL and write again, as one transaction */
+  private async replaceKey(client: Redis, row: TypedRow): Promise<void> {
+    const tx = client.multi().del(row.key);
+    switch (row.type) {
+      case 'string':
+        tx.set(row.key, row.text);
+        break;
+      case 'hash':
+        if (row.set.length > 0) tx.hset(row.key, ...row.set);
+        break;
+      case 'list':
+        if (row.members.length > 0) tx.rpush(row.key, ...row.members);
+        break;
+      case 'set':
+        if (row.members.length > 0) tx.sadd(row.key, ...row.members);
+        break;
+      case 'zset':
+        // read as [member, score, member, score, …]
+        for (let i = 0; i + 1 < row.members.length; i += 2)
+          tx.zadd(row.key, String(row.members[i + 1]), row.members[i]!);
+        break;
+    }
+    if (row.ttl > 0) tx.expire(row.key, row.ttl);
+    const results = await tx.exec();
     const failed = results?.find(([err]) => err);
     if (failed?.[0]) throw new QueryError(failed[0].message);
-    return writeResult(rows.length, 'pipeline set');
   }
 
   async insertRows(p: InsertRowsParams): Promise<QueryResult> {
@@ -579,6 +657,61 @@ export class RedisAdapter implements DatabaseAdapter {
 }
 
 /* ----- helpers ----- */
+
+type RedisText = string | Buffer;
+
+/** a row to write, read once: what kind of key it is, and what goes into it */
+type TypedRow = { key: string; ttl: number } & (
+  | { type: 'string'; text: RedisText }
+  | { type: 'hash'; merge: boolean; set: RedisText[]; unset: string[] }
+  | { type: 'list' | 'set' | 'zset'; members: RedisText[] }
+);
+
+const asText = (value: unknown): RedisText => {
+  const text = redisText(value);
+  if (text === null) return '';
+  return typeof text === 'string' ? text : Buffer.from(text);
+};
+
+/** the kinds of key a row can say it is; anything else in a `type` column is somebody's data */
+const WRITABLE_TYPES = new Set(['string', 'none', 'hash', 'list', 'set', 'zset']);
+
+function typedRow(values: Record<string, unknown>): TypedRow {
+  const key = String(values.key ?? '');
+  if (!key) throw new QueryError('A "key" value is required');
+  const value = values.value;
+  const type = typeof values.type === 'string' ? values.type : '';
+  // a stream read from another Redis arrives with no value at all: writing the
+  // empty string over the destination's stream would be a quiet way to lose one
+  if (type === 'stream')
+    throw new QueryError(`"${key}" is a Redis stream, which cannot be copied as a row.`);
+  // no `type`, or a column that happens to be called that (settings.type =
+  // 'premium'): a string, its `ttl` column not looked at — as it always was
+  if (!WRITABLE_TYPES.has(type)) return { key, ttl: 0, type: 'string', text: asText(value) };
+
+  const seconds = Number(values.ttl);
+  const ttl = Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 0;
+  switch (type) {
+    case 'hash': {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw new QueryError(`The hash "${key}" needs its fields: an object of field → value.`);
+      const set: RedisText[] = [];
+      const unset: string[] = [];
+      for (const [field, v] of Object.entries(value as Record<string, unknown>)) {
+        if (v === null || v === undefined) unset.push(field);
+        else set.push(field, asText(v));
+      }
+      return { key, ttl, type, merge: values.fields === true, set, unset };
+    }
+    case 'list':
+    case 'set':
+    case 'zset':
+      return { key, ttl, type, members: Array.isArray(value) ? value.map(asText) : [] };
+    default:
+      return { key, ttl, type: 'string', text: asText(value) };
+  }
+}
+
 
 function tokenizeCommand(line: string): string[] {
   const tokens: string[] = [];

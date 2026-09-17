@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { filterSchema, sortSchema } from '../validation';
 import { columnTransformSchema } from './column-transforms';
+import { redisKeyColumns, redisTargetSchema } from './redis-target';
 import { replayScheduleSchema } from './schedule';
 
 /* -------------------------------------------------------------------------- */
@@ -109,9 +110,41 @@ const databaseTargetObject = z.object({
       value: z.enum(['timestamp', 'boolean']).default('timestamp'),
     })
     .optional(),
+  /**
+   * a target on a REDIS connection: how a row becomes a key (see
+   * `redis-target.ts`). absent = the row's `key` and `value` columns, as ever.
+   * with it, `keyColumns` is not the user's to say: it is the columns the key
+   * is built from, and is set from the template below
+   */
+  redis: redisTargetSchema.optional(),
 });
 
-export const databaseTargetSchema = databaseTargetObject.superRefine((target, ctx) => {
+const checkedDatabaseTarget = databaseTargetObject.superRefine((target, ctx) => {
+  if (target.redis) {
+    // there is no column to put the mark in: a key is there, or it is not
+    if (target.onDelete === 'soft') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['onDelete'],
+        message:
+          'A Redis key cannot be marked as deleted: remove it (delete) or keep it (ignore).',
+      });
+    }
+    const written = new Set(target.mapping.map((m) => m.target));
+    if (target.mapping.length > 0) {
+      const unknown = [
+        ...redisKeyColumns(target.redis.keyTemplate),
+        ...(target.redis.valueColumn ? [target.redis.valueColumn] : []),
+      ].filter((c) => !c.startsWith('$') && !written.has(c));
+      if (unknown.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['redis', 'keyTemplate'],
+          message: `${[...new Set(unknown)].map((c) => `"${c}"`).join(', ')} is not a column this target receives.`,
+        });
+      }
+    }
+  }
   if (target.onDelete !== 'soft') return;
   const column = target.softDelete?.column;
   if (!column) {
@@ -139,6 +172,17 @@ export const databaseTargetSchema = databaseTargetObject.superRefine((target, ct
     });
   }
 });
+
+/**
+ * a Redis key is built from columns, and those columns ARE the target's key:
+ * what a delete has to carry, and what makes an UPDATE a move when it changes.
+ * said once here, so that nothing downstream has to know about templates
+ */
+export const databaseTargetSchema = checkedDatabaseTarget.transform((target) =>
+  target.redis
+    ? { ...target, keyColumns: redisKeyColumns(target.redis.keyTemplate) }
+    : target,
+);
 
 export const databaseDestinationSchema = z.object({
   kind: z.literal('database'),

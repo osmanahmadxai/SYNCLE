@@ -229,6 +229,33 @@
     "kindWatch": "osserva"
   },
   "bridgeBuilder": {
+    "redis": {
+      "mode": "Una riga viene scritta come",
+      "modeTemplate": "una chiave propria (hash, JSON o stringa)",
+      "modeColumns": "le sue colonne “key” e “value”",
+      "modeColumnsHint": "La riga deve avere una colonna chiamata key e una chiamata value (rinominale in “Mappa / rinomina colonne”); il valore viene salvato come stringa. Tutte le altre colonne vengono escluse.",
+      "keyTemplate": "Chiave",
+      "keyTemplateHint": "Costruita dalle colonne della riga, ad es. user:'{{id}}' oppure tenant:'{{tenant_id}}':user:'{{id}}'. Le colonne nella chiave sono ciò che identifica la riga: un'eliminazione rimuove quella chiave, e una riga la cui chiave cambia viene spostata.",
+      "insertColumn": "Aggiungi {column} alla chiave",
+      "type": "Salvata come",
+      "typeHash": "Hash — un campo per colonna",
+      "typeJson": "JSON — la riga come un unico documento",
+      "typeString": "Stringa — il valore di una colonna",
+      "typeHashHint": "HGETALL restituisce la riga. Una colonna NULL è un campo che non c'è; i campi che la tua applicazione aggiunge accanto restano intatti.",
+      "typeJsonHint": "GET restituisce la riga come un unico documento JSON, NULL compresi.",
+      "typeStringHint": "GET restituisce quella colonna. Un NULL viene salvato come stringa vuota.",
+      "ttl": "Scade dopo (secondi)",
+      "ttlNever": "mai",
+      "valueColumn": "Valore",
+      "valueColumnPlaceholder": "Scegli una colonna",
+      "problem": {
+        "keyEmpty": "La chiave è vuota.",
+        "keyNoColumn": "La chiave deve contenere almeno una colonna, altrimenti ogni riga verrebbe scritta nella stessa chiave.",
+        "keyUnknownColumn": "“{column}” non è una colonna che questa destinazione riceve.",
+        "valueColumn": "Scegli la colonna il cui valore viene salvato.",
+        "ttl": "La scadenza è un numero intero di secondi, almeno 1 — oppure vuoto per mai."
+      }
+    },
     "dryRun": "Prova a vuoto",
     "dryRunHint": "Guarda cosa farebbe questo bridge: nulla viene salvato, creato o consegnato",
     "namePlaceholder": "Nome bridge",

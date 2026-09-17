@@ -349,6 +349,12 @@ describe('loadBridge', () => {
         onDelete: 'delete',
         softDeleteColumn: 'deleted_at',
         softDeleteValue: 'timestamp',
+        // a table: nothing of Redis about it
+        redisMode: 'columns',
+        redisKeyTemplate: '',
+        redisType: 'hash',
+        redisValueColumn: '',
+        redisTtlSeconds: null,
       },
     ]);
     // the http form resets to blank when the bridge writes to databases

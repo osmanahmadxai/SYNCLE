@@ -439,9 +439,37 @@ can no longer lose a row to a failed delivery.
   transaction, not while the client still holds data it has not handed over —
   which is what PostgreSQL's own subscribers do. Members of a shared slot move
   the same way; one that is stopped still holds it.
+- **A bridge from Redis to Redis turned every hash, list, set and sorted set
+  into the text `[object Object]`** (or a comma-joined string): the destination
+  only ever did `SET key String(value)`. A row read from Redis says what kind of
+  key it is, and is now written as that — atomically replaced, with the time it
+  has left to live. A stream, which cannot be copied as a row, fails and says
+  so instead of overwriting the destination's stream with an empty string. A
+  column that merely happens to be called `type` or `ttl` (a `settings` table
+  synced into Redis) is still just data.
 
 ### Added
 
+- **A row in Redis is a key of its own: a hash, a JSON document or a string,
+  under a key you design, with an expiry.** A Redis destination had one shape —
+  a column renamed to `key`, a column renamed to `value`, `SET` — which keeps
+  one column of a row. A target on a Redis connection now takes a `redis` block
+  (the builder shows it as soon as a Redis connection is picked):
+  - `keyTemplate` — `user:{{id}}`, `tenant:{{tenant_id}}:user:{{id}}`. The
+    columns in it ARE the target's key columns: a delete removes that key, an
+    `UPDATE` of a key column moves the row and removes the old key, a row with
+    no value for one fails by name instead of landing under half a key. A
+    template with no column in it, or with `{{$now}}`, is refused when the
+    bridge is saved — as is a template on a target that is not Redis.
+  - `type` — `hash` (a field per column; `NULL` = no such field; fields the
+    application adds beside them are left alone — written with `HSET`/`HDEL`,
+    never `DEL`, so nothing following the keyspace sees the row "deleted" on
+    every update), `json` (the row as one document) or `string` (one column).
+    A key that is there as another type is replaced.
+  - `ttlSeconds` — the key expires that long after its last write.
+  - Values are text, as everything in Redis is: a JSON column as its JSON,
+    bytes as bytes, a `timestamptz` as ISO-8601 UTC to the microsecond.
+  A target without the block works exactly as before.
 - **Two bridges can feed each other (A → B plus B → A) without sending a row
   back and forth for ever.** They could be set up, and then never rested: A's
   change is written to B, B's change log reports it, the other bridge writes it

@@ -229,6 +229,33 @@
     "kindWatch": "watch"
   },
   "bridgeBuilder": {
+    "redis": {
+      "mode": "A row is written as",
+      "modeTemplate": "a key of its own (hash, JSON or string)",
+      "modeColumns": "its own “key” and “value” columns",
+      "modeColumnsHint": "The row has to carry a column named key and one named value (rename them under “Map / rename columns”); the value is stored as a string. Every other column is left out.",
+      "keyTemplate": "Key",
+      "keyTemplateHint": "Built from the row's columns, e.g. user:'{{id}}' or tenant:'{{tenant_id}}':user:'{{id}}'. The columns in the key are what identifies the row: a delete removes that key, and a row whose key changes is moved.",
+      "insertColumn": "Add {column} to the key",
+      "type": "Stored as",
+      "typeHash": "Hash — a field per column",
+      "typeJson": "JSON — the row as one document",
+      "typeString": "String — one column's value",
+      "typeHashHint": "HGETALL gives the row back. A column that is NULL is a field that is not there; fields your application adds beside them are left alone.",
+      "typeJsonHint": "GET gives the row back as one JSON document, NULLs included.",
+      "typeStringHint": "GET gives back the one column. A NULL there is stored as the empty string.",
+      "ttl": "Expires after (seconds)",
+      "ttlNever": "never",
+      "valueColumn": "Value",
+      "valueColumnPlaceholder": "Pick a column",
+      "problem": {
+        "keyEmpty": "The key is empty.",
+        "keyNoColumn": "The key has to contain at least one column, or every row would be written to the same key.",
+        "keyUnknownColumn": "“{column}” is not a column this target receives.",
+        "valueColumn": "Pick the column whose value is stored.",
+        "ttl": "The expiry is a whole number of seconds, at least 1 — or empty for never."
+      }
+    },
     "dryRun": "Dry run",
     "dryRunHint": "See what this bridge would do — nothing is saved, created or delivered",
     "namePlaceholder": "Bridge name",

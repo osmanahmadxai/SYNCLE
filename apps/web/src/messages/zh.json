@@ -229,6 +229,33 @@
     "kindWatch": "监听"
   },
   "bridgeBuilder": {
+    "redis": {
+      "mode": "每一行写入为",
+      "modeTemplate": "一个独立的键（哈希、JSON 或字符串）",
+      "modeColumns": "它自己的 “key” 和 “value” 列",
+      "modeColumnsHint": "行中必须有名为 key 和 value 的列（可在“映射 / 重命名列”中重命名）；value 以字符串形式存储，其余列会被忽略。",
+      "keyTemplate": "键",
+      "keyTemplateHint": "由行的列组成，例如 user:'{{id}}' 或 tenant:'{{tenant_id}}':user:'{{id}}'。键中的列用于标识这一行：删除时移除该键，键发生变化的行会被移动。",
+      "insertColumn": "将 {column} 加入键",
+      "type": "存储为",
+      "typeHash": "哈希 — 每列一个字段",
+      "typeJson": "JSON — 整行作为一个文档",
+      "typeString": "字符串 — 某一列的值",
+      "typeHashHint": "HGETALL 可取回整行。为 NULL 的列不会成为字段；你的应用在旁边添加的字段不会被改动。",
+      "typeJsonHint": "GET 可取回整行的 JSON 文档，包括 NULL。",
+      "typeStringHint": "GET 取回该列的值。该列为 NULL 时存储为空字符串。",
+      "ttl": "过期时间（秒）",
+      "ttlNever": "永不",
+      "valueColumn": "值",
+      "valueColumnPlaceholder": "选择一列",
+      "problem": {
+        "keyEmpty": "键为空。",
+        "keyNoColumn": "键中至少要包含一列，否则每一行都会写入同一个键。",
+        "keyUnknownColumn": "“{column}” 不是此目标接收的列。",
+        "valueColumn": "请选择要存储其值的列。",
+        "ttl": "过期时间必须是不小于 1 的整数秒，留空表示永不过期。"
+      }
+    },
     "dryRun": "试运行",
     "dryRunHint": "查看此桥接将会执行的操作——不会保存、创建或投递任何内容",
     "namePlaceholder": "桥接名称",
