@@ -292,8 +292,53 @@ can no longer lose a row to a failed delivery.
   apply deletes; keyed targets on the same bridge are unaffected.
 - Documentation no longer says a CDC bridge always delivers one row per
   delivery. That stopped being true for database destinations in 1.3.0.
+- **Editing a bridge in the builder deleted parts of it.** The builder could
+  write exactly one source filter — the row selection — and rebuilt the rest of
+  the configuration from what it has controls for. Saving a bridge that had been
+  given other filters, a payload `template` or a `rename` map through the API
+  silently removed them: a bridge filtered to `country = 'IT'` started sending
+  every row of the table after an unrelated edit. Filters are now edited in the
+  builder; conditions it has no row for (an `in` list, for instance), the
+  template and the rename map are carried through an edit untouched.
+- The snapshot watch strategy's source file held a raw NUL byte inside a string
+  literal, which made `grep`, `git diff` and some editors treat the whole file
+  as binary. It is written as `\0` now; the row hashes it produces are
+  byte-for-byte the same, so existing snapshot bridges do not re-send anything.
 
 ### Added
+
+- **Filters and column transforms in the bridge builder.** Two new sections,
+  both saved with the bridge and both applied the same way for a replay, a watch
+  and a CDC bridge, into a database or an HTTP destination.
+  - *Only rows where…* — a list of conditions (equals, is not, greater / less
+    than, contains, starts / ends with, is empty, is not empty). A value typed
+    for a numeric or boolean column is sent as a number or a boolean. A
+    half-written condition blocks the save rather than quietly becoming "no
+    condition", which would send the whole table.
+  - *Change values on the way* — an ordered list of steps: **mask** (keep the
+    ends, redact, SHA-256 hash with an optional salt, or empty), **convert
+    type** (text, number, whole number, boolean, date, JSON), **clean text**
+    (trim, lower, upper), **default value**, and **computed column**
+    (`{{first}} {{last}}`, with `{{$now}}` and `{{$table}}`). Declarative on
+    purpose: there is no expression language and nothing is evaluated.
+  - A value that cannot be converted is never decided quietly. Each conversion
+    says what happens — fail the delivery (the default), send NULL, or leave the
+    value as it was. A failure fails the delivery *before anything is sent*,
+    names the column and the value, and on a `continue` bridge sends that one
+    row to the dead-letter queue; a retry re-reads the row and runs the steps
+    again, so fixing the source is enough.
+  - A table Syncle creates is typed for what the columns have **become** — a
+    hashed integer is text, a column converted to a date is a timestamp, a plain
+    copy is typed like its origin, a column a step can empty is nullable even
+    when the source says `NOT NULL` — and the columns the steps add are created
+    with it. The dry run shows all of that, with shaped sample rows, first.
+  - A hashed key still finds its row: a delete arrives with the plain key and is
+    put through the same steps. Delivery records hold the shaped row, so a
+    masked value does not reappear in the timeline. On PostgreSQL CDC, a large
+    column the server did not resend is read back when a step needs it.
+  - The builder's live payload preview applies the steps as you type.
+  - API: `transform.columns` on a bridge; an unknown kind is refused, not
+    ignored.
 
 - A **dead-letter queue** for watch and CDC bridges. Under `onError: continue`
   the rows that could not be delivered are written, complete, to the queue

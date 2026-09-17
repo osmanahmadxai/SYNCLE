@@ -52,6 +52,7 @@ import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchService } from './bridge-watch.service';
 import type { ResolvedBridge } from './bridges.types';
+import { shapeRows } from './row-shaping';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -214,13 +215,18 @@ export class BridgesController {
       rows = await this.fetchSample(bridge.source, dto.limit);
       fromSource = true;
     }
+    // what is shown is what would be delivered: masked, cast, computed
+    const shaped = shapeRows(bridge, rows, { table, now });
+    rows = shaped.rows;
+    // a run would stop at these; here they are something to read first
+    shaped.warnings.push(...shaped.errors.map((e) => `${e} — this would FAIL the delivery`));
 
     const dest = bridge.destination;
 
     // database destination: preview the mapped row(s) and where they land
     if (dest.kind === 'database') {
       const mapping = dest.targets[0]?.mapping ?? [];
-      const warnings: string[] = [];
+      const warnings: string[] = [...shaped.warnings];
       if (dest.targets.some((t) => t.writeMode === 'upsert' && t.keyColumns.length === 0)) {
         warnings.push('A target is set to upsert but has no key columns selected.');
       }
@@ -257,7 +263,7 @@ export class BridgesController {
       };
     }
 
-    const warnings = new Set<string>();
+    const warnings = new Set<string>(shaped.warnings);
     const bodies = rows.map((row, index) => {
       const result = renderRow(row, bridge.transform, { table, now, index });
       result.warnings.forEach((w) => warnings.add(w));

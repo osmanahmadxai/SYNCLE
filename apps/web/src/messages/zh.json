@@ -278,7 +278,90 @@
     "setAsideContinue": "将失败的行暂存并继续同步",
     "stopBridge": "停止桥接",
     "onFailureContinueHint": "失败的行会完整保存在该桥接的死信队列中，原因修复后可以重试。如果目标本身不可用，桥接仍会停止。",
-    "onFailureStopHint": "桥接会在第一次失败处停止，不会越过它。重新启动后会重试相同的行，不会跳过任何数据。"
+    "onFailureStopHint": "桥接会在第一次失败处停止，不会越过它。重新启动后会重试相同的行，不会跳过任何数据。",
+    "hashStandIn": "此处的哈希值以占位符显示。试运行会显示真实值。"
+  },
+  "builderFilters": {
+    "title": "仅发送满足条件的行",
+    "add": "添加条件",
+    "none": "表中的每一行。添加条件后，只发送匹配的行。",
+    "where": "当",
+    "and": "且",
+    "value": "值",
+    "remove": "移除条件",
+    "kept": "{count, plural, other {另有 # 个条件是通过 API 设置的，将原样保留。}}",
+    "op": {
+      "eq": "等于",
+      "neq": "不等于",
+      "lt": "小于",
+      "lte": "不大于",
+      "gt": "大于",
+      "gte": "不小于",
+      "contains": "包含",
+      "startsWith": "开头为",
+      "endsWith": "结尾为",
+      "isNull": "为空",
+      "notNull": "不为空"
+    },
+    "needsValue": "请为每个条件填写一个值，或将其移除。要匹配没有值的行，请使用“为空”。",
+    "column": "列",
+    "operator": "比较方式"
+  },
+  "builderTransforms": {
+    "title": "在传输途中修改值",
+    "add": "添加步骤",
+    "none": "值将原样发送。添加步骤以脱敏、转换或计算某一列。",
+    "columnName": "列名",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "remove": "移除步骤",
+    "orderHint": "步骤自上而下执行；每一步都能看到上面各步的结果。",
+    "keepStart": "保留开头",
+    "keepEnd": "保留结尾",
+    "salt": "盐值（可选，混入哈希）",
+    "ifItCannot": "如果某个值无法转换",
+    "defaultValue": "源没有值时使用的值",
+    "templateHint": "带 {token} 标记的文本。{now} 和 {table} 也可用。表中不存在的名称会新增一列。",
+    "kind": {
+      "mask": "脱敏",
+      "cast": "转换类型",
+      "text": "清理文本",
+      "default": "默认值",
+      "set": "计算列"
+    },
+    "mask": {
+      "partial": "保留两端，隐藏中间",
+      "redact": "替换为 ********",
+      "hash": "替换为 SHA-256 哈希",
+      "null": "作为空值（NULL）发送"
+    },
+    "cast": {
+      "string": "转为文本",
+      "number": "转为数字",
+      "integer": "转为整数",
+      "boolean": "转为 true / false",
+      "date": "转为日期时间",
+      "json": "转为 JSON"
+    },
+    "castError": {
+      "fail": "使本次投递失败",
+      "null": "作为空值（NULL）发送",
+      "keep": "保持原样"
+    },
+    "text": {
+      "trim": "去除首尾空格",
+      "lower": "小写",
+      "upper": "大写"
+    },
+    "needsColumn": "请指明此步骤针对哪一列。",
+    "step": "步骤类型",
+    "column": "列",
+    "maskMode": "脱敏方式",
+    "castTo": "转换为",
+    "onCastError": "如果某个值无法转换",
+    "textOp": "清理方式",
+    "fill": "填充字符",
+    "template": "模板"
   },
   "deadLetters": {
     "waiting": "{count, plural, other {死信队列中有 # 行等待处理}}",

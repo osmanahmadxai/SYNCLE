@@ -5,7 +5,7 @@
  * column/row selections, toggling the sync mode adjusts the trigger, …) lives
  * here so a section can never forget one.
  */
-import type { CdcReadiness } from '@syncle/core';
+import type { CdcReadiness, ColumnTransform, FilterSpec } from '@syncle/core';
 
 export const PAGE_SIZE = 100;
 
@@ -84,6 +84,38 @@ export type SyncMode = 'oneTime' | 'live';
 export type TriggerKind = 'replay' | 'watch' | 'cdc';
 export type WatchStrategy = 'increment' | 'timestamp' | 'snapshot';
 export type CdcOp = 'insert' | 'update' | 'delete' | 'truncate';
+
+/** the comparisons the filter editor offers (`in` belongs to the row selection) */
+export type FilterOperator = Exclude<FilterSpec['operator'], 'in'>;
+export const FILTER_OPERATORS: FilterOperator[] = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'startsWith',
+  'endsWith',
+  'isNull',
+  'notNull',
+];
+/** operators that compare against nothing */
+export const VALUELESS: ReadonlySet<FilterOperator> = new Set(['isNull', 'notNull']);
+
+export interface DraftFilter {
+  /** stable across edits, for React */
+  id: string;
+  column: string;
+  operator: FilterOperator;
+  /** as typed; turned into a number or a boolean on save where the column is one */
+  value: string;
+}
+
+export type DraftTransform = ColumnTransform & { id: string };
+
+let nextId = 0;
+export const draftId = (): string => `d${++nextId}`;
 export type RowMode = 'selected' | 'all';
 
 export interface BuilderDraft {
@@ -121,7 +153,22 @@ export interface BuilderDraft {
   cdcOps: Set<CdcOp>;
   readiness: CdcReadiness | null;
   checkingCdc: boolean;
+  // ----- which rows, and what happens to their values -----
+  /** "only rows where…", ANDed together (and with the row selection, if any) */
+  filters: DraftFilter[];
+  /**
+   * filters this editor has no row for (an `in` list, say) — set through the
+   * API. carried through an edit exactly as they are: the builder used to read
+   * one filter back and write one filter out, so saving a bridge from here
+   * silently deleted every other condition on it
+   */
+  extraFilters: FilterSpec[];
+  /** masking, casts, computed columns — applied in this order */
+  transforms: DraftTransform[];
   // ----- payload / destination / delivery -----
+  /** the HTTP payload template and key renames; no control here, carried through an edit */
+  template: string;
+  rename: Record<string, string> | undefined;
   wrapKey: string;
   destKind: 'http' | 'database';
   dest: Destination;
@@ -178,6 +225,11 @@ export function initialDraft(
     ),
     readiness: null,
     checkingCdc: false,
+    filters: [],
+    extraFilters: [],
+    transforms: [],
+    template: '{{$row}}',
+    rename: undefined,
     wrapKey: '',
     destKind: 'http',
     dest: blankDestination(),
@@ -220,6 +272,13 @@ export type BuilderAction =
   | { type: 'toggleCdcOp'; op: CdcOp }
   | { type: 'setReadiness'; readiness: CdcReadiness | null }
   | { type: 'setCheckingCdc'; checking: boolean }
+  | { type: 'addFilter'; column: string }
+  | { type: 'patchFilter'; id: string; patch: Partial<Omit<DraftFilter, 'id'>> }
+  | { type: 'removeFilter'; id: string }
+  | { type: 'addTransform'; transform: ColumnTransform }
+  | { type: 'replaceTransform'; id: string; transform: ColumnTransform }
+  | { type: 'moveTransform'; id: string; by: -1 | 1 }
+  | { type: 'removeTransform'; id: string }
   | { type: 'setWrapKey'; wrapKey: string }
   | { type: 'setDestKind'; destKind: 'http' | 'database'; sourcePk: string | null }
   | { type: 'patchDest'; patch: Partial<Destination> }
@@ -230,6 +289,16 @@ export type BuilderAction =
   | { type: 'addDbTarget'; sourcePk: string | null }
   | { type: 'removeDbTarget'; index: number }
   | { type: 'patchDelivery'; patch: Partial<Delivery> };
+
+/**
+ * conditions and steps name columns of ONE table. leaving it — for another
+ * table, database or connection — leaves them behind
+ */
+const noRowRules = (): Pick<BuilderDraft, 'filters' | 'extraFilters' | 'transforms'> => ({
+  filters: [],
+  extraFilters: [],
+  transforms: [],
+});
 
 export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderDraft {
   switch (action.type) {
@@ -259,6 +328,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         included: new Set(),
         fieldsPref: null,
         selectedKeys: new Map(),
+        ...noRowRules(),
       };
     case 'selectDatabase':
       return {
@@ -267,6 +337,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         table: '',
         included: new Set(),
         fieldsPref: null,
+        ...noRowRules(),
       };
     case 'selectTable':
       return {
@@ -277,6 +348,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         fieldsPref: null,
         selectedKeys: new Map(),
         readiness: null,
+        ...noRowRules(),
       };
     case 'setMode':
       return { ...d, mode: action.mode };
@@ -332,6 +404,35 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, readiness: action.readiness };
     case 'setCheckingCdc':
       return { ...d, checkingCdc: action.checking };
+    case 'addFilter':
+      return {
+        ...d,
+        filters: [...d.filters, { id: draftId(), column: action.column, operator: 'eq', value: '' }],
+      };
+    case 'patchFilter':
+      return {
+        ...d,
+        filters: d.filters.map((f) => (f.id === action.id ? { ...f, ...action.patch } : f)),
+      };
+    case 'removeFilter':
+      return { ...d, filters: d.filters.filter((f) => f.id !== action.id) };
+    case 'addTransform':
+      return { ...d, transforms: [...d.transforms, { ...action.transform, id: draftId() }] };
+    case 'replaceTransform':
+      return {
+        ...d,
+        transforms: d.transforms.map((t) => (t.id === action.id ? { ...action.transform, id: t.id } : t)),
+      };
+    case 'moveTransform': {
+      const from = d.transforms.findIndex((t) => t.id === action.id);
+      const to = from + action.by;
+      if (from < 0 || to < 0 || to >= d.transforms.length) return d;
+      const next = [...d.transforms];
+      [next[from], next[to]] = [next[to]!, next[from]!];
+      return { ...d, transforms: next };
+    }
+    case 'removeTransform':
+      return { ...d, transforms: d.transforms.filter((t) => t.id !== action.id) };
     case 'setWrapKey':
       return { ...d, wrapKey: action.wrapKey };
     case 'setDestKind': {

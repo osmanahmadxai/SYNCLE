@@ -414,7 +414,7 @@ export class BridgeWatchService implements OnModuleInit {
     const tracked = strategy.strategy === 'timestamp' ? row[strategy.column] : null;
     const salt = tracked instanceof Date ? tracked.toISOString() : String(tracked ?? '');
     const identity = createHash('sha256')
-      .update(`${rowKey(row, pk)} ${salt}`)
+      .update(`${rowKey(row, pk)}\0${salt}`)
       .digest('hex')
       .slice(0, 32);
     return `${jobId}:${identity}`;

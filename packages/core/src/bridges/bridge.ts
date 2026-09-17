@@ -115,6 +115,12 @@ export interface TargetColumnShape {
   /** the source column's native type, as precisely as the source reports it */
   sourceType: string;
   nullable: boolean;
+  /**
+   * `sourceType` is not the source engine's spelling: a column transform changed
+   * what the column holds (a hashed integer is text), and the type is given in
+   * PostgreSQL's spelling for the type map to read with no source engine
+   */
+  generic?: boolean;
 }
 
 /** a column whose target type cannot hold everything the source type can */
@@ -154,7 +160,8 @@ export function planTargetTable(
   const defs: ColumnDefinition[] = columns.map((c) => {
     const isKey = keys.has(c.name);
     const plan = translateColumnType(c.sourceType, {
-      source: sourceEngine,
+      // a transformed column's type is not the source engine's to read
+      source: c.generic ? undefined : sourceEngine,
       target: engine,
       isKey,
     });

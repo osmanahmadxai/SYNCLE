@@ -31,6 +31,7 @@ import {
   type BridgeSourceHold,
   type PendingSourceCleanup,
   NotFoundError,
+  columnsRead,
   UNCHANGED,
 } from '@syncle/core';
 import { randomUUID } from 'node:crypto';
@@ -932,6 +933,8 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       change.keyChanged === true ||
       bridge.destination.kind === 'http' ||
       (src.filters ?? []).some((f) => missing.includes(f.column)) ||
+      // a mask, a cast or a computed column cannot work from "not sent"
+      [...columnsRead(bridge.transform.columns)].some((c) => missing.includes(c)) ||
       (await this.hasWholeValueTarget(bridge, stream));
     if (!needed) return row;
 

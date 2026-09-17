@@ -33,6 +33,10 @@ import {
   mapRow,
   planTargetTable,
   rowConverterFor,
+  transformedType,
+  canBecomeNull,
+  columnsAdded,
+  copiedColumn,
   type CdcOperation,
   type ColumnTypeWarning,
   type DatabaseEngine,
@@ -420,7 +424,29 @@ export class DatabaseSinkService {
       const source = columns ? await this.sourceEngine(bridge) : undefined;
       if (columns && source) {
         const engine = (await this.connections.resolve(target.connectionId)).engine;
-        convert = rowConverterFor(columns, source, engine);
+        // a transformed column no longer holds what its source type says (a
+        // boolean cast to text, a timestamp hashed): converting it by the
+        // SOURCE's type would mangle it. it is converted by what it has become,
+        // which is spelled the PostgreSQL way
+        const transforms = bridge.transform.columns;
+        const byName = new Map(columns.map((c) => [c.name, c]));
+        const untouched: TargetColumnShape[] = [];
+        const reshaped: { name: string; sourceType: string }[] = [];
+        // the columns the steps ADD are in the row too, and need converting as
+        // much as any other: a `{{$now}}` cast to a date, a copy of a timestamp
+        for (const name of [...byName.keys(), ...columnsAdded(transforms, [...byName.keys()])]) {
+          const sourceType = transformedType(transforms, name);
+          if (sourceType) {
+            reshaped.push({ name, sourceType });
+            continue;
+          }
+          // a plain copy holds what its origin holds, under its own name
+          const origin = byName.get(copiedColumn(transforms, name) ?? name);
+          if (origin) untouched.push({ ...origin, name });
+        }
+        const first = rowConverterFor(untouched, source, engine);
+        const second = reshaped.length ? rowConverterFor(reshaped, 'postgres', engine) : null;
+        convert = first && second ? (row) => second(first(row)) : (first ?? second);
       }
     } catch {
       convert = null; // unknown shape: write what was read, as before
@@ -508,19 +534,34 @@ export class DatabaseSinkService {
 
     // which target columns to create: the explicit mapping, else identity over
     // the source schema when known, else whatever the sample row carries
+    const steps = bridge.transform.columns;
     const pairs: { name: string; source: string }[] =
       target.mapping.length > 0
         ? target.mapping.map((m) => ({ name: m.target, source: m.source }))
         : source
-          ? source.map((c) => ({ name: c.name, source: c.name }))
+          ? [
+              ...source.map((c) => c.name),
+              // an identity mapping sends the whole row, and the row has the
+              // columns the steps ADD: a table without them would refuse it
+              ...columnsAdded(steps, source.map((c) => c.name)),
+            ].map((name) => ({ name, source: name }))
           : Object.keys(mappedSample).map((name) => ({ name, source: name }));
 
     return pairs.map(({ name, source: sourceName }) => {
-      const known = byName.get(sourceName);
+      // a plain copy of a column (`{{price}}`) is typed like the column it copies
+      const known = byName.get(copiedColumn(steps, sourceName) ?? sourceName);
+      const isKey = target.keyColumns.includes(name);
+      // NOT NULL at the source means nothing once a step can write NULL
+      const nullable =
+        (known ? known.nullable : !isKey) || (!isKey && canBecomeNull(steps, sourceName));
+      // what the transforms turned the column INTO decides its type: a hashed
+      // integer is text, and created as an integer it would refuse every row
+      const reshaped = transformedType(steps, sourceName);
+      if (reshaped) return { name, sourceType: reshaped, generic: true, nullable };
       return {
         name,
         sourceType: known ? known.sourceType : inferType(mappedSample[name]),
-        nullable: known ? known.nullable : !target.keyColumns.includes(name),
+        nullable,
       };
     });
   }

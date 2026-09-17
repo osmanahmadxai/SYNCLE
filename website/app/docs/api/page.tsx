@@ -583,6 +583,52 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         </table>
       </div>
 
+      <p>
+        The body of a create or an update is the bridge&apos;s whole
+        configuration. Its source can carry <code>filters</code> (ANDed;
+        operators <code>eq</code>, <code>neq</code>, <code>gt</code>,{' '}
+        <code>gte</code>, <code>lt</code>, <code>lte</code>,{' '}
+        <code>contains</code>, <code>startsWith</code>,{' '}
+        <code>endsWith</code>, <code>in</code>, <code>isNull</code>,{' '}
+        <code>notNull</code>), and its <code>transform.columns</code> is the
+        ordered list of{' '}
+        <a href="/docs/bridges#column-transforms">column transforms</a> — at
+        most 100, each one of the five kinds below. A kind the server does
+        not know is refused with a <code>400</code>, never ignored.
+      </p>
+      <CodeBlock title="Filters and column transforms in a bridge body">{`{
+  "source": {
+    "kind": "table", "connectionId": "…", "table": "customers",
+    "filters": [
+      { "column": "age", "operator": "gte", "value": 18 },
+      { "column": "deleted_at", "operator": "isNull" }
+    ]
+  },
+  "transform": {
+    "columns": [
+      { "kind": "text", "column": "email", "op": "lower" },
+      { "kind": "mask", "column": "email", "mode": "hash", "salt": "…" },
+      { "kind": "mask", "column": "card", "mode": "partial", "keepStart": 0, "keepEnd": 4, "fill": "*" },
+      { "kind": "cast", "column": "joined", "to": "date", "onError": "null" },
+      { "kind": "default", "column": "tier", "value": "standard" },
+      { "kind": "set", "column": "full_name", "template": "{{first}} {{last}}" }
+    ]
+  }
+}`}</CodeBlock>
+      <p>
+        <code>mask.mode</code> is <code>partial</code>, <code>redact</code>,{' '}
+        <code>hash</code> or <code>null</code>; <code>cast.to</code> is{' '}
+        <code>string</code>, <code>number</code>, <code>integer</code>,{' '}
+        <code>boolean</code>, <code>date</code> or <code>json</code>, and its{' '}
+        <code>onError</code> is <code>fail</code> (the default),{' '}
+        <code>null</code> or <code>keep</code>; <code>text.op</code> is{' '}
+        <code>trim</code>, <code>lower</code> or <code>upper</code>. A column
+        that a <code>set</code> or a <code>default</code> adds has to be named
+        in <code>transform.fields</code> (when that list is pinned) and in a
+        database target&apos;s <code>mapping</code> to be delivered, like any
+        other column.
+      </p>
+
       <h3 id="jobs-and-deliveries">Jobs and deliveries</h3>
       <div className="table-scroll">
         <table>

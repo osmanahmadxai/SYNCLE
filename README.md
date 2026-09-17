@@ -116,6 +116,13 @@ The rest is the same whichever destination and trigger you pick:
   (rename, drop, pick keys). For an HTTP target, use a safe token template —
   `{{column}}`, `{{$row}}`, `{{$table}}`, `{{$op}}`, `{{$now}}`, `{{$index}}`.
   Structured substitution only — no string injection, no code execution.
+- **Filter and transform on the way.** Send only the rows that meet a list of
+  conditions. Mask a column (keep the last four, redact, or a salted SHA-256
+  that still joins and works as a key), convert its type, trim or re-case it,
+  give it a default, or compute a new column from the others. Steps run in the
+  order you put them, a value that cannot be converted fails loudly instead of
+  being guessed at, and a table Syncle creates is typed for what the columns
+  have become. Declarative — no expressions, nothing evaluated.
 - **Sync reliably.** Retries with backoff, rate limiting, optional batching, and
   exactly-once delivery so a change is applied once and only once downstream.
 - **Never lose a row to a failure.** A row that has been read is always in one

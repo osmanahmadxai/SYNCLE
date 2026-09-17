@@ -278,7 +278,90 @@
     "setAsideContinue": "Set failed rows aside & keep syncing",
     "stopBridge": "Stop the bridge",
     "onFailureContinueHint": "Rows that fail are kept in the bridge's dead-letter queue, in full, and can be retried once the cause is fixed. The bridge still stops if the destination itself is unavailable.",
-    "onFailureStopHint": "The bridge stops at the first failure without moving past it. Start it again and the same rows are retried; nothing is skipped."
+    "onFailureStopHint": "The bridge stops at the first failure without moving past it. Start it again and the same rows are retried; nothing is skipped.",
+    "hashStandIn": "A hashed value is shown as a stand-in here. Dry run shows the real one."
+  },
+  "builderFilters": {
+    "title": "Only rows where",
+    "add": "Add condition",
+    "none": "Every row of the table. Add a condition to send only the rows that match it.",
+    "where": "where",
+    "and": "and",
+    "value": "value",
+    "remove": "Remove condition",
+    "kept": "{count, plural, one {# more condition was set through the API and is kept as it is.} other {# more conditions were set through the API and are kept as they are.}}",
+    "op": {
+      "eq": "equals",
+      "neq": "is not",
+      "lt": "less than",
+      "lte": "at most",
+      "gt": "greater than",
+      "gte": "at least",
+      "contains": "contains",
+      "startsWith": "starts with",
+      "endsWith": "ends with",
+      "isNull": "is empty",
+      "notNull": "is not empty"
+    },
+    "needsValue": "Type a value for every condition, or remove it. For rows with no value, use “is empty”.",
+    "column": "Column",
+    "operator": "Comparison"
+  },
+  "builderTransforms": {
+    "title": "Change values on the way",
+    "add": "Add step",
+    "none": "Values are sent as they are. Add a step to mask, convert or compute a column.",
+    "columnName": "column name",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "remove": "Remove step",
+    "orderHint": "Steps run top to bottom; each one sees what the steps above it did.",
+    "keepStart": "keep first",
+    "keepEnd": "keep last",
+    "salt": "salt (optional, mixed into the hash)",
+    "ifItCannot": "if a value cannot be converted",
+    "defaultValue": "value to use when the source has none",
+    "templateHint": "Text with {token} tokens. {now} and {table} work too. A name the table does not have adds a column.",
+    "kind": {
+      "mask": "Mask",
+      "cast": "Convert type",
+      "text": "Clean text",
+      "default": "Default value",
+      "set": "Computed column"
+    },
+    "mask": {
+      "partial": "Keep the ends, hide the middle",
+      "redact": "Replace with ********",
+      "hash": "Replace with a SHA-256 hash",
+      "null": "Send as empty (NULL)"
+    },
+    "cast": {
+      "string": "to text",
+      "number": "to number",
+      "integer": "to whole number",
+      "boolean": "to true / false",
+      "date": "to date and time",
+      "json": "to JSON"
+    },
+    "castError": {
+      "fail": "fail the delivery",
+      "null": "send it as empty (NULL)",
+      "keep": "leave it as it was"
+    },
+    "text": {
+      "trim": "Trim spaces at both ends",
+      "lower": "lower case",
+      "upper": "UPPER CASE"
+    },
+    "needsColumn": "Say which column this step is about.",
+    "step": "Kind of step",
+    "column": "Column",
+    "maskMode": "How to mask",
+    "castTo": "Convert to",
+    "onCastError": "If a value cannot be converted",
+    "textOp": "How to clean",
+    "fill": "fill character",
+    "template": "Template"
   },
   "deadLetters": {
     "waiting": "{count, plural, one {# row waiting in the dead-letter queue} other {# rows waiting in the dead-letter queue}}",

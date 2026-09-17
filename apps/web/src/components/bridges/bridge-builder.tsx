@@ -10,7 +10,11 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { FlaskConical, Loader2, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
-import type { BridgePreview, TableSchema } from '@syncle/core';
+import {
+  columnsAdded,
+  type BridgePreview,
+  type TableSchema,
+} from '@syncle/core';
 import { api, ApiError } from '@/lib/api';
 import {
   useBrowse,
@@ -30,10 +34,13 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { PAGE_SIZE, builderReducer, initialDraft } from './builder/draft';
-import { buildInput, loadBridge } from './builder/mapping';
+import { buildInput, draftTransforms, loadBridge } from './builder/mapping';
 import { SourceSection } from './builder/source-section';
 import { TriggerSection } from './builder/trigger-section';
 import { DryRunDialog } from './builder/dry-run-dialog';
+import { FiltersSection } from './builder/filters-section';
+import { TransformsSection } from './builder/transforms-section';
+import { incompleteFilter, incompleteTransform } from './builder/transform-options';
 import { PayloadSection } from './builder/payload-section';
 import { DestinationSection } from './builder/destination-section';
 import { DeliverySection } from './builder/delivery-section';
@@ -163,9 +170,33 @@ export function BridgeBuilder() {
     return rows[0];
   }, [rows, mode, singlePk, selectedKeys]);
 
+  const columnNames = useMemo(() => columns.map((c) => c.name), [columns]);
+
+  /* what each column holds, as far as a sample row can tell: a filter typed as
+     "42" on a numeric column is sent as the number 42 */
+  const columnTypes = useMemo(() => {
+    const types: Record<string, string> = {};
+    for (const name of columnNames) {
+      const seen = rows.find((r) => r[name] !== null && r[name] !== undefined);
+      if (seen) types[name] = typeof seen[name];
+    }
+    return types;
+  }, [columnNames, rows]);
+
+  /* the steps exactly as they will be saved, so the preview shows what will run */
+  const { transforms: draftSteps } = draft;
+  const transformList = useMemo(
+    () => draftTransforms({ transforms: draftSteps }, columnTypes),
+    [draftSteps, columnTypes],
+  );
+
+  /* what is sent: the ticked columns, then the ones the transforms add */
   const includedList = useMemo(
-    () => columns.map((c) => c.name).filter((n) => included.has(n)),
-    [columns, included],
+    () => [
+      ...columnNames.filter((n) => included.has(n)),
+      ...columnsAdded(transformList, columnNames),
+    ],
+    [columnNames, included, transformList],
   );
 
   /* ----- save ----- */
@@ -192,7 +223,10 @@ export function BridgeBuilder() {
     destReady &&
     includedList.length > 0 &&
     !(mode === 'selected' && (!singlePk || selectedKeys.size === 0)) &&
-    !watchNeedsColumn;
+    !watchNeedsColumn &&
+    // a half-written condition or step is never dropped on save: it blocks it
+    !draft.filters.some(incompleteFilter) &&
+    !draft.transforms.some(incompleteTransform);
 
   const [dryRun, setDryRun] = useState<{
     open: boolean;
@@ -204,9 +238,10 @@ export function BridgeBuilder() {
   async function handleSave() {
     try {
       const input = buildInput(draft, {
-        columns: columns.map((c) => c.name),
+        columns: columnNames,
         singlePk,
         fallbackName: t('defaultName', { table }),
+        columnTypes,
       });
       if (editing) {
         await update.mutateAsync({ id: editing, input });
@@ -229,9 +264,10 @@ export function BridgeBuilder() {
     setDryRun({ open: true, loading: true, preview: null, error: null });
     try {
       const input = buildInput(draft, {
-        columns: columns.map((c) => c.name),
+        columns: columnNames,
         singlePk,
         fallbackName: t('defaultName', { table }),
+        columnTypes,
       });
       const preview = await api.previewDraft(input);
       setDryRun({ open: true, loading: false, preview, error: null });
@@ -352,11 +388,22 @@ export function BridgeBuilder() {
                 }
                 bridgeId={editing}
               />
+              <FiltersSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columnNames}
+              />
+              <TransformsSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columnNames}
+              />
               <PayloadSection
                 draft={draft}
                 dispatch={dispatch}
                 sampleRow={sampleRow}
                 includedList={includedList}
+                transforms={transformList}
               />
               <DestinationSection
                 draft={draft}

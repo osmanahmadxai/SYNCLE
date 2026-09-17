@@ -55,6 +55,8 @@ import { BridgeStoreService } from './bridge-store.service';
 import { DatabaseSinkService, targetKey } from './database-sink.service';
 import type { DeliveryOutcome, ResolvedBridge } from './bridges.types';
 import { rowMatchesFilters } from './cdc/filter-match';
+import { shapeRows } from './row-shaping';
+import { failedBeforeSending } from './bridge-sink.service';
 import { decodeRows, encodeRows, rowsForDisplay } from './row-codec';
 
 type Row = Record<string, unknown>;
@@ -416,10 +418,21 @@ export class DeadLetterService {
     ): Promise<string[]> => {
       if (targets.length === 0 || rows.length === 0)
         return targets.map(targetKey);
+      // these rows come straight from the source (or from the parked copy of
+      // it): masked, cast and computed like any other delivery of this bridge
+      const shaped = shapeRows(bridge, rows, {
+        table: src.table,
+        now: new Date().toISOString(),
+        op: asOp,
+      });
+      if (shaped.errors.length > 0) {
+        firstError ??= failedBeforeSending(shaped.errors, asOp).error;
+        return [];
+      }
       const outcome = await this.databaseSink.deliver(
         bridge,
         targets,
-        rows,
+        shaped.rows,
         asOp,
       );
       if (outcome.status === 'success') return targets.map(targetKey);

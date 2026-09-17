@@ -130,6 +130,175 @@ export default function Page() {
         all of it.
       </p>
 
+      <h2 id="filters-and-transforms">Filters and column transforms</h2>
+      <p>
+        Two things can happen to a row between the source and the
+        destination: it can be left out, and its values can be changed. Both
+        are set in the bridge builder, both are part of the bridge&apos;s
+        saved configuration, and both apply the same way whatever the trigger
+        and whatever the destination.
+      </p>
+
+      <h3 id="filters">Only rows where…</h3>
+      <p>
+        A bridge&apos;s source can carry a list of conditions —{' '}
+        <em>equals</em>, <em>is not</em>, <em>greater / less than</em>,{' '}
+        <em>contains</em>, <em>starts / ends with</em>, <em>is empty</em>,{' '}
+        <em>is not empty</em> — and a row is sent only when it meets all of
+        them. A replay and a watch bridge push the conditions into the
+        source&apos;s own query, so rows that do not match are never read; a
+        CDC bridge sees every change of the table and applies the same
+        conditions, with the same semantics, to each one. A value typed into
+        the builder for a numeric or boolean column is sent as a number or a
+        boolean, which is what MongoDB needs to match it.
+      </p>
+      <p>
+        The builder does not save a condition that is only half written — a
+        comparison with no value blocks the save instead of quietly becoming
+        &quot;no condition&quot;, which would send every row. Conditions set
+        through the API that the editor has no row for (an{' '}
+        <code>in</code> list, for instance) are kept as they are when the
+        bridge is edited.
+      </p>
+
+      <h3 id="column-transforms">Change values on the way</h3>
+      <p>
+        A bridge can carry a list of steps that are applied to every row
+        before it is delivered. There are five kinds:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>What it does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <strong>Mask</strong>
+              </td>
+              <td>
+                hides a value. <em>Keep the ends</em> shows the first / last
+                few characters and fills the middle (a value too short to
+                keep anything of is filled entirely); <em>redact</em>{' '}
+                replaces it with eight fill characters, whatever its length;{' '}
+                <em>hash</em> replaces it with its SHA-256 (hex), optionally
+                salted — stable, so the column still joins, dedupes and works
+                as a key; <em>empty</em> sends <code>NULL</code> and keeps
+                the column
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Convert type</strong>
+              </td>
+              <td>
+                to text, number, whole number, true / false, date and time,
+                or JSON. <code>&quot;yes&quot;</code>, <code>&quot;1&quot;</code>{' '}
+                and <code>&quot;on&quot;</code> are true; a number of seconds
+                or milliseconds since 1970 is a date
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Clean text</strong>
+              </td>
+              <td>trim, lower case, upper case</td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Default value</strong>
+              </td>
+              <td>
+                a value for when the source has none (typed in the builder
+                for a numeric or boolean column, it is sent as a number or a
+                boolean)
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Computed column</strong>
+              </td>
+              <td>
+                a column built from a template over the others:{' '}
+                <code>{'{{first_name}} {{last_name}}'}</code>.{' '}
+                <code>{'{{$now}}'}</code> and <code>{'{{$table}}'}</code> are
+                available. A template that is exactly one token copies that
+                column with its type. A name the table does not have adds a
+                column
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Steps run top to bottom and each one sees what the ones above it
+        did, so &quot;lower-case the e-mail, then hash it&quot; is two steps
+        in that order. They are declarative on purpose: there is no
+        expression language and nothing is evaluated — a bridge&apos;s
+        configuration runs inside the process that holds every stored
+        credential.
+      </p>
+      <p>
+        <strong>A value that cannot be converted</strong> (
+        <code>&quot;n/a&quot;</code> to a number) is never decided quietly.
+        Each conversion says what happens: <em>fail the delivery</em> (the
+        default), <em>send it as empty</em>, or <em>leave it as it was</em>.
+        A failed conversion fails the delivery before anything is sent, with
+        the column and the value in the error — on a bridge set to{' '}
+        <code>continue</code>, that one row goes to the{' '}
+        <a href="#dead-letter-queue">dead-letter queue</a> and the rest carry
+        on. A retry from there re-reads the row and runs the steps again, so
+        fixing the value at the source is enough.
+      </p>
+      <p>What follows from changing values on the way:</p>
+      <ul>
+        <li>
+          <strong>A table Syncle creates fits the new values.</strong> A
+          hashed integer is text; a column converted to a date is a
+          timestamp; a plain copy (<code>{'{{price}}'}</code>) is typed like
+          the column it copies; a column a step can empty is nullable even
+          when the source says <code>NOT NULL</code>; and the columns the
+          steps add are created with the rest. The{' '}
+          <a href="#dry-run">dry run</a> shows the planned
+          column types, and the shaped sample rows, before anything exists.
+          An existing table is never altered — its columns have to be able to
+          hold what the steps produce.
+        </li>
+        <li>
+          <strong>A masked key still works.</strong> A delete arrives with
+          the source&apos;s plain key; the same steps are applied to it, so
+          it finds the row that was written under the hash. Computed columns
+          and defaults are not invented for a row that is being deleted.
+        </li>
+        <li>
+          <strong>Delivery records hold the shaped row.</strong> A masked
+          value does not reappear in the job timeline or in the payload
+          Syncle keeps of an HTTP delivery.
+        </li>
+        <li>
+          <strong>Masking protects the destination, not Syncle&apos;s own
+          queue.</strong>{' '}
+          A row set aside in the dead-letter queue is kept as the source has
+          it — that is what lets a retry re-read and re-shape it. Anyone who
+          can open Syncle can already browse the source.
+        </li>
+        <li>
+          <strong>On PostgreSQL CDC</strong>, a large column that an update
+          did not touch is not resent by the server. When a step needs such
+          a column (a computed column that reads it), Syncle reads the row
+          back from the source rather than compute from nothing.
+        </li>
+      </ul>
+      <Note>
+        The builder&apos;s live payload preview applies the steps to the
+        sample row as you type. The one thing it cannot do is hash — it shows
+        a stand-in — so use <strong>Dry run</strong> to see real hashed
+        values.
+      </Note>
+
       <h2 id="delivery-guarantees">Delivery guarantees</h2>
       <p>
         Database writes are idempotent upserts keyed by columns you choose,

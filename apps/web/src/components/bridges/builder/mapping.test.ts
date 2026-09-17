@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Bridge } from '@syncle/core';
-import { initialDraft } from './draft';
-import { buildInput, loadBridge, type BuildInputContext } from './mapping';
+import { builderReducer, initialDraft } from './draft';
+import {
+  buildInput,
+  coerceFilterValue,
+  draftTransforms,
+  loadBridge,
+  type BuildInputContext,
+} from './mapping';
 
 /* -------------------------------------------------------------------------- */
 /* fixtures                                                                   */
@@ -548,5 +554,236 @@ describe('buildInput', () => {
     expect(input.delivery).toEqual(bridge.delivery);
     expect(input.trigger).toEqual(bridge.trigger);
     expect(input.enabled).toBe(bridge.enabled);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* filters and column transforms                                              */
+/* -------------------------------------------------------------------------- */
+
+describe('source filters', () => {
+  const filtered = () =>
+    httpBridge({
+      source: {
+        kind: 'table',
+        connectionId: 'c1',
+        database: 'app',
+        schema: 'public',
+        table: 'users',
+        filters: [
+          { column: 'id', operator: 'in', value: [1, 2] },
+          { column: 'age', operator: 'gte', value: 18 },
+          { column: 'deleted_at', operator: 'isNull' },
+          { column: 'active', operator: 'eq', value: true },
+          // nothing in the editor can show these two
+          { column: 'country', operator: 'in', value: ['IT', 'AF'] },
+          { column: 'meta', operator: 'eq', value: { a: 1 } as never },
+        ],
+      },
+    });
+
+  it('loads the editable ones into rows and sets the rest aside, untouched', () => {
+    const d = loadBridge(filtered());
+    expect(d.mode).toBe('selected');
+    expect([...d.selectedKeys.values()]).toEqual([1, 2]);
+    expect(d.filters.map(({ id: _id, ...f }) => f)).toEqual([
+      { column: 'age', operator: 'gte', value: '18' },
+      { column: 'deleted_at', operator: 'isNull', value: '' },
+      { column: 'active', operator: 'eq', value: 'true' },
+    ]);
+    expect(d.extraFilters).toEqual([
+      { column: 'country', operator: 'in', value: ['IT', 'AF'] },
+      { column: 'meta', operator: 'eq', value: { a: 1 } },
+    ]);
+    // ids are what React keys the rows by
+    expect(new Set(d.filters.map((f) => f.id)).size).toBe(3);
+  });
+
+  it('saves every filter it loaded: an edit used to delete all but the row selection', () => {
+    const bridge = filtered();
+    const d = loadBridge(bridge);
+    d.included = new Set(['id', 'email']);
+    const input = buildInput(
+      d,
+      ctx({ columnTypes: { age: 'number', active: 'boolean' } }),
+    );
+    expect(input.source.kind === 'table' && input.source.filters).toEqual(
+      bridge.source.kind === 'table' ? bridge.source.filters : [],
+    );
+  });
+
+  it('sends a number for a numeric column, and text where a number would be rounded', () => {
+    expect(coerceFilterValue('42', 'number')).toBe(42);
+    expect(coerceFilterValue(' 4.5 ', 'number')).toBe(4.5);
+    expect(coerceFilterValue('-7', 'bigint')).toBe(-7);
+    // 2^53 + 1 is not a number JavaScript can hold; the engine compares the text
+    expect(coerceFilterValue('9007199254740993', 'number')).toBe('9007199254740993');
+    expect(coerceFilterValue('abc', 'number')).toBe('abc');
+    expect(coerceFilterValue('', 'number')).toBe('');
+    expect(coerceFilterValue('TRUE', 'boolean')).toBe(true);
+    expect(coerceFilterValue('false', 'boolean')).toBe(false);
+    expect(coerceFilterValue('yes', 'boolean')).toBe('yes');
+    // text stays exactly as typed, spaces and all, and "42" in a text column is text
+    expect(coerceFilterValue(' 42 ', 'string')).toBe(' 42 ');
+    expect(coerceFilterValue('42', undefined)).toBe('42');
+  });
+
+  it('never turns a half-written condition into "no condition"', () => {
+    const d = readyDraft();
+    d.filters = [
+      { id: 'a', column: 'age', operator: 'gt', value: '  ' },
+      { id: 'b', column: '', operator: 'eq', value: 'x' },
+      { id: 'c', column: 'name', operator: 'notNull', value: 'ignored' },
+    ];
+    // (the builder does not let such a draft be saved; this is the belt to that brace)
+    const input = buildInput(d, ctx());
+    expect(input.source.kind === 'table' && input.source.filters).toEqual([
+      { column: 'name', operator: 'notNull' },
+    ]);
+  });
+
+  it('the reducer adds, edits and removes a condition, and a new table starts clean', () => {
+    let d = readyDraft();
+    d = builderReducer(d, { type: 'addFilter', column: 'age' });
+    const id = d.filters[0]!.id;
+    expect(d.filters[0]).toMatchObject({ column: 'age', operator: 'eq', value: '' });
+    d = builderReducer(d, { type: 'patchFilter', id, patch: { operator: 'lt', value: '30' } });
+    expect(d.filters[0]).toMatchObject({ column: 'age', operator: 'lt', value: '30' });
+    d = builderReducer(d, { type: 'addFilter', column: 'name' });
+    d = builderReducer(d, { type: 'removeFilter', id });
+    expect(d.filters.map((f) => f.column)).toEqual(['name']);
+    d = builderReducer(d, { type: 'addTransform', transform: { kind: 'text', column: 'name', op: 'trim' } });
+    const rules = d;
+    // conditions and steps name columns of the table they were written for
+    for (const leave of [
+      { type: 'selectTable', table: 'orders' },
+      { type: 'selectDatabase', database: 'other' },
+      { type: 'selectConnection', connectionId: 'c9' },
+    ] as const) {
+      const left = builderReducer({ ...rules, extraFilters: [{ column: 'x', operator: 'in', value: [1] }] }, leave);
+      expect(left.filters, leave.type).toEqual([]);
+      expect(left.extraFilters, leave.type).toEqual([]);
+      expect(left.transforms, leave.type).toEqual([]);
+    }
+    // each of them gets lists of its own: one draft's edits must not show up in another
+    const a = builderReducer(rules, { type: 'selectTable', table: 'a' });
+    const b = builderReducer(rules, { type: 'selectTable', table: 'b' });
+    expect(a.filters).not.toBe(b.filters);
+  });
+});
+
+describe('column transforms', () => {
+  const steps = [
+    { kind: 'text', column: 'email', op: 'lower' },
+    { kind: 'mask', column: 'email', mode: 'hash', keepStart: 0, keepEnd: 4, fill: '*', salt: 's' },
+    { kind: 'cast', column: 'id', to: 'string', onError: 'null' },
+    { kind: 'set', column: 'label', template: '{{name}} <{{email}}>' },
+    { kind: 'default', column: 'tier', value: 'free' },
+  ] as const;
+
+  it('round-trips: loaded in order, saved in order, with nothing of the editor in the payload', () => {
+    const bridge = httpBridge({
+      transform: {
+        template: '{"user": "{{name}}"}',
+        rename: { email: 'mail' },
+        fields: ['id', 'email', 'label', 'tier'],
+        columns: [...steps],
+      },
+    });
+    const d = loadBridge(bridge);
+    expect(d.transforms.map((t) => t.kind)).toEqual(['text', 'mask', 'cast', 'set', 'default']);
+    d.included = new Set(['id', 'email']);
+    const input = buildInput(d, ctx());
+    // template and rename have no control in the builder: an edit used to reset them
+    expect(input.transform).toEqual(bridge.transform);
+    expect(JSON.stringify(input.transform.columns)).not.toContain('"id":"d');
+  });
+
+  it('a column the steps ADD is sent like any other: in fields, and in every target mapping', () => {
+    const d = readyDraft();
+    d.transforms = steps.map((t, i) => ({ ...t, id: `t${i}` }));
+    const http = buildInput(d, ctx());
+    // every source column is ticked, and still the list is pinned: "all" would not include the new ones
+    expect(http.transform.fields).toEqual(['id', 'email', 'name', 'label', 'tier']);
+
+    d.destKind = 'database';
+    d.dbTargets = [
+      {
+        connectionId: 'c2',
+        database: '',
+        schema: '',
+        table: 'users_copy',
+        writeMode: 'upsert',
+        keyColumns: ['id'],
+        createMissingTable: true,
+        renames: { label: 'display_name' },
+      },
+    ];
+    const db = buildInput(d, ctx());
+    expect(db.destination.kind === 'database' && db.destination.targets[0]!.mapping).toEqual([
+      { source: 'id', target: 'id' },
+      { source: 'email', target: 'email' },
+      { source: 'name', target: 'name' },
+      { source: 'label', target: 'display_name' },
+      { source: 'tier', target: 'tier' },
+    ]);
+  });
+
+  it('a step that REPLACES an existing column adds nothing, and an unticked column stays out', () => {
+    const d = readyDraft();
+    d.included = new Set(['id', 'name']);
+    d.transforms = [
+      { id: 'a', kind: 'set', column: 'name', template: '{{name}}!' },
+      { id: 'b', kind: 'default', column: 'email', value: 'none' },
+    ];
+    expect(buildInput(d, ctx()).transform.fields).toEqual(['id', 'name']);
+  });
+
+  it('a default typed for a numeric or boolean column is sent as one; a loaded one is left as it is', () => {
+    const d = readyDraft();
+    d.transforms = [
+      { id: 'a', kind: 'default', column: 'age', value: '0' },
+      { id: 'b', kind: 'default', column: 'active', value: 'true' },
+      { id: 'c', kind: 'default', column: 'name', value: '0' },
+      // these came from the API as they are, and nobody retyped them
+      { id: 'd', kind: 'default', column: 'score', value: 5 },
+      { id: 'e', kind: 'default', column: 'note', value: null },
+    ];
+    const types = { age: 'number', active: 'boolean', name: 'string', score: 'number' };
+    expect(draftTransforms(d, types).map((t) => (t.kind === 'default' ? t.value : '?'))).toEqual([
+      0,
+      true,
+      '0',
+      5,
+      null,
+    ]);
+    // what is saved and what the preview runs are the same list
+    expect(buildInput(d, ctx({ columnTypes: types })).transform.columns).toEqual(draftTransforms(d, types));
+    // with nothing known about the columns, what was typed is what is sent
+    expect(draftTransforms(d).map((t) => (t.kind === 'default' ? t.value : '?'))).toEqual(['0', 'true', '0', 5, null]);
+  });
+
+  it('no steps means no `columns` key, so an untouched bridge saves as it was', () => {
+    expect(buildInput(readyDraft(), ctx()).transform.columns).toBeUndefined();
+  });
+
+  it('the reducer replaces a step in place and moves it within bounds', () => {
+    let d = readyDraft();
+    for (const t of steps.slice(0, 3)) d = builderReducer(d, { type: 'addTransform', transform: { ...t } });
+    const [a, b, c] = d.transforms.map((t) => t.id);
+    d = builderReducer(d, {
+      type: 'replaceTransform',
+      id: b!,
+      transform: { kind: 'mask', column: 'email', mode: 'redact', keepStart: 0, keepEnd: 4, fill: '#' },
+    });
+    expect(d.transforms[1]).toMatchObject({ id: b, mode: 'redact', fill: '#' });
+    d = builderReducer(d, { type: 'moveTransform', id: c!, by: -1 });
+    expect(d.transforms.map((t) => t.id)).toEqual([a, c, b]);
+    // already first / already last: nothing happens, nothing is lost
+    d = builderReducer(d, { type: 'moveTransform', id: a!, by: -1 });
+    d = builderReducer(d, { type: 'moveTransform', id: b!, by: 1 });
+    expect(d.transforms.map((t) => t.id)).toEqual([a, c, b]);
+    d = builderReducer(d, { type: 'removeTransform', id: c! });
+    expect(d.transforms.map((t) => t.id)).toEqual([a, b]);
   });
 });

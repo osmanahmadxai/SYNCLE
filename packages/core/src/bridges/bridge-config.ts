@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { filterSchema, sortSchema } from '../validation';
+import { columnTransformSchema } from './column-transforms';
 
 /* -------------------------------------------------------------------------- */
 /* Source, where rows are read from                                           */
@@ -113,6 +114,14 @@ export const bridgeTransformSchema = z.object({
   fields: z.array(z.string()).optional(),
   rename: z.record(z.string(), z.string()).optional(),
   wrapKey: z.string().optional(),
+  /**
+   * what happens to a row's VALUES on the way — masking, casts, computed
+   * columns. applied in order, before the row is mapped onto a database target
+   * or rendered into an HTTP payload, so both kinds of destination see the same
+   * row. (`fields` / `rename` / `template` shape the HTTP payload only; a
+   * database target's own `mapping` does that job there.)
+   */
+  columns: z.array(columnTransformSchema).max(100).optional(),
 });
 
 /* -------------------------------------------------------------------------- */

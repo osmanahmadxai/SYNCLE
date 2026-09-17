@@ -17,8 +17,24 @@ import {
 import { DeliveryService } from './delivery.service';
 import { DatabaseSinkService } from './database-sink.service';
 import type { DeliveryOutcome, ResolvedBridge } from './bridges.types';
+import { shapeRows } from './row-shaping';
 
 type Row = Record<string, unknown>;
+
+/** a delivery that was never attempted, because the rows could not be shaped */
+export function failedBeforeSending(errors: string[], op?: CdcOperation): DeliveryOutcome {
+  const shown = errors.slice(0, 5).join('; ') + (errors.length > 5 ? `; and ${errors.length - 5} more` : '');
+  return {
+    status: 'failed',
+    httpStatus: null,
+    attempts: 0,
+    error: `Column transform failed — ${shown}. Fix the source value, or set the cast's "on error" to null or keep.`,
+    requestBody: null,
+    responseBody: null,
+    durationMs: 0,
+    op: op ?? null,
+  };
+}
 
 export interface DeliverContext {
   /** resolves `{{$table}}` in HTTP templates */
@@ -53,6 +69,17 @@ export class BridgeSinkService {
     idempotencyKey?: string,
   ): Promise<{ outcome: DeliveryOutcome; warnings: string[] }> {
     const dest = bridge.destination;
+    // masking, casts and computed columns first: both kinds of destination get
+    // the same row, and what is recorded of the delivery is what was delivered
+    const shaped = shapeRows(bridge, rows, ctx);
+    if (shaped.errors.length > 0) {
+      // a value the bridge was told to cast and could not. nothing is sent: a
+      // failed delivery, which says what is wrong with WHICH column in the
+      // bridge's own words — instead of whatever the destination would have made
+      // of it. under `continue` the usual bisection then sets that row aside
+      return { outcome: failedBeforeSending(shaped.errors, ctx.op), warnings: shaped.warnings };
+    }
+    rows = shaped.rows;
 
     if (dest.kind === 'database') {
       const outcome = await this.databaseSink.deliver(
@@ -62,12 +89,12 @@ export class BridgeSinkService {
         ctx.op,
         ctx.skipTargets ? new Set(ctx.skipTargets) : undefined,
       );
-      return { outcome, warnings: [] };
+      return { outcome, warnings: shaped.warnings };
     }
 
     // HTTP: CDC exposes `{{$op}}` to the template by merging it into each row
     const scoped = ctx.op ? rows.map((r) => ({ ...r, $op: ctx.op })) : rows;
-    const { body, warnings } =
+    const { body, warnings: renderWarnings } =
       scoped.length === 1
         ? renderRow(scoped[0]!, bridge.transform, {
             table: ctx.table,
@@ -87,6 +114,6 @@ export class BridgeSinkService {
     );
     // stamp the operation so it persists with the delivery row: a later resend
     // must know e.g. that this batch was a CDC delete
-    return { outcome: { ...outcome, op: ctx.op ?? null }, warnings };
+    return { outcome: { ...outcome, op: ctx.op ?? null }, warnings: [...shaped.warnings, ...renderWarnings] };
   }
 }
