@@ -16,6 +16,9 @@ import type { Response } from 'express';
 import {
   type Bridge,
   type BridgeDelivery,
+  type BridgeExportDocument,
+  type BridgeImportDTO,
+  type BridgeImportResult,
   type BridgeInputDTO,
   type BridgeDraftPreviewDTO,
   type BridgePreview,
@@ -35,6 +38,7 @@ import {
   BadRequestError,
   cdcReadinessSchema,
   bridgeDraftPreviewSchema,
+  bridgeImportSchema,
   bridgeInputSchema,
   bridgePreviewSchema,
   deadLetterDiscardSchema,
@@ -56,6 +60,7 @@ import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchService } from './bridge-watch.service';
 import type { ResolvedBridge } from './bridges.types';
 import { shapeRows } from './row-shaping';
+import { BridgeTransferService } from './bridge-transfer.service';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -74,6 +79,7 @@ export class BridgesController {
     private readonly lifecycle: BridgeLifecycleService,
     private readonly deadLetters: DeadLetterService,
     private readonly retention: RetentionService,
+    private readonly transfer: BridgeTransferService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -98,6 +104,13 @@ export class BridgesController {
     // queue a draft job so the timeline shows the planned deliveries right away
     await this.jobs.prepare(bridge.id).catch(() => undefined);
     return bridge;
+  }
+
+  // (registered AHEAD of `:id`, which would otherwise take "export" for a bridge's id)
+  /** every bridge of a workspace as one document. no secret is in it */
+  @Get('export')
+  exportAll(@Query('workspaceId') workspaceId?: string): Promise<BridgeExportDocument> {
+    return this.transfer.exportWorkspace(workspaceId || undefined);
   }
 
   @Get(':id')
@@ -165,6 +178,29 @@ export class BridgesController {
   }
 
   /* ----- payload preview (no delivery) ----- */
+
+  /* ----- export / import / clone ----- */
+
+  @Get(':id/export')
+  exportOne(@Param('id') id: string): Promise<BridgeExportDocument> {
+    return this.transfer.exportOne(id);
+  }
+
+  /**
+   * create the bridges of an exported document. 400 with
+   * `details.reason = "unresolved-connections"` (and who the candidates are)
+   * when the file refers to a connection this instance has no obvious
+   * counterpart for; send again with a `connectionMap`
+   */
+  @Post('import')
+  importBridges(@Body(new ZodValidationPipe(bridgeImportSchema)) dto: BridgeImportDTO): Promise<BridgeImportResult> {
+    return this.transfer.import(dto);
+  }
+
+  @Post(':id/clone')
+  clone(@Param('id') id: string): Promise<Bridge> {
+    return this.transfer.clone(id);
+  }
 
   @Post(':id/preview')
   async preview(

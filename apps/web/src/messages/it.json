@@ -165,7 +165,13 @@
     "couldNotDelete": "Impossibile eliminare",
     "positionLostRecopyDescription": "Questo bridge copia la tabella prima di seguirla, e può farlo di nuovo: ogni riga che esiste ancora nell'origine viene aggiornata, poi le modifiche vengono seguite da ora. Le righe eliminate nell'origine nel frattempo restano nella destinazione.",
     "copyAgainThenFollow": "Copia di nuovo la tabella, poi segui",
-    "withoutCopying": "Non così"
+    "withoutCopying": "Non così",
+    "clone": "Duplica",
+    "cloned": "Creato “{name}”",
+    "couldNotClone": "Impossibile duplicare il bridge",
+    "export": "Esporta",
+    "exportHint": "Scarica questo bridge come file (nessun segreto incluso)",
+    "couldNotExport": "Impossibile esportare il bridge"
   },
   "bridgeList": {
     "map": "Mappa",
@@ -179,6 +185,20 @@
     "badgeFailed": "Fallito",
     "badgeOnDemand": "Su richiesta",
     "badgeIdle": "Inattivo"
+  },
+  "bridgeTransfer": {
+    "import": "Importa",
+    "importHint": "Crea bridge da un file esportato",
+    "imported": "{count, plural, one {# bridge importato} other {# bridge importati}}",
+    "couldNotImport": "Impossibile importare",
+    "notJson": "Il file non è JSON.",
+    "notAnExport": "Il file non è un’esportazione di bridge di Syncle (o è in un formato che questa versione non conosce).",
+    "mapTitle": "Quali connessioni?",
+    "mapDescription": "Il file fa riferimento a connessioni per cui questa istanza non ha un corrispondente evidente. Indica quale delle tue usare per ciascuna. Non è stato ancora creato nulla.",
+    "pickConnection": "Scegli una connessione",
+    "noCandidates": "Qui non c’è nessuna connessione {engine}. Creane una, poi importa di nuovo.",
+    "cancel": "Annulla",
+    "importNow": "Importa"
   },
   "workspaceMap": {
     "loadingWorkspace": "Caricamento area di lavoro…",
@@ -918,6 +938,39 @@
       }
     },
     "enabled": "Attivo"
+  },
+  "apiKeys": {
+    "title": "Chiavi API",
+    "intro": "Una credenziale per uno script o un job di CI: inviata come “{header}”. Si gestiscono qui, dopo l’accesso: una chiave non può creare o revocare chiavi, cambiare la password o chiudere sessioni.",
+    "name": "Nome",
+    "namePlaceholder": "Chi la userà: ci, terraform…",
+    "scope": "Può",
+    "scopeRead": "Leggere",
+    "scopeFull": "Leggere e scrivere",
+    "scopeReadHint": "Una chiave di lettura può fare GET e nient’altro — nemmeno una POST che legge soltanto: ciò che può fare si capisce dal verbo.",
+    "scopeFullHint": "Può fare ciò che puoi fare tu, tranne tutto ciò che riguarda le credenziali.",
+    "expires": "Scade",
+    "never": "Mai",
+    "inDays": "Tra {days} giorni",
+    "create": "Crea chiave",
+    "couldNotCreate": "Impossibile creare la chiave",
+    "freshTitle": "La chiave “{name}”: copiala adesso",
+    "freshHint": "È l’unica volta in cui viene mostrata. Syncle ne conserva un hash, non la chiave: se va persa, revocala e creane un’altra.",
+    "freshDone": "L’ho copiata",
+    "copy": "Copia",
+    "copied": "Copiata",
+    "revoke": "Revoca",
+    "revokeTitle": "Revocare la chiave “{name}”?",
+    "revokeDescription": "Chi la usa smette subito di funzionare. Non si può annullare; la chiave resta in elenco, barrata, così da poter capire quale fosse.",
+    "revoked": "Chiave revocata",
+    "couldNotRevoke": "Impossibile revocare la chiave",
+    "lastUsed": "ultimo uso {date}",
+    "neverUsed": "mai usata",
+    "expiresOn": "scade il {date}",
+    "state": {
+      "revoked": "revocata",
+      "expired": "scaduta"
+    }
   },
   "structureView": {
     "empty": "Seleziona una tabella per esaminarne la struttura.",

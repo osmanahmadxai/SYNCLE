@@ -9,6 +9,8 @@ import {
 } from '@tanstack/react-query';
 import type {
   AlertChannelInput,
+  ApiKeyInputDTO,
+  BridgeImportDTO,
   AppSettingsDTO,
   BrowseParams,
   ChangePasswordDTO,
@@ -27,6 +29,7 @@ export const queryKeys = {
   settings: ['settings'] as const,
   version: ['version'] as const,
   alertChannels: ['alert-channels'] as const,
+  apiKeys: ['api-keys'] as const,
   drivers: ['drivers'] as const,
   workspaces: ['workspaces'] as const,
   connections: ['connections'] as const,
@@ -120,6 +123,42 @@ export function useUpdateSettings() {
       qc.setQueryData(queryKeys.settings, settings);
       qc.invalidateQueries({ queryKey: queryKeys.settings });
     },
+  });
+}
+
+export function useApiKeys() {
+  return useQuery({ queryKey: queryKeys.apiKeys, queryFn: () => api.listApiKeys() });
+}
+
+export function useCreateApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ApiKeyInputDTO) => api.createApiKey(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.apiKeys }),
+  });
+}
+
+export function useRevokeApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.revokeApiKey(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.apiKeys }),
+  });
+}
+
+export function useCloneBridge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.cloneBridge(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
+  });
+}
+
+export function useImportBridges() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BridgeImportDTO) => api.importBridges(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
   });
 }
 

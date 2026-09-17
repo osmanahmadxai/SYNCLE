@@ -1186,6 +1186,42 @@ export default function Page() {
         <a href="/docs/quickstart">quickstart</a>.
       </p>
 
+      <h2 id="export-import">Duplicate, export, import</h2>
+      <p>
+        <strong>Duplicate</strong> makes a copy of a bridge under a new name,
+        in the same workspace — credential and all, since it never leaves
+        the instance. The copy has no job and no position: a copy of a live
+        bridge starts from scratch when it is started.
+      </p>
+      <p>
+        <strong>Export</strong> downloads a bridge (or, from the API, a whole
+        workspace) as a JSON document: to keep in version control, to move
+        from staging to production, to hand to a colleague. What travels is
+        configuration — source, filters, transforms, targets, delete policy,
+        delivery, trigger. What never does is anything secret:
+      </p>
+      <ul>
+        <li>
+          an HTTP destination&apos;s token or header value leaves{' '}
+          <em>empty</em>. A bridge imported without its credential arrives
+          switched off, and says why;
+        </li>
+        <li>
+          a connection is a reference — its id, with its name and engine
+          beside it. Where it points, and as whom, is not part of a bridge and
+          is not exported.
+        </li>
+      </ul>
+      <p>
+        <strong>Import</strong> has to find this instance&apos;s connections
+        for the ones the file talks about: the same id (a re-import where it
+        came from), else the only connection here with that name and engine.
+        When neither settles it, Syncle asks — listing your connections of
+        that engine — and creates nothing until every one is decided: half an
+        import is worse than none. Names that are taken get{' '}
+        <code>(imported)</code> appended.
+      </p>
+
       <h2 id="fan-out-and-chaining">Fan-out and chaining</h2>
       <p>
         Because a database destination is a list of targets, one bridge can

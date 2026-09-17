@@ -143,8 +143,9 @@ curl -c cookies.txt -H 'Content-Type: application/json' \\
 # every later call sends it back
 curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
       <Note>
-        There are no API keys — the session cookie is the only credential
-        for the API. A handful of routes work without it: the two probes{' '}
+        Two credentials reach the API: the session cookie of whoever signed
+        in, and an <a href="#api-keys">API key</a> for what cannot sign in. A
+        handful of routes work without either: the two probes{' '}
         <code>GET /api/health</code> and <code>GET /api/health/ready</code>,{' '}
         <code>GET /api/auth/status</code>, <code>POST /api/auth/setup</code>{' '}
         and <code>POST /api/auth/login</code>. <code>GET /api/metrics</code>{' '}
@@ -531,6 +532,69 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         setting and its default.
       </p>
 
+      <h3 id="api-keys">API keys</h3>
+      <p>
+        A script or a CI job should not be given the operator&apos;s
+        password. Create a key in <strong>Settings › Security</strong> and
+        send it as a bearer token:
+      </p>
+      <CodeBlock>{`$ curl -H "Authorization: Bearer syn_…" http://localhost:3002/api/bridges`}</CodeBlock>
+      <ul>
+        <li>
+          The key is shown <strong>once</strong>, when it is created. What is
+          stored is its SHA-256 — the key is 32 random bytes, so there is
+          nothing to brute-force, and a copy of the metadata store yields no
+          usable key. Lost keys are revoked and replaced, not recovered.
+        </li>
+        <li>
+          <strong>Scope.</strong> <code>read</code> may <code>GET</code> and
+          nothing else — not even a <code>POST</code> that only reads, so
+          that what a read key can do is answerable by looking at the verb.{' '}
+          <code>full</code> may do what the operator can, <em>except</em>{' '}
+          anything about credentials: no key of any scope can list, create or
+          revoke keys, change the password, or end sessions (403). A leaked
+          key cannot mint more keys or lock you out.
+        </li>
+        <li>
+          A key can be given an expiry; a revoked or expired key answers 401
+          at once. Revoked keys stay in the list, crossed out, with when they
+          were last used — so &quot;which key was that?&quot; has an answer.
+        </li>
+      </ul>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint (signed in only)</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/auth/api-keys</code>
+              </td>
+              <td>List keys: name, how each starts, scope, expiry, last use</td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/auth/api-keys</code>
+              </td>
+              <td>
+                <code>{'{ name, scope, expiresInDays? }'}</code> — the answer
+                carries <code>key</code>, this once
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>DELETE /api/auth/api-keys/:id</code>
+              </td>
+              <td>Revoke</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <h2 id="monitoring">Health, metrics and alerts</h2>
       <div className="table-scroll">
         <table>
@@ -674,6 +738,37 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 <code>DELETE /api/bridges/:id</code>
               </td>
               <td>Full lifecycle teardown, then delete</td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/clone</code>
+              </td>
+              <td>
+                A copy under a new name, credential included (it never
+                leaves the instance); no job, no position
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/export</code>,{' '}
+                <code>GET /api/bridges/export?workspaceId=</code>
+              </td>
+              <td>
+                One bridge, or a workspace&apos;s, as a document —{' '}
+                <a href="/docs/bridges#export-import">no secret is in it</a>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/import</code>
+              </td>
+              <td>
+                <code>{'{ document, connectionMap?, workspaceId? }'}</code>.
+                All or nothing. 400 with{' '}
+                <code>{'details.reason = "unresolved-connections"'}</code>{' '}
+                and the candidates when the file refers to a connection this
+                instance has no obvious counterpart for
+              </td>
             </tr>
           </tbody>
         </table>

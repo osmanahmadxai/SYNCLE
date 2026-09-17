@@ -8,6 +8,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createTranslator } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 
 const SRC = resolve(__dirname, '..');
@@ -99,6 +100,36 @@ describe('the three locales', () => {
         .map(([k]) => k);
       expect(empty, locale).toEqual([]);
     }
+  });
+});
+
+describe('every message', () => {
+  /**
+   * a message is a small program: `{count, plural, …}`, `<b>…</b>`. one that
+   * does not PARSE is not a build error and not a missing key — it is found when
+   * someone opens that screen in that language. a bare `<key>` in a sentence is
+   * enough ("Bearer <key>" was).
+   */
+  it.each(LOCALES)('%s: parses, and formats with a value for each of its placeholders', (locale) => {
+    const messages = load(locale);
+    const problems: string[] = [];
+    const t = createTranslator({
+      locale,
+      messages: messages as never,
+      onError: (err) => problems.push(err.message.slice(0, 160)),
+      getMessageFallback: ({ key }) => key,
+    });
+    for (const [key, message] of flatten(messages)) {
+      const values: Record<string, unknown> = {};
+      for (const name of placeholders(message)) {
+        values[name] = new RegExp(`\\{\\s*${name}\\s*,\\s*(plural|number|selectordinal)`).test(message) ? 2 : 'x';
+      }
+      const tags = [...message.matchAll(/<([A-Za-z][\w-]*)>/g)].map((m) => m[1]!);
+      for (const tag of tags) values[tag] = (chunks: unknown) => String(chunks);
+      if (tags.length) (t as unknown as { markup: (k: string, v: unknown) => string }).markup(key, values);
+      else (t as unknown as (k: string, v: unknown) => string)(key, values);
+    }
+    expect(problems).toEqual([]);
   });
 });
 

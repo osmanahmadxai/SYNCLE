@@ -374,6 +374,55 @@ export type WatchStrategyConfig = z.infer<typeof watchStrategySchema>;
 export type CdcOperation = z.infer<typeof cdcOperationSchema>;
 export type CdcReadinessDTO = z.infer<typeof cdcReadinessSchema>;
 
+/* -------------------------------------------------------------------------- */
+/* Export / import                                                            */
+/* -------------------------------------------------------------------------- */
+
+export const BRIDGE_EXPORT_FORMAT = 'syncle.bridges';
+
+/**
+ * bridges as a file: to keep in version control, to move from staging to
+ * production, to hand to a colleague.
+ *
+ * NO SECRET is ever in it. an HTTP destination's token or header value is
+ * exported empty (the bridge is then imported switched off, and says why), and
+ * a connection is referred to by id — with its name and engine beside it, which
+ * is what lets ANOTHER instance find its own connection for it. a connection's
+ * host, user and password are not part of a bridge and are not exported.
+ */
+export const bridgeExportSchema = z.object({
+  format: z.literal(BRIDGE_EXPORT_FORMAT),
+  version: z.literal(1),
+  exportedAt: z.string(),
+  syncleVersion: z.string().optional(),
+  connections: z.record(z.string(), z.object({ name: z.string(), engine: z.string() })),
+  bridges: z.array(z.lazy(() => bridgeInputSchema)).min(1).max(500),
+});
+export type BridgeExportDocument = z.infer<typeof bridgeExportSchema>;
+
+export const bridgeImportSchema = z.object({
+  document: bridgeExportSchema,
+  /** a connection id of the document → a connection id of THIS instance */
+  connectionMap: z.record(z.string(), z.string().min(1)).optional(),
+  workspaceId: z.string().optional(),
+});
+export type BridgeImportDTO = z.infer<typeof bridgeImportSchema>;
+
+/** a connection of the document that this instance has no obvious counterpart for */
+export interface UnresolvedConnection {
+  id: string;
+  name: string;
+  engine: string;
+  /** this instance's connections of the same engine: what it could be mapped to */
+  candidates: Array<{ id: string; name: string }>;
+}
+
+export interface BridgeImportResult {
+  created: Array<{ id: string; name: string }>;
+  /** what whoever imported has to do before the bridges are what they were */
+  warnings: string[];
+}
+
 /** body of `POST /bridges/:id/watch/start`; every field optional, as is the body */
 export const liveStartSchema = z
   .object({

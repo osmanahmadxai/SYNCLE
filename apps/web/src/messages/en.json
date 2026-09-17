@@ -165,7 +165,13 @@
     "couldNotDelete": "Could not delete",
     "positionLostRecopyDescription": "This bridge copies its table before it follows it, and can do that again: every row that still exists at the source is brought up to date, then changes are followed from now. Rows that were deleted at the source in the meantime stay at the destination.",
     "copyAgainThenFollow": "Copy the table again, then follow",
-    "withoutCopying": "Not like this"
+    "withoutCopying": "Not like this",
+    "clone": "Duplicate",
+    "cloned": "Created “{name}”",
+    "couldNotClone": "Could not duplicate the bridge",
+    "export": "Export",
+    "exportHint": "Download this bridge as a file (no secrets are included)",
+    "couldNotExport": "Could not export the bridge"
   },
   "bridgeList": {
     "map": "Map",
@@ -179,6 +185,20 @@
     "badgeFailed": "Failed",
     "badgeOnDemand": "On-demand",
     "badgeIdle": "Idle"
+  },
+  "bridgeTransfer": {
+    "import": "Import",
+    "importHint": "Create bridges from an exported file",
+    "imported": "{count, plural, one {# bridge imported} other {# bridges imported}}",
+    "couldNotImport": "Could not import",
+    "notJson": "That file is not JSON.",
+    "notAnExport": "That file is not a Syncle bridge export (or is from a format this version does not know).",
+    "mapTitle": "Which connections?",
+    "mapDescription": "The file refers to connections this instance has no obvious counterpart for. Say which of yours to use for each. Nothing has been created yet.",
+    "pickConnection": "Pick a connection",
+    "noCandidates": "There is no {engine} connection here. Create one first, then import again.",
+    "cancel": "Cancel",
+    "importNow": "Import"
   },
   "workspaceMap": {
     "loadingWorkspace": "Loading workspace…",
@@ -918,6 +938,39 @@
       }
     },
     "enabled": "Enabled"
+  },
+  "apiKeys": {
+    "title": "API keys",
+    "intro": "A credential for a script or a CI job: sent as “{header}”. Managed here, signed in — a key cannot create or revoke keys, change the password, or end sessions.",
+    "name": "Name",
+    "namePlaceholder": "What will use it: ci, terraform…",
+    "scope": "May",
+    "scopeRead": "Read",
+    "scopeFull": "Read and write",
+    "scopeReadHint": "A read key may GET and nothing else — not even a POST that only reads, so what it can do is answerable by the verb.",
+    "scopeFullHint": "May do what you can, except anything about credentials.",
+    "expires": "Expires",
+    "never": "Never",
+    "inDays": "In {days} days",
+    "create": "Create key",
+    "couldNotCreate": "Could not create the key",
+    "freshTitle": "The key “{name}” — copy it now",
+    "freshHint": "This is the only time it is shown. Syncle keeps a hash of it, not the key: if it is lost, revoke it and make another.",
+    "freshDone": "I have copied it",
+    "copy": "Copy",
+    "copied": "Copied",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke the key “{name}”?",
+    "revokeDescription": "Whatever uses it stops working at once. This cannot be undone; the key stays in the list, crossed out, so that you can tell which one it was.",
+    "revoked": "Key revoked",
+    "couldNotRevoke": "Could not revoke the key",
+    "lastUsed": "last used {date}",
+    "neverUsed": "never used",
+    "expiresOn": "expires {date}",
+    "state": {
+      "revoked": "revoked",
+      "expired": "expired"
+    }
   },
   "structureView": {
     "empty": "Select a table to inspect its structure.",

@@ -380,6 +380,22 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **API keys.** A script or a CI job no longer needs the operator's password:
+  create a key in *Settings › Security*, send it as `Authorization: Bearer
+  syn_…`. Shown once; only a SHA-256 of it is stored. `read` keys may `GET` and
+  nothing else; `full` keys may do what the operator can **except anything about
+  credentials** — no key can list, create or revoke keys, change the password or
+  end sessions, so a leaked key cannot mint more keys or lock you out. Optional
+  expiry; a revoked key stays listed, crossed out, with when it was last used.
+- **Duplicate, export and import bridges.** *Duplicate* copies a bridge in place
+  (credential included — it never leaves the instance). *Export* downloads a
+  bridge, or a workspace's, as a JSON document with **no secret in it**: an HTTP
+  credential leaves empty — never as the `********` the API shows for it, which
+  an import would have stored as the token — and a connection is a name and an
+  engine, not a host or a password. *Import* finds this instance's connections
+  by id, else by name and engine, and otherwise **asks**, listing the candidates;
+  nothing is created until every connection is decided. A bridge that arrives
+  without its credential arrives switched off, and says why.
 - **Production looks like production, and a connection can be read-only.**
   - An **environment** label on a connection (production / staging /
     development), shown wherever the connection is: the sidebar, next to the

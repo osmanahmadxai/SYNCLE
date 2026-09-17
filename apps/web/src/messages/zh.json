@@ -165,7 +165,13 @@
     "couldNotDelete": "删除失败",
     "positionLostRecopyDescription": "此桥接会先复制表再跟随变更，并且可以再复制一次：源端仍然存在的每一行都会被更新到最新，然后从现在开始跟随变更。在此期间源端已删除的行仍会保留在目标端。",
     "copyAgainThenFollow": "重新复制表，然后跟随变更",
-    "withoutCopying": "不这样做"
+    "withoutCopying": "不这样做",
+    "clone": "复制",
+    "cloned": "已创建“{name}”",
+    "couldNotClone": "无法复制桥接",
+    "export": "导出",
+    "exportHint": "将此桥接下载为文件（不包含任何密钥）",
+    "couldNotExport": "无法导出桥接"
   },
   "bridgeList": {
     "map": "地图",
@@ -179,6 +185,20 @@
     "badgeFailed": "失败",
     "badgeOnDemand": "按需",
     "badgeIdle": "空闲"
+  },
+  "bridgeTransfer": {
+    "import": "导入",
+    "importHint": "从导出的文件创建桥接",
+    "imported": "{count, plural, other {已导入 # 个桥接}}",
+    "couldNotImport": "无法导入",
+    "notJson": "该文件不是 JSON。",
+    "notAnExport": "该文件不是 Syncle 的桥接导出文件（或其格式是此版本不认识的）。",
+    "mapTitle": "使用哪些连接？",
+    "mapDescription": "文件引用的连接在此实例中没有明显对应项。请为每一个指定要使用的连接。目前尚未创建任何内容。",
+    "pickConnection": "选择一个连接",
+    "noCandidates": "这里没有 {engine} 连接。请先创建一个，然后重新导入。",
+    "cancel": "取消",
+    "importNow": "导入"
   },
   "workspaceMap": {
     "loadingWorkspace": "正在加载工作区…",
@@ -918,6 +938,39 @@
       }
     },
     "enabled": "启用"
+  },
+  "apiKeys": {
+    "title": "API 密钥",
+    "intro": "供脚本或 CI 任务使用的凭据：以 “{header}” 发送。需登录后在此管理——密钥不能创建或吊销密钥、不能修改密码，也不能结束会话。",
+    "name": "名称",
+    "namePlaceholder": "由谁使用：ci、terraform……",
+    "scope": "权限",
+    "scopeRead": "只读",
+    "scopeFull": "读写",
+    "scopeReadHint": "只读密钥只能 GET，别无其他——即使是只读取数据的 POST 也不行，这样只看请求方法就能知道它能做什么。",
+    "scopeFullHint": "可以做你能做的事，但与凭据有关的一切除外。",
+    "expires": "有效期",
+    "never": "永不过期",
+    "inDays": "{days} 天后",
+    "create": "创建密钥",
+    "couldNotCreate": "无法创建密钥",
+    "freshTitle": "密钥“{name}”——请立即复制",
+    "freshHint": "这是它唯一一次显示。Syncle 只保存其哈希而非密钥本身：如果丢失，请吊销后重新创建。",
+    "freshDone": "我已复制",
+    "copy": "复制",
+    "copied": "已复制",
+    "revoke": "吊销",
+    "revokeTitle": "吊销密钥“{name}”？",
+    "revokeDescription": "使用它的程序会立即失效。此操作无法撤销；密钥会以删除线形式保留在列表中，方便你辨认是哪一个。",
+    "revoked": "密钥已吊销",
+    "couldNotRevoke": "无法吊销密钥",
+    "lastUsed": "上次使用 {date}",
+    "neverUsed": "从未使用",
+    "expiresOn": "{date} 到期",
+    "state": {
+      "revoked": "已吊销",
+      "expired": "已过期"
+    }
   },
   "structureView": {
     "empty": "选择一个表以查看其结构。",

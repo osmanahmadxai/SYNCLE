@@ -286,3 +286,26 @@ model AlertChannel {
 
   @@map("alert_channels")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  API keys: a credential for a script, a CI job, a Terraform run — something
+//  that cannot type a password into a login form and should not be given one.
+//
+//  Only a SHA-256 of the key is kept. The key is 32 random bytes, so there is
+//  nothing to brute-force and a fast hash is the right one: it is looked up on
+//  every request. The key itself is shown once, when it is created.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id         String    @id
+  name       String
+  prefix     String // the first characters of the key, to tell keys apart in a list
+  hash       String    @unique
+  scope      String // read | full
+  expiresAt  DateTime? @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("api_keys")
+}

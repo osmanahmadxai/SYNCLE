@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
+import { CopyPlus, Download, Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { ApiError } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import { downloadText, fileSlug } from '@/lib/download';
 import {
+  useCloneBridge,
   useDeleteBridge,
   useBridgeJobs,
   useBridges,
@@ -87,11 +89,12 @@ function BridgePanel({
   const locale = useLocale();
   const t = useTranslations('bridges');
   const tc = useTranslations('common');
-  const { openBridgeEditor } = useStudio();
+  const { openBridgeEditor, selectBridge } = useStudio();
   const start = useStartBridgeJob(bridgeId);
   const startWatch = useStartWatch(bridgeId);
   const stopWatch = useStopWatch(bridgeId);
   const del = useDeleteBridge();
+  const clone = useCloneBridge();
   const { data: jobs } = useBridgeJobs(bridgeId);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const listening = !!jobs?.some((r) =>
@@ -110,6 +113,25 @@ function BridgePanel({
   }, [jobs]);
 
   const selectedJob = jobs?.find((r) => r.id === selectedJobId) ?? null;
+
+  async function handleClone() {
+    try {
+      const copy = await clone.mutateAsync(bridgeId);
+      toast.success(t('cloned', { name: copy.name }));
+      selectBridge(copy.id);
+    } catch (err) {
+      toast.error(t('couldNotClone'), { description: err instanceof ApiError ? err.message : String(err) });
+    }
+  }
+
+  async function handleExport() {
+    try {
+      const doc = await api.exportBridge(bridgeId);
+      downloadText(`${fileSlug(bridgeName)}.syncle-bridge.json`, `${JSON.stringify(doc, null, 2)}\n`);
+    } catch (err) {
+      toast.error(t('couldNotExport'), { description: err instanceof ApiError ? err.message : String(err) });
+    }
+  }
 
   async function handleRun() {
     try {
@@ -265,6 +287,12 @@ function BridgePanel({
           >
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
             {tc('edit')}
+          </Button>
+          <Button size="sm" variant="ghost" title={t('clone')} aria-label={t('clone')} disabled={clone.isPending} onClick={() => void handleClone()}>
+            <CopyPlus className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" title={t('exportHint')} aria-label={t('export')} onClick={() => void handleExport()}>
+            <Download className="h-3.5 w-3.5" />
           </Button>
           <Button size="sm" variant="ghost" onClick={handleDelete}>
             <Trash2 className="text-destructive h-3.5 w-3.5" />

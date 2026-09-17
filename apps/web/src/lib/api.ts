@@ -6,8 +6,14 @@ import type {
   AlertChannel,
   AlertChannelInput,
   AlertTestResult,
+  ApiKeyCreated,
+  ApiKeyInfo,
+  ApiKeyInputDTO,
   AppSettings,
   AppSettingsDTO,
+  BridgeExportDocument,
+  BridgeImportDTO,
+  BridgeImportResult,
   AuthStatus,
   AuthUser,
   BrowseParams,
@@ -129,6 +135,23 @@ export const api = {
     ),
   updateSettings: (input: AppSettingsDTO) =>
     request<AppSettings>('/settings', { method: 'PUT', ...jsonBody(input) }),
+
+  /* ----- API keys (managed signed in; a key cannot manage keys) ----- */
+  listApiKeys: () => request<ApiKeyInfo[]>('/auth/api-keys'),
+  /** the answer carries the key itself: this once */
+  createApiKey: (input: ApiKeyInputDTO) =>
+    request<ApiKeyCreated>('/auth/api-keys', { method: 'POST', ...jsonBody(input) }),
+  revokeApiKey: (id: string) => request<ApiKeyInfo>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
+
+  /* ----- bridges as a file ----- */
+  exportBridge: (id: string) => request<BridgeExportDocument>(`/bridges/${id}/export`),
+  exportBridges: (workspaceId?: string) =>
+    request<BridgeExportDocument>(
+      workspaceId ? `/bridges/export?workspaceId=${encodeURIComponent(workspaceId)}` : '/bridges/export',
+    ),
+  importBridges: (input: BridgeImportDTO) =>
+    request<BridgeImportResult>('/bridges/import', { method: 'POST', ...jsonBody(input) }),
+  cloneBridge: (id: string) => request<Bridge>(`/bridges/${id}/clone`, { method: 'POST' }),
 
   /* ----- alert channels ----- */
   listAlertChannels: () => request<AlertChannel[]>('/alerts/channels'),

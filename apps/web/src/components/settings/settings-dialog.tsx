@@ -31,6 +31,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertsTab } from './alerts-tab';
+import { ApiKeysSection } from './api-keys-section';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -443,6 +444,7 @@ function SecurityTab({ settings }: { settings: AppSettings }) {
         onChange={(v) => set('sessionTtlMinutes', v)}
       />
       <SaveBar saving={saving} onSave={save} />
+      <ApiKeysSection />
     </div>
   );
 }

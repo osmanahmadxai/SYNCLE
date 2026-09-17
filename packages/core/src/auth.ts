@@ -127,3 +127,43 @@ export interface AppSettings {
   deliveryRetentionDays: number;
   deliveryMaxPerJob: number;
 }
+
+/* -------------------------------------------------------------------------- */
+/* API keys                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `read`  may look: every GET. nothing else — not even a POST that only reads,
+ *         so that what a read key can do is answerable by looking at the verb
+ * `full`  may do what the operator can, EXCEPT what concerns credentials: it
+ *         cannot create or revoke keys, change the password, or end sessions
+ */
+export const apiKeyScopeSchema = z.enum(['read', 'full']);
+export type ApiKeyScope = z.infer<typeof apiKeyScopeSchema>;
+
+export const apiKeyInputSchema = z.object({
+  name: z.string().trim().min(1, 'Name the key after what will use it').max(120),
+  scope: apiKeyScopeSchema.default('read'),
+  /** days until it stops working; omitted = it does not expire */
+  expiresInDays: z.coerce.number().int().min(1).max(3650).optional(),
+});
+export type ApiKeyInputDTO = z.infer<typeof apiKeyInputSchema>;
+
+/** a key as it is listed: never the key itself */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  /** how the key starts (`syn_a1b2c3d4…`), to tell it from the others */
+  prefix: string;
+  scope: ApiKeyScope;
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** the answer to creating a key: the only time the key itself is ever sent */
+export interface ApiKeyCreated extends ApiKeyInfo {
+  key: string;
+}
+

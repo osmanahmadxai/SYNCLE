@@ -23,6 +23,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './current-user.decorator';
 import { Public } from './public.decorator';
+import { SessionOnly } from './session-only.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -71,18 +72,21 @@ export class AuthController {
     return this.auth.toAuthUser(user);
   }
 
+  @SessionOnly()
   @Post('logout')
   logout(@Res({ passthrough: true }) res: Response): { success: true } {
     this.auth.clearSession(res);
     return { success: true };
   }
 
+  @SessionOnly()
   @Get('me')
   me(@CurrentUser() user: AppUser | undefined): AuthUser {
     if (!user) throw new UnauthorizedError();
     return this.auth.toAuthUser(user);
   }
 
+  @SessionOnly()
   @Post('change-password')
   async changePassword(
     @Body(new ZodValidationPipe(changePasswordSchema)) dto: ChangePasswordDTO,
