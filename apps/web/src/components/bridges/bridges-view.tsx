@@ -114,12 +114,33 @@ function BridgePanel({
     }
   }
 
-  async function handleStartWatch() {
+  async function handleStartWatch(fromNow = false) {
     try {
-      const job = await startWatch.mutateAsync();
+      const job = await startWatch.mutateAsync({ fromNow });
       setSelectedJobId(job.id);
       toast.success(t('listeningForData'));
     } catch (err) {
+      // the bridge's place in the source's change log is gone. it can only
+      // carry on from now, leaving a gap — which is the user's call, not ours
+      const lost =
+        err instanceof ApiError &&
+        (err.details as { reason?: string } | undefined)?.reason ===
+          'position-lost';
+      if (lost && !fromNow) {
+        const ok = await confirm({
+          title: t('positionLostTitle'),
+          description: (
+            <span className="space-y-2">
+              <span className="block">{(err as ApiError).message}</span>
+              <span className="block">{t('positionLostDescription')}</span>
+            </span>
+          ),
+          confirmText: t('continueFromNow'),
+          destructive: true,
+        });
+        if (ok) await handleStartWatch(true);
+        return;
+      }
       toast.error(t('couldNotStartListening'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
@@ -185,7 +206,7 @@ function BridgePanel({
             ) : (
               <Button
                 size="sm"
-                onClick={handleStartWatch}
+                onClick={() => void handleStartWatch()}
                 disabled={startWatch.isPending}
               >
                 {startWatch.isPending ? (

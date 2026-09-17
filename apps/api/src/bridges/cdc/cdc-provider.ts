@@ -74,6 +74,17 @@ export interface CdcStreamHandlers {
    * the position is passed like any skip.
    */
   onNotice?(message: string, cursor: string): Promise<void>;
+  /**
+   * the place this stream was resuming from no longer exists on the source: the
+   * oplog rolled past the resume token, the binlog file was purged. whatever
+   * happened between that position and now can never be read.
+   *
+   * a provider must NOT quietly carry on from "now" — that is a hole in the
+   * destination nobody was told about. it reports it here and stops reading;
+   * the orchestrator stops the bridge and says so, and the next start has to
+   * accept the gap explicitly.
+   */
+  onPositionLost?(message: string): Promise<void>;
   /** a non-fatal transport error. logged, the provider keeps/reconnects */
   onError(err: Error): void;
 }
@@ -100,6 +111,39 @@ export interface CdcStreamHandle {
    * which the orchestrator's watermark dedupe absorbs. must not throw.
    */
   ack?(cursor: string): Promise<void>;
+}
+
+/**
+ * what a bridge is holding on its SOURCE, and what that costs the source.
+ *
+ * a PostgreSQL replication slot makes the server keep every byte of WAL written
+ * since the slot's position — for as long as the slot exists, whether or not
+ * anything is reading it. a bridge that is paused, failed, or whose Syncle is
+ * simply switched off keeps the slot, and the source's disk fills until the
+ * database stops accepting writes. elsewhere the risk runs the other way: MySQL
+ * purges its binlog on its own schedule, and a bridge paused for longer than
+ * that has lost its place.
+ */
+export interface CdcSourceHold {
+  engine: DatabaseEngine;
+  kind: 'replication-slot' | 'log-position';
+  /** the slot's name, or the log file the bridge's position is in */
+  name: string;
+  /** false = it is gone: the slot was dropped, the log file was purged */
+  exists: boolean;
+  /** a reader is attached right now (null = not applicable) */
+  active: boolean | null;
+  /** log the source must KEEP because of this bridge, in bytes (null = none/unknown) */
+  retainedBytes: number | null;
+  /** the server's own cap on that (`max_slot_wal_keep_size`); null = no cap */
+  limitBytes: number | null;
+  /**
+   * ok      the bridge can resume from where it stopped
+   * at-risk the server is about to discard what the bridge still needs
+   * lost    it already has: the bridge cannot resume from its position
+   */
+  status: 'ok' | 'at-risk' | 'lost';
+  detail?: string;
 }
 
 export interface CdcProvider {
@@ -137,10 +181,30 @@ export interface CdcProvider {
   provision(bridgeId: string, bridge: ResolvedBridge, conn: ConnectionConfig): Promise<void>;
 
   /**
-   * drop everything {@link provision} created. only called on bridge delete.
-   * must never throw fatally.
+   * drop everything {@link provision} created: when a bridge is deleted, stops
+   * being a CDC bridge, moves to another source, or gives up its position.
+   *
+   * resolves once nothing is left on the source, and THROWS when something
+   * could not be removed. "never throws" used to be the contract, and it meant
+   * a replication slot that could not be dropped (the source was unreachable
+   * for a moment) was logged and forgotten — left pinning WAL for ever, with
+   * the only record of its name gone along with the bridge. the caller now
+   * queues a failed removal and tries again.
    */
   deprovision(bridgeId: string, bridge: ResolvedBridge, conn: ConnectionConfig): Promise<void>;
+
+  /**
+   * what this bridge holds on the source right now (see {@link CdcSourceHold}).
+   * `cursor` is the bridge's saved position, for engines whose hold is a place
+   * in a log. null = this engine holds nothing worth reporting. may throw when
+   * the source cannot be reached.
+   */
+  inspect?(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+    cursor: string | null,
+  ): Promise<CdcSourceHold | null>;
 
   /** open the long-lived connection and start emitting changes */
   startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle>;

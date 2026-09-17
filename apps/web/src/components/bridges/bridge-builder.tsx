@@ -288,6 +288,7 @@ export function BridgeBuilder() {
                 sourceEngine={
                   connections?.find((c) => c.id === connectionId)?.engine
                 }
+                bridgeId={editing}
               />
               <PayloadSection
                 draft={draft}

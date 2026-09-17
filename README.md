@@ -420,6 +420,9 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_CDC_SPOOL_MAX`   | api   | Unwritten changes held in the spool before the reader is throttled (default `50000`) |
 | `SYNCLE_DEAD_LETTER_MAX_ROWS` | api | Undelivered rows one bridge may hold in its dead-letter queue before it stops instead (default `10000`) |
 | `SYNCLE_MAX_CONSECUTIVE_FAILURES` | api | Batches in a row that may deliver nothing before a `continue` bridge stops (default `5`) |
+| `SYNCLE_SLOT_CHECK_SECONDS` | api | How often to measure the WAL each CDC bridge's replication slot pins on its source (default `60`; `0` = off) |
+| `SYNCLE_SLOT_WARN_BYTES` | api | WAL pinned by one bridge before it is flagged (default 1 GiB) |
+| `SYNCLE_SLOT_MAX_BYTES` | api | WAL pinned by a *stopped* bridge before its slot is dropped to protect the source (default `0` = never) |
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
@@ -535,6 +538,17 @@ for you and spells out what's missing.
 - **A delete carries only the source's key**, so a target that should receive
   deletes has to be keyed on it (or the table set to `REPLICA IDENTITY FULL`).
   A mismatch is refused at start instead of silently deleting nothing.
+- **A replication slot pins WAL for as long as it exists**, read or not — so a
+  bridge left paused fills the source's disk. Syncle measures it, warns past
+  `SYNCLE_SLOT_WARN_BYTES`, releases the slot when a bridge is deleted or edited
+  away from CDC (and retries if that fails), and the readiness check tells you
+  when the server has no `max_slot_wal_keep_size` — set one; it is the safety
+  net that still works while Syncle is off. Each CDC bridge needs one slot and
+  one WAL sender (`max_replication_slots`, `max_wal_senders`).
+- **A lost position is never papered over.** If the slot was dropped or
+  invalidated (or MySQL purged the binlog, or MongoDB's oplog rolled over), the
+  bridge stops and says so; starting it again asks you to confirm continuing
+  from now, and a replay fills the gap.
 - **`TRUNCATE` is opt-in.** By default the destination keeps its rows and the
   timeline records that the source was truncated. Add `truncate` to the
   bridge's operations to empty the destination tables too.

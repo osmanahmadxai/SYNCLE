@@ -340,7 +340,10 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Delete — answers 409 <code>CONFLICT</code> while any bridge
-                still uses it as source or destination
+                still uses it as source or destination, or while Syncle still
+                has a replication slot to remove through it (
+                <code>?force=true</code> deletes it regardless; drop the slot
+                on the server yourself first)
               </td>
             </tr>
             <tr>
@@ -751,9 +754,14 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Probe whether a source can do CDC —{' '}
-                <code>{'{ connectionId, database?, schema?, table }'}</code>;
-                see <a href="/docs/cdc">CDC setup</a> for what readiness means
-                per engine
+                <code>{'{ connectionId, database?, schema?, table, bridgeId? }'}</code>
+                . Pass <code>bridgeId</code> for a bridge that already exists,
+                so that the replication slot it owns is not counted against
+                it. Besides <code>checks</code> and <code>instructions</code>{' '}
+                the answer may carry <code>advisories</code>: things that do
+                not block a start but are worth knowing first. See{' '}
+                <a href="/docs/cdc">CDC setup</a> for what readiness means per
+                engine
               </td>
             </tr>
             <tr>
@@ -762,7 +770,37 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Start live listening; routed to CDC or polling watch by the
-                bridge&apos;s trigger
+                bridge&apos;s trigger. If the bridge&apos;s place in the
+                source&apos;s change log is gone, it answers 400 with{' '}
+                <code>{'details: { reason: "position-lost" }'}</code>; send{' '}
+                <code>{'{ "fromNow": true }'}</code> to continue from the
+                current position and accept the gap
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/source-hold</code>
+              </td>
+              <td>
+                What a CDC bridge is holding on its source —{' '}
+                <code>
+                  {'{ kind, name, exists, active, retainedBytes, limitBytes, status, level, message, running }'}
+                </code>
+                , or <code>null</code> when it holds nothing. For PostgreSQL,{' '}
+                <code>retainedBytes</code> is the WAL pinned by the
+                bridge&apos;s replication slot
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/cdc/cleanups</code>
+              </td>
+              <td>
+                Replication slots of deleted or edited bridges that could not
+                be dropped yet. They are retried every minute;{' '}
+                <code>POST /api/bridges/cdc/cleanups/retry</code> tries now,
+                and <code>DELETE /api/bridges/cdc/cleanups/:id</code> stops
+                tracking one you removed by hand
               </td>
             </tr>
             <tr>

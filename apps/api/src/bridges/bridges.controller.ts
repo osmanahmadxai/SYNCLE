@@ -18,8 +18,11 @@ import {
   type BridgeJob,
   type StartJobDTO,
   type SkipDTO,
+  type BridgeSourceHold,
   type CdcReadiness,
   type CdcReadinessDTO,
+  type LiveStartDTO,
+  type PendingSourceCleanup,
   type DeadLetterDiscardDTO,
   type DeadLetterPage,
   type DeadLetterRetryDTO,
@@ -30,6 +33,7 @@ import {
   bridgePreviewSchema,
   deadLetterDiscardSchema,
   deadLetterRetrySchema,
+  liveStartSchema,
   mapRow,
   renderRow,
   skipSchema,
@@ -100,12 +104,29 @@ export class BridgesController {
     // kind — routing by the new one after an edit (say cdc → watch) would leave
     // the old stream running as a zombie, delivering into a finalized job
     const before = await this.store.get(id);
+    // what a CDC bridge created on its source lives on the source AS IT WAS.
+    // resolved now, because after the update nothing points there any more
+    const beforeResolved = before.trigger.kind === 'cdc' ? await this.store.resolve(id) : null;
     const wasListening =
       before.trigger.kind === 'cdc' || before.trigger.kind === 'watch'
         ? await this.lifecycle.stopListener(id, before.trigger.kind)
         : false;
 
     const bridge = await this.store.update(id, dto);
+
+    // no longer a CDC bridge, or no longer on that server/database: its
+    // replication slot there would otherwise pin WAL for ever, unread
+    if (beforeResolved && beforeResolved.source.kind === 'table') {
+      const was = beforeResolved.source;
+      const now = bridge.source;
+      const moved =
+        bridge.trigger.kind !== 'cdc' ||
+        now.kind !== 'table' ||
+        now.connectionId !== was.connectionId ||
+        (now.database ?? '') !== (was.database ?? '');
+      if (moved) await this.cdc.abandon(id, beforeResolved);
+    }
+
     // the destination may have changed; drop the sink's ensured-table cache
     this.databaseSink.forget(id);
     // refresh an existing draft so its queued timeline reflects the new config
@@ -262,9 +283,43 @@ export class BridgesController {
   }
 
   @Post(':id/watch/start')
-  async startWatch(@Param('id') id: string): Promise<BridgeJob> {
+  async startWatch(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(liveStartSchema)) dto: LiveStartDTO,
+  ): Promise<BridgeJob> {
     const bridge = await this.store.get(id);
-    return bridge.trigger.kind === 'cdc' ? this.cdc.start(id) : this.watch.start(id);
+    return bridge.trigger.kind === 'cdc'
+      ? this.cdc.start(id, { fromNow: dto.fromNow === true })
+      : this.watch.start(id);
+  }
+
+  /**
+   * what a CDC bridge is holding on its source right now — for PostgreSQL, how
+   * much WAL its replication slot is pinning. null when it holds nothing.
+   */
+  @Get(':id/source-hold')
+  async sourceHold(@Param('id') id: string): Promise<BridgeSourceHold | null> {
+    await this.store.get(id); // 404s if missing
+    return this.cdc.hold(id);
+  }
+
+  /** replication slots of removed bridges that could not be dropped yet */
+  @Get('cdc/cleanups')
+  async pendingCleanups(): Promise<PendingSourceCleanup[]> {
+    return this.cdc.listCleanups();
+  }
+
+  /** try them all again now, rather than at the next sweep */
+  @Post('cdc/cleanups/retry')
+  async retryCleanups(): Promise<{ left: number }> {
+    return { left: await this.cdc.retryCleanups() };
+  }
+
+  /** stop tracking one — after it was removed on the server by hand */
+  @Delete('cdc/cleanups/:cleanupId')
+  async dismissCleanup(@Param('cleanupId') cleanupId: string): Promise<{ id: string }> {
+    await this.cdc.dismissCleanup(cleanupId);
+    return { id: cleanupId };
   }
 
   @Post(':id/watch/stop')

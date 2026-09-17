@@ -266,6 +266,49 @@ export default function Page() {
         </table>
       </div>
 
+      <h2 id="position-lost">A bridge says it cannot resume where it stopped</h2>
+      <p>
+        A live bridge resumes from a position in the source&apos;s change log,
+        and that position no longer exists. The message names the cause: the
+        PostgreSQL replication slot was dropped or invalidated (the server
+        hit <code>max_slot_wal_keep_size</code>, or Syncle&apos;s own{' '}
+        <code>SYNCLE_SLOT_MAX_BYTES</code> guard gave it up, or someone
+        dropped it by hand); MySQL purged the binlog file; MongoDB&apos;s oplog
+        rolled past the resume token; or a MySQL connection now reaches a
+        different server than the one that issued the position.
+      </p>
+      <p>
+        What changed at the source in between cannot be read any more, so
+        there are two steps: start the bridge and confirm{' '}
+        <strong>Continue from now</strong>, then run a replay of the same
+        bridge to bring the destination up to date (writes are upserts, so
+        replaying over existing rows is safe). To stop it recurring, keep the
+        log for longer than a bridge is ever paused:{' '}
+        <code>max_slot_wal_keep_size</code>,{' '}
+        <code>binlog_expire_logs_seconds</code>, the oplog size.
+      </p>
+
+      <h2 id="source-disk">The source database&apos;s disk is filling up</h2>
+      <p>
+        On PostgreSQL, look for a replication slot nothing is reading:
+      </p>
+      <CodeBlock title="psql">{`SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS pinned
+FROM pg_replication_slots ORDER BY 3 DESC;`}</CodeBlock>
+      <p>
+        A <code>syncle_slot_…</code> that is not active belongs to a bridge
+        that is paused or failed; the bridge&apos;s job view shows the same
+        figure with a warning. Start the bridge and it catches up and lets
+        the WAL go; delete the bridge and the slot goes with it. If the bridge
+        is already gone — it was deleted while the server was unreachable —
+        Syncle keeps retrying the drop (
+        <code>GET /api/bridges/cdc/cleanups</code>), or drop it yourself with{' '}
+        <code>SELECT pg_drop_replication_slot(&apos;syncle_slot_…&apos;);</code>
+        . Then set <code>max_slot_wal_keep_size</code> so that it cannot
+        happen again; the details are under{' '}
+        <a href="/docs/cdc#postgres-slots">replication slots</a>.
+      </p>
+
       <h2 id="dead-letters-stuck">Rows will not leave the dead-letter queue</h2>
       <p>
         A retry that still fails keeps the entry and replaces its error with

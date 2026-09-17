@@ -292,6 +292,49 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_SLOT_CHECK_SECONDS</code>
+              </td>
+              <td>
+                <code>60</code>
+              </td>
+              <td>
+                How often to measure what each CDC bridge is holding on its
+                source — for PostgreSQL, the WAL pinned by its replication
+                slot — and to retry dropping slots that could not be dropped.{' '}
+                <code>0</code> turns it off.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SLOT_WARN_BYTES</code>
+              </td>
+              <td>
+                <code>1073741824</code>
+              </td>
+              <td>
+                WAL pinned by one bridge before it is flagged in the job view
+                and the log (1 GiB). <code>0</code> never warns.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SLOT_MAX_BYTES</code>
+              </td>
+              <td>
+                <code>0</code>
+              </td>
+              <td>
+                WAL pinned by a bridge that is <em>not running</em> before
+                Syncle drops its replication slot to protect the source.{' '}
+                <code>0</code> (the default) never does: a dropped slot is a
+                gap in that bridge. Prefer{' '}
+                <code>max_slot_wal_keep_size</code> on the server, which also
+                works while Syncle is down — see{' '}
+                <a href="/docs/cdc#postgres-slots">replication slots</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_MAX_QUERY_ROWS</code>
               </td>
               <td>

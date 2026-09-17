@@ -34,6 +34,7 @@ import type {
   UpdateRowParams,
   Workspace,
   WorkspaceInputDTO,
+  BridgeSourceHold,
 } from '@syncle/core';
 
 /**
@@ -313,8 +314,18 @@ export const api = {
       method: 'POST',
       ...jsonBody({ sequences }),
     }),
-  startWatch: (id: string) =>
-    request<BridgeJob>(`/bridges/${id}/watch/start`, { method: 'POST' }),
+  /**
+   * `fromNow`: the bridge's place in the source's change log is gone, and the
+   * caller accepts that what happened in between will not be captured
+   */
+  startWatch: (id: string, opts: { fromNow?: boolean } = {}) =>
+    request<BridgeJob>(`/bridges/${id}/watch/start`, {
+      method: 'POST',
+      ...jsonBody(opts),
+    }),
+  /** what a CDC bridge is holding on its source; null when nothing */
+  sourceHold: (id: string) =>
+    request<BridgeSourceHold | null>(`/bridges/${id}/source-hold`),
   stopWatch: (id: string) =>
     request<BridgeJob | null>(`/bridges/${id}/watch/stop`, { method: 'POST' }),
   cdcReadiness: (body: CdcReadinessDTO) =>

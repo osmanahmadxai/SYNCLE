@@ -129,6 +129,9 @@
     "couldNotStartJob": "Could not start job",
     "listeningForData": "Listening for new data",
     "couldNotStartListening": "Could not start listening",
+    "positionLostTitle": "This bridge cannot resume where it stopped",
+    "positionLostDescription": "Continuing from now starts the bridge at the source's current position. Whatever changed at the source in between is not captured — run a replay afterwards to bring the destination up to date.",
+    "continueFromNow": "Continue from now",
     "stoppedListening": "Stopped listening",
     "couldNotStop": "Could not stop",
     "deleteTitle": "Delete \"{name}\"?",
@@ -201,6 +204,7 @@
     "opDelete": "delete",
     "opTruncate": "truncate",
     "truncateHint": "Off: when the source table is truncated the destination keeps its rows, and the timeline says so. On: the destination table is emptied too.",
+    "goodToKnow": "Good to know:",
     "cdcDesc": "Streams changes from the DB log in real time (no polling).",
     "checkReadiness": "Check readiness",
     "cdcReady": "✓ Ready — we’ll auto-create the publication & slot on start.",
@@ -290,5 +294,10 @@
     "discardDescription": "{count, plural, one {# entry will never be delivered. The row stays on record, but this cannot be undone.} other {# entries will never be delivered. The rows stay on record, but this cannot be undone.}}",
     "discarded": "{count, plural, one {# entry discarded} other {# entries discarded}}",
     "couldNotDiscard": "Could not discard"
+  },
+  "sourceHold": {
+    "warnTitle": "This bridge is holding change log on the source",
+    "criticalTitle": "The source needs attention",
+    "holding": "({size} held)"
   }
 }

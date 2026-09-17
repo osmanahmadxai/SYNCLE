@@ -156,6 +156,40 @@ can no longer lose a row to a failed delivery.
   the server every `wal_sender_timeout` (60 s by default) and reconnected: with
   nothing confirmed yet it had nothing to answer keepalives with. It now
   answers with the slot's own position.
+- **A CDC bridge could fill its source's disk.** A PostgreSQL replication slot
+  makes the server keep every byte of WAL since the slot's position for as long
+  as the slot exists, read or not — and there were four ways to leave one
+  behind, none of which said anything:
+  - A paused or failed bridge keeps its slot (so it can resume), and nothing
+    measured what that was costing. It is now measured every minute and shown
+    on the bridge once it passes `SYNCLE_SLOT_WARN_BYTES` (1 GiB).
+  - **Editing a CDC bridge into a watch or replay bridge, or pointing it at
+    another connection or database, never dropped its slot.** Nothing pointed
+    at the old source any more, so nothing ever would. It is dropped now.
+  - A drop that failed when a bridge was deleted (the source was unreachable at
+    that moment) was logged and forgotten — along with the only record of the
+    slot's name. It is now written down and retried every minute, and the
+    connection it has to go through cannot be deleted until it is gone.
+  - A server with no `max_slot_wal_keep_size` lets a slot pin WAL without
+    limit. The readiness check now says so.
+- **A bridge whose place in the change log was gone carried on from "now"
+  without a word.** If the replication slot had been dropped or invalidated, a
+  start simply made a new one at the current position; MongoDB did the same
+  when the oplog had rolled past the resume token, with a line in the log.
+  Either way the destination had a hole in it that nothing showed. Such a
+  bridge now stops — or refuses to start, or to resume at boot — and says why.
+  Starting it again asks you to confirm **Continue from now**
+  (`{ "fromNow": true }`), the timeline records where the gap is, and a replay
+  fills it. MySQL is covered too: a purged binlog file, or a connection that
+  now reaches a different server, is detected before the stream is opened
+  instead of failing in a loop.
+- With the spool on, deleting a bridge left its Redis stream — and whatever
+  undelivered rows were in it — behind for good: the method that clears it was
+  never called. It is cleared on delete, and when a bridge leaves its source.
+- A CDC bridge could be started on a PostgreSQL server with no replication slot
+  or WAL sender to spare, and failed inside the stream. The readiness check now
+  counts both (a bridge that already owns a slot is not counted against
+  itself).
 - A delete reaching a target with no key columns (an `insert`-mode, append-only
   target) failed the whole delivery: there was nothing to delete by, and the
   empty `WHERE` was rejected by every engine. Such a target now simply does not
@@ -195,6 +229,16 @@ can no longer lose a row to a failed delivery.
   not report a truncate as a change, asking for it is refused at start.
 - The CDC readiness check shows which columns the table identifies rows by, and
   warns about tables that can only report inserts.
+- **Source hold**: what a CDC bridge is keeping on its source, in the job view
+  and at `GET /api/bridges/:id/source-hold` — for PostgreSQL the WAL pinned by
+  its slot, the server's limit, and whether the slot is healthy, at risk or
+  lost; for MySQL whether the bridge's binlog file still exists.
+- `SYNCLE_SLOT_MAX_BYTES` (off by default): drop the slot of a bridge that is
+  *not running* once it pins more than this, to protect the source. A running
+  bridge is never touched. `SYNCLE_SLOT_CHECK_SECONDS` sets how often to look.
+- `GET /api/bridges/cdc/cleanups` lists replication slots of removed bridges
+  that are still to be dropped; `…/retry` tries now, `DELETE …/:id` dismisses
+  one that was removed by hand.
 - **TLS modes**: off, encrypt only, verify the authority, verify the authority
   *and* the host name — PostgreSQL's `sslmode` names, meaning the same on every
   engine and applied to every connection a bridge opens, the CDC streams

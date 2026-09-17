@@ -38,6 +38,7 @@ export const queryKeys = {
   bridgeJobs: (id: string) => ['bridges', id, 'jobs'] as const,
   bridgeJob: (id: string, jobId: string) => ['bridges', id, 'jobs', jobId] as const,
   deadLetters: (id: string) => ['bridges', id, 'deadLetters'] as const,
+  sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -327,8 +328,10 @@ export function useStartBridgeJob(bridgeId: string) {
 export function useStartWatch(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.startWatch(bridgeId),
+    mutationFn: (opts: { fromNow?: boolean } = {}) =>
+      api.startWatch(bridgeId, opts),
     onSuccess: (job) => {
+      qc.invalidateQueries({ queryKey: queryKeys.sourceHold(bridgeId) });
       upsertBridgeJob(qc, bridgeId, job);
       patchBridgeStatus(qc, bridgeId, { active: true, lastStatus: job.status });
       qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
@@ -379,6 +382,22 @@ export function useDeadLetters(bridgeId: string | null, live: boolean) {
     queryFn: () => api.listDeadLetters(bridgeId as string, { status: 'pending', limit: 100 }),
     enabled: !!bridgeId,
     refetchInterval: live ? 5000 : false,
+  });
+}
+
+/**
+ * what a CDC bridge is holding on its source (PostgreSQL: WAL pinned by its
+ * replication slot). it matters most when the bridge is NOT running — that is
+ * when it only grows — so it is polled either way, just slowly
+ */
+export function useSourceHold(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.sourceHold(bridgeId) : ['sourceHold', 'none'],
+    queryFn: () => api.sourceHold(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: 30_000,
+    // the source may be unreachable; that is reported elsewhere, louder
+    retry: false,
   });
 }
 

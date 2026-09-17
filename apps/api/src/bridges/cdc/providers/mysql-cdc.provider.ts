@@ -26,6 +26,7 @@ import type { ResolvedBridge } from '../../bridges.types';
 import {
   backoffMs,
   type CdcProvider,
+  type CdcSourceHold,
   type CdcStreamContext,
   type CdcStreamHandle,
 } from '../cdc-provider';
@@ -372,6 +373,59 @@ export class MysqlCdcProvider implements CdcProvider {
 
   /* ----- provisioning: nothing to do, the binlog already exists ----- */
 
+  /**
+   * MySQL keeps nothing FOR a reader: the binlog is purged on the server's own
+   * schedule (binlog_expire_logs_seconds) whoever still needs it. so the
+   * question here is not what the bridge costs the source, but whether the
+   * bridge's place in the log is still there.
+   */
+  async inspect(
+    _bridgeId: string,
+    bridge: ResolvedBridge,
+    _conn: ConnectionConfig,
+    cursor: string | null,
+  ): Promise<CdcSourceHold | null> {
+    if (bridge.source.kind !== 'table' || !cursor) return null;
+    const src = bridge.source;
+    const [file] = this.splitCursor(cursor);
+    if (!file) return null;
+    const hold: CdcSourceHold = {
+      engine: 'mysql',
+      kind: 'log-position',
+      name: file,
+      exists: true,
+      active: null,
+      retainedBytes: null,
+      limitBytes: null,
+      status: 'ok',
+    };
+    const issuedBy = this.cursorServer(cursor);
+    const now = await this.serverUuid(src.connectionId, src.database);
+    if (issuedBy && now && issuedBy !== now) {
+      return {
+        ...hold,
+        exists: false,
+        status: 'lost',
+        detail:
+          `the saved binlog position came from MySQL server ${issuedBy}, but the connection now reaches ${now} ` +
+          '(a failover, or the connection was repointed). Binlog positions only mean something on the server that issued them',
+      };
+    }
+    const logs = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+      a.query('SHOW BINARY LOGS'),
+    );
+    const names = logs.rows.map((r) => String((r as Record<string, unknown>).Log_name ?? ''));
+    if (names.length > 0 && !names.includes(file)) {
+      return {
+        ...hold,
+        exists: false,
+        status: 'lost',
+        detail: `binlog file ${file} has been purged from the server (the oldest it still has is ${names[0]})`,
+      };
+    }
+    return hold;
+  }
+
   async provision(): Promise<void> {
     /* no-op */
   }
@@ -545,6 +599,27 @@ export class MysqlCdcProvider implements CdcProvider {
         void onEvent(evt).catch((err) => handlers.onError(err as Error));
       });
       instance.on('error', (err: Error) => {
+        // 1236: the server cannot serve the requested position — the file was
+        // purged. retrying asks for the same file for ever; starting from "now"
+        // instead would be a hole nobody was told about
+        const e = err as Error & { errno?: number; code?: string };
+        if (
+          !stopped &&
+          handlers.onPositionLost &&
+          (e.errno === 1236 || e.code === 'ER_MASTER_FATAL_ERROR_READING_BINLOG')
+        ) {
+          stopped = true;
+          try {
+            instance.stop();
+          } catch {
+            /* ignore */
+          }
+          void handlers.onPositionLost(
+            `MySQL can no longer serve this bridge's place in the binlog (${err.message}). ` +
+              'The log was purged while the bridge was not reading it.',
+          );
+          return;
+        }
         handlers.onError(err);
         if (stopped) return;
         try {

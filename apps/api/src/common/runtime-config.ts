@@ -13,6 +13,13 @@ function resolveDataDir(): string {
 
 const dataDir = resolveDataDir();
 
+/** like positiveInt, but 0 is a meaningful value ("off") */
+function nonNegativeInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
 /** a whole number ≥ 1 from the environment, or the default when unset/invalid */
 function positiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -123,6 +130,25 @@ export const runtimeConfig = {
    * dead-letter queue.
    */
   maxConsecutiveFailures: positiveInt(process.env.SYNCLE_MAX_CONSECUTIVE_FAILURES, 5),
+  /**
+   * How often (seconds) to look at what each CDC bridge is holding on its
+   * source: for PostgreSQL, how much WAL its replication slot is pinning. A
+   * slot keeps WAL whether or not anything reads it, so a bridge that is paused
+   * or failed fills the source's disk in silence. 0 turns the check off.
+   */
+  sourceHoldCheckSeconds: nonNegativeInt(process.env.SYNCLE_SLOT_CHECK_SECONDS, 60),
+  /** WAL pinned by one bridge before it is flagged (bytes). default 1 GiB */
+  slotWarnBytes: nonNegativeInt(process.env.SYNCLE_SLOT_WARN_BYTES, 1024 ** 3),
+  /**
+   * WAL pinned by a bridge that is NOT running before Syncle gives the slot up
+   * to protect the source (bytes). 0 = never, which is the default: dropping a
+   * slot means the changes made since are not captured and the destination has
+   * to be backfilled, so it is a decision for whoever runs the source. A
+   * RUNNING bridge is never touched — it is behind, not abandoned. On
+   * PostgreSQL 13+ the server-side `max_slot_wal_keep_size` does the same job
+   * and also covers the time Syncle itself is down.
+   */
+  slotMaxBytes: nonNegativeInt(process.env.SYNCLE_SLOT_MAX_BYTES, 0),
   /**
    * when true, HTTP destinations may not resolve to loopback/private/link-local
    * addresses (SSRF guard for network-exposed deployments). off by default —

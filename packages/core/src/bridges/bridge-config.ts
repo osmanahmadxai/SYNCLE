@@ -264,6 +264,12 @@ export const cdcReadinessSchema = z.object({
   database: z.string().optional(),
   schema: z.string().optional(),
   table: z.string().min(1),
+  /**
+   * the bridge being checked, when it already exists. a source has a fixed
+   * number of replication slots; a bridge that already owns one does not need
+   * another, so "no free slot" must not fail its own readiness check
+   */
+  bridgeId: z.string().optional(),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -283,6 +289,20 @@ export type BridgeTrigger = z.infer<typeof bridgeTriggerSchema>;
 export type WatchStrategyConfig = z.infer<typeof watchStrategySchema>;
 export type CdcOperation = z.infer<typeof cdcOperationSchema>;
 export type CdcReadinessDTO = z.infer<typeof cdcReadinessSchema>;
+
+/** body of `POST /bridges/:id/watch/start`; every field optional, as is the body */
+export const liveStartSchema = z
+  .object({
+    /**
+     * the bridge's place in the source's change log is gone (its replication
+     * slot was dropped or invalidated, the binlog was purged). start anyway,
+     * from the current position, accepting that what happened in between was
+     * not captured. without this such a bridge refuses to start
+     */
+    fromNow: z.boolean().optional(),
+  })
+  .default({});
+export type LiveStartDTO = z.infer<typeof liveStartSchema>;
 export type BridgeInputDTO = z.infer<typeof bridgeInputSchema>;
 
 /** result of a CDC readiness probe, drives the builder's setup panel */
@@ -295,6 +315,47 @@ export interface CdcReadiness {
   checks: { label: string; ok: boolean; detail?: string }[];
   /** manual steps the user must do (e.g. set wal_level=logical + restart) */
   instructions: string[];
+  /**
+   * things that do not stop the bridge from starting but that whoever runs the
+   * source should know first (PostgreSQL: nothing caps the WAL a stopped bridge
+   * can pin)
+   */
+  advisories?: string[];
+}
+
+/** something a removed or edited bridge left on a source, still to be removed */
+export interface PendingSourceCleanup {
+  id: string;
+  bridgeId: string;
+  bridgeName: string | null;
+  connectionId: string;
+  database: string | null;
+  engine: string;
+  /** e.g. `replication slot syncle_slot_…` */
+  resource: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+}
+
+/** what a CDC bridge is holding on its source; see the API's CdcSourceHold */
+export interface BridgeSourceHold {
+  engine: string;
+  kind: 'replication-slot' | 'log-position';
+  name: string;
+  exists: boolean;
+  active: boolean | null;
+  retainedBytes: number | null;
+  limitBytes: number | null;
+  status: 'ok' | 'at-risk' | 'lost';
+  detail?: string;
+  /** 'ok' | 'warn' (past SYNCLE_SLOT_WARN_BYTES) | 'critical' (at-risk, lost, or near a limit) */
+  level: 'ok' | 'warn' | 'critical';
+  /** what to tell the person looking at the bridge, already worded */
+  message: string | null;
+  /** is the bridge streaming right now */
+  running: boolean;
+  checkedAt: string;
 }
 export type BridgePreviewDTO = z.infer<typeof bridgePreviewSchema>;
 export type StartJobDTO = z.infer<typeof startJobSchema>;

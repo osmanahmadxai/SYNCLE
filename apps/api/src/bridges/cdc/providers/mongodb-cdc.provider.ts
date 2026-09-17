@@ -6,8 +6,9 @@
  * aren't available on a standalone mongod.
  *
  * resume token (`change._id`) gets serialized into the cursor. on a long pause
- * the oplog can roll past the token (`ChangeStreamHistoryLost`); we catch that,
- * warn, and restart from "now" rather than crash-looping.
+ * the oplog can roll past the token (`ChangeStreamHistoryLost`). the bridge is
+ * then stopped and says why: carrying on from "now" would leave a hole in the
+ * destination that nothing showed (see CdcStreamHandlers.onPositionLost).
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
@@ -203,6 +204,17 @@ export class MongodbCdcProvider implements CdcProvider {
           const historyLost =
             e.codeName === 'ChangeStreamHistoryLost' || e.code === 286;
           if (historyLost) {
+            if (handlers.onPositionLost) {
+              // this used to restart from "now" and mention it in the log. the
+              // destination then had a hole in it that nothing on the bridge
+              // showed. it stops instead, and the next start accepts the gap
+              // in so many words
+              stopped = true;
+              await handlers.onPositionLost(
+                'The resume token is older than the MongoDB oplog window: the oplog rolled over while the bridge was not reading it.',
+              );
+              break;
+            }
             handlers.onError(
               new Error(
                 'Resume token is older than the MongoDB oplog window — restarting from now. Changes during the gap were not captured.',

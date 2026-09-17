@@ -29,6 +29,7 @@ export function TriggerSection({
   dispatch,
   columns,
   sourceEngine,
+  bridgeId,
 }: {
   draft: Pick<
     BuilderDraft,
@@ -50,6 +51,11 @@ export function TriggerSection({
   columns: QueryColumn[];
   /** the source connection's engine; only PostgreSQL reports a TRUNCATE */
   sourceEngine?: string;
+  /**
+   * the bridge being edited, if it exists yet. a server with no replication
+   * slot to spare must not fail the check for a bridge that already has one
+   */
+  bridgeId?: string | null;
 }) {
   const t = useTranslations('bridgeBuilder');
   const {
@@ -75,6 +81,7 @@ export function TriggerSection({
           database: draft.database || undefined,
           schema: draft.schema || undefined,
           table: draft.table,
+          bridgeId: bridgeId || undefined,
         }),
       });
     } catch (err) {
@@ -234,6 +241,16 @@ export function TriggerSection({
                     {readiness.instructions.map((ins, i) => (
                       <p key={i} className="text-muted-foreground pl-1">
                         • {ins}
+                      </p>
+                    ))}
+                    {/* not in the way of starting, but worth knowing first */}
+                    {readiness.advisories?.map((note, i) => (
+                      <p
+                        key={`advisory-${i}`}
+                        className="rounded bg-amber-500/10 px-1.5 py-1 text-amber-700 dark:text-amber-400"
+                      >
+                        <span className="font-medium">{t('goodToKnow')}</span>{' '}
+                        {note}
                       </p>
                     ))}
                   </>

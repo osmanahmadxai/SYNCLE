@@ -129,6 +129,9 @@
     "couldNotStartJob": "无法开始任务",
     "listeningForData": "正在监听新数据",
     "couldNotStartListening": "无法开始监听",
+    "positionLostTitle": "此桥接无法从上次停止的位置继续",
+    "positionLostDescription": "选择“从现在继续”后，桥接将从源端当前位置开始。期间源端发生的变更不会被捕获——之后请运行一次回放，使目标端与源端保持一致。",
+    "continueFromNow": "从现在继续",
     "stoppedListening": "已停止监听",
     "couldNotStop": "无法停止",
     "deleteTitle": "删除“{name}”？",
@@ -201,6 +204,7 @@
     "opDelete": "删除",
     "opTruncate": "清空（truncate）",
     "truncateHint": "关闭：源表被 TRUNCATE 清空时，目标表保留原有数据，并在时间线上给出提示。开启：目标表也会被清空。",
+    "goodToKnow": "请注意：",
     "cdcDesc": "实时从数据库日志读取变更（无需轮询）。",
     "checkReadiness": "检查就绪状态",
     "cdcReady": "✓ 已就绪——启动时将自动创建发布与复制槽。",
@@ -290,5 +294,10 @@
     "discardDescription": "{count, plural, other {# 条将永远不会被送达。记录会保留，但此操作无法撤销。}}",
     "discarded": "{count, plural, other {已丢弃 # 条}}",
     "couldNotDiscard": "无法丢弃"
+  },
+  "sourceHold": {
+    "warnTitle": "此桥接正在占用源端的变更日志",
+    "criticalTitle": "源端需要处理",
+    "holding": "（已占用 {size}）"
   }
 }

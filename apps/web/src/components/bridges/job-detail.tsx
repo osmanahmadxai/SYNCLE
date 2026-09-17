@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { DeadLetterPanel } from './dead-letter-panel';
+import { SourceHoldNotice } from './source-hold-notice';
 import { DeliveryMonitor } from './delivery-log';
 
 const STATUS_STYLES: Record<BridgeJobStatus, string> = {
@@ -284,6 +285,9 @@ export function JobDetail({
 
       {/* rows a live bridge set aside instead of losing; hidden while empty */}
       {isLive && <DeadLetterPanel bridgeId={bridgeId} live={isActive} />}
+
+      {/* what the bridge is costing its source; silent unless it matters */}
+      <SourceHoldNotice bridgeId={bridgeId} enabled={isLive} />
 
       <div className="min-h-0 flex-1 border-t">
         <DeliveryMonitor

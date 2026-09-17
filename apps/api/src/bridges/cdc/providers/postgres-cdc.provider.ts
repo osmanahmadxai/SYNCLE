@@ -30,6 +30,7 @@ import {
   delay,
   type CdcChange,
   type CdcProvider,
+  type CdcSourceHold,
   type CdcStreamContext,
   type CdcStreamHandle,
 } from '../cdc-provider';
@@ -276,7 +277,53 @@ export class PostgresCdcProvider implements CdcProvider {
       } catch {
         /* the table may not exist yet while the bridge is being drafted */
       }
-      return { engine: 'postgres', supported: true, ready: logical && canReplicate, checks, instructions };
+      const capacity = await this.capacity(dto).catch(() => null);
+      let room = true;
+      const advisories: string[] = [];
+      if (capacity) {
+        // a slot and a walsender each. a bridge that already has its slot needs
+        // no new one, so it is not failed by a server that is otherwise full
+        const slotOk = capacity.ownsSlot || capacity.slotsUsed < capacity.slotsMax;
+        const senderOk = capacity.sendersUsed < capacity.sendersMax;
+        room = slotOk && senderOk;
+        checks.push({
+          label: 'a free replication slot',
+          ok: slotOk,
+          detail: `${capacity.slotsUsed} of ${capacity.slotsMax} in use${capacity.ownsSlot ? ' (one of them is this bridge’s)' : ''}`,
+        });
+        checks.push({
+          label: 'a free WAL sender',
+          ok: senderOk,
+          detail: `${capacity.sendersUsed} of ${capacity.sendersMax} in use`,
+        });
+        if (!slotOk) {
+          instructions.push(
+            `Every replication slot on this server is taken (max_replication_slots = ${capacity.slotsMax}), and each CDC bridge needs one. ` +
+              'Raise max_replication_slots (needs a restart), or free one: delete a bridge you no longer need, or drop a slot nothing reads — ' +
+              `SELECT slot_name, active FROM pg_replication_slots;`,
+          );
+        }
+        if (!senderOk) {
+          instructions.push(
+            `Every WAL sender on this server is busy (max_wal_senders = ${capacity.sendersMax}). Raise max_wal_senders (needs a restart) or stop another replication client.`,
+          );
+        }
+        if (capacity.keepLimitMb === -1) {
+          advisories.push(
+            'Nothing limits how much WAL a replication slot can pin on this server (max_slot_wal_keep_size = -1). ' +
+              'A bridge that is paused — or a Syncle that is switched off — keeps its slot, and the server keeps every change since, until the disk is full. ' +
+              'Setting max_slot_wal_keep_size (for example 10GB) makes the server give up the slot instead; the bridge then needs a fresh start, but the database stays up.',
+          );
+        }
+      }
+      return {
+        engine: 'postgres',
+        supported: true,
+        ready: logical && canReplicate && room,
+        checks,
+        instructions,
+        ...(advisories.length ? { advisories } : {}),
+      };
     } catch (err) {
       return {
         engine: 'postgres',
@@ -286,6 +333,108 @@ export class PostgresCdcProvider implements CdcProvider {
         instructions: ['Could not query the database to check readiness.'],
       };
     }
+  }
+
+  /** how many replication slots and WAL senders the server has left */
+  private async capacity(dto: CdcReadinessDTO): Promise<{
+    slotsMax: number;
+    slotsUsed: number;
+    sendersMax: number;
+    sendersUsed: number;
+    ownsSlot: boolean;
+    /** max_slot_wal_keep_size in MB; -1 = unlimited; null = the server predates it (< 13) */
+    keepLimitMb: number | null;
+  }> {
+    const slot = dto.bridgeId ? this.slotName(dto.bridgeId) : '';
+    const res = await this.pool.withAdapter(dto.connectionId, dto.database, (a) =>
+      a.query(
+        `select current_setting('max_replication_slots')::int as slots_max,
+                (select count(*) from pg_replication_slots)::int as slots_used,
+                current_setting('max_wal_senders')::int as senders_max,
+                (select count(*) from pg_stat_replication)::int as senders_used,
+                exists(select 1 from pg_replication_slots where slot_name = $1) as owns_slot,
+                (select setting from pg_settings where name = 'max_slot_wal_keep_size') as keep_limit`,
+        [slot],
+      ),
+    );
+    const row = (res.rows[0] ?? {}) as Record<string, unknown>;
+    const keep = row.keep_limit;
+    return {
+      slotsMax: Number(row.slots_max ?? 0),
+      slotsUsed: Number(row.slots_used ?? 0),
+      sendersMax: Number(row.senders_max ?? 0),
+      sendersUsed: Number(row.senders_used ?? 0),
+      ownsSlot: row.owns_slot === true,
+      keepLimitMb: keep === null || keep === undefined ? null : Number(keep),
+    };
+  }
+
+  /* ----- what the bridge holds on the source ----- */
+
+  async inspect(bridgeId: string, bridge: ResolvedBridge): Promise<CdcSourceHold | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    const name = this.slotName(bridgeId);
+    return this.pool.withAdapter(src.connectionId, src.database, async (a) => {
+      const server = await a.query(
+        `select current_setting('server_version_num')::int as version,
+                (select setting from pg_settings where name = 'max_slot_wal_keep_size') as keep_limit`,
+      );
+      const info = (server.rows[0] ?? {}) as { version?: number; keep_limit?: string | null };
+      // wal_status / safe_wal_size arrived with max_slot_wal_keep_size, in 13
+      const modern = Number(info.version ?? 0) >= 130000;
+      const res = await a.query(
+        `select s.active,
+                pg_wal_lsn_diff(
+                  case when pg_is_in_recovery() then pg_last_wal_receive_lsn() else pg_current_wal_lsn() end,
+                  s.restart_lsn
+                )::text as retained
+                ${modern ? ', s.wal_status' : ''}
+         from pg_replication_slots s
+         where s.slot_name = $1`,
+        [name],
+      );
+      const limitMb = info.keep_limit == null ? -1 : Number(info.keep_limit);
+      const limitBytes = limitMb >= 0 ? limitMb * 1024 * 1024 : null;
+      const row = res.rows[0] as { active?: boolean; retained?: string | null; wal_status?: string | null } | undefined;
+      if (!row) {
+        return {
+          engine: 'postgres',
+          kind: 'replication-slot',
+          name,
+          exists: false,
+          active: null,
+          retainedBytes: null,
+          limitBytes,
+          status: 'lost',
+          detail: `replication slot "${name}" does not exist on the server`,
+        };
+      }
+      // restart_lsn is NULL once the server has invalidated the slot
+      const retained = row.retained == null ? null : Math.max(0, Number(row.retained));
+      const status: CdcSourceHold['status'] =
+        row.wal_status === 'lost' || (modern && row.retained == null)
+          ? 'lost'
+          : row.wal_status === 'unreserved'
+            ? 'at-risk'
+            : 'ok';
+      return {
+        engine: 'postgres',
+        kind: 'replication-slot',
+        name,
+        exists: true,
+        active: row.active === true,
+        retainedBytes: retained,
+        limitBytes,
+        status,
+        detail:
+          status === 'lost'
+            ? `the server invalidated replication slot "${name}": it needed more WAL than max_slot_wal_keep_size allows`
+            : status === 'at-risk'
+              ? `replication slot "${name}" is past max_slot_wal_keep_size; the server will invalidate it at the next checkpoint`
+              : undefined,
+      };
+    });
   }
 
   /* ----- provisioning ----- */
@@ -491,12 +640,14 @@ export class PostgresCdcProvider implements CdcProvider {
           else lastError = message;
         }
       }
-      if (!dropped) {
-        this.logger.error(
-          `Could not drop replication slot "${slot}" — it will keep pinning WAL on the source until dropped manually: ${lastError}`,
-        );
-      }
+      // the publication costs the source nothing; the slot is what matters
       await a.query(`DROP PUBLICATION IF EXISTS ${this.quoteIdent(pub)}`).catch(() => undefined);
+      if (!dropped) {
+        // NOT swallowed: a slot nothing reads pins WAL until the disk is full,
+        // and once the bridge is gone this is the last anyone hears of its name.
+        // the caller queues it and tries again
+        throw new Error(`could not drop replication slot "${slot}": ${lastError}`);
+      }
     });
   }
 

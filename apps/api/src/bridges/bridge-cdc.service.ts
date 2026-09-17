@@ -28,6 +28,9 @@ import {
   type ConnectionConfig,
   type DatabaseEngine,
   type BridgeJob,
+  type BridgeSourceHold,
+  type PendingSourceCleanup,
+  NotFoundError,
   UNCHANGED,
 } from '@syncle/core';
 import { randomUUID } from 'node:crypto';
@@ -146,14 +149,40 @@ const POSITION_LINGER_MS = 1_000;
 
 /** read the persisted resume cursor from a job's cursorJson (legacy `lsn` ok) */
 function readCursor(cursorJson: string | null): string | null {
-  if (!cursorJson) return null;
+  return readCursorState(cursorJson).cursor;
+}
+
+/**
+ * a job's saved position, and whether it still means anything. `lost` is set
+ * (to the explanation) once the source has said it can no longer serve that
+ * position; from then on the bridge only starts when told to continue from now
+ */
+function readCursorState(cursorJson: string | null): { cursor: string | null; lost: string | null } {
+  if (!cursorJson) return { cursor: null, lost: null };
   try {
-    const o = JSON.parse(cursorJson) as { cursor?: string; lsn?: string };
-    return o.cursor ?? o.lsn ?? null;
+    const o = JSON.parse(cursorJson) as { cursor?: string; lsn?: string; lost?: string };
+    return { cursor: o.cursor ?? o.lsn ?? null, lost: typeof o.lost === 'string' && o.lost ? o.lost : null };
   } catch {
-    return null;
+    return { cursor: null, lost: null };
   }
 }
+
+/** 1536 -> "1.5 KB"; whole numbers stay whole */
+export function formatBytes(bytes: number): string {
+  const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const text = unit === 0 || value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, '');
+  return `${text} ${units[unit]}`;
+}
+
+const GAP_ADVICE =
+  'Changes made at the source between that position and now can no longer be read. ' +
+  'Start the bridge again and choose to continue from now, then run a replay to bring the destination up to date.';
 
 @Injectable()
 export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
@@ -200,7 +229,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
 
   /* ----- start / stop ----- */
 
-  async start(bridgeId: string): Promise<BridgeJob> {
+  async start(bridgeId: string, opts: { fromNow?: boolean } = {}): Promise<BridgeJob> {
     const bridge = await this.store.resolve(bridgeId);
     if (bridge.trigger.kind !== 'cdc') {
       throw new BadRequestError('This bridge is not configured for event-based delivery.');
@@ -234,6 +263,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         database: bridge.source.database,
         schema: bridge.source.schema,
         table: bridge.source.table,
+        bridgeId,
       },
       conn,
     );
@@ -243,14 +273,45 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    await provider.provision(bridgeId, bridge, conn);
-
     // one job per bridge: resume the existing (paused) job in place rather than
     // spawning a new one. durable engines keep their cursor so it continues cleanly
-    const latest = await this.prisma.bridgeJob.findFirst({
+    let latest = await this.prisma.bridgeJob.findFirst({
       where: { bridgeId },
       orderBy: { startedAt: 'desc' },
     });
+
+    // is the place this bridge stopped at still there? a slot that was dropped
+    // (or that the server invalidated) used to be re-created on the spot, and
+    // the bridge carried on from "now" as if nothing had happened
+    const gap = await this.positionLost(bridgeId, bridge, conn, provider, latest?.cursorJson ?? null);
+    if (gap) {
+      if (!opts.fromNow) {
+        throw new BadRequestError(`This bridge cannot resume where it stopped: ${gap} ${GAP_ADVICE}`, {
+          reason: 'position-lost',
+        });
+      }
+      // whatever is left of the old position has to go before a new one can
+      // take its name. this one is allowed to fail the start: carrying on with
+      // an invalidated slot in place cannot work
+      await provider.deprovision(bridgeId, bridge, conn);
+      if (latest) {
+        const seq = latest.cursorOffset;
+        await this.jobs.recordNotice(
+          latest.id,
+          seq,
+          `Continued from the current position on ${new Date().toISOString()}: ${gap} ` +
+            'Changes made at the source before this point and after the previous delivery were NOT captured. Run a replay to bring the destination up to date.',
+        );
+        latest = await this.prisma.bridgeJob.update({
+          where: { id: latest.id },
+          data: { cursorJson: null, cursorOffset: seq + 1 },
+        });
+      }
+      this.logger.warn(`CDC ${bridgeId}: continuing from now, accepting a gap (${gap})`);
+    }
+
+    await provider.provision(bridgeId, bridge, conn);
+
     const job = latest
       ? await this.prisma.bridgeJob.update({
           where: { id: latest.id },
@@ -287,15 +348,249 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   /** full teardown when a bridge is deleted: stop stream and drop provider state */
   async cleanup(bridgeId: string): Promise<void> {
     await this.teardown(bridgeId);
+    let bridge: ResolvedBridge;
     try {
-      const bridge = await this.store.resolve(bridgeId);
-      if (bridge.source.kind !== 'table') return;
-      const conn = await this.connStore.resolve(bridge.source.connectionId);
-      const provider = this.providerFor(conn.engine);
-      await provider?.deprovision(bridgeId, bridge, conn).catch(() => undefined);
+      bridge = await this.store.resolve(bridgeId);
     } catch {
-      /* bridge/connection already gone, nothing to deprovision */
+      await this.dropSpool(bridgeId);
+      return; // bridge already gone, nothing to deprovision
     }
+    await this.releaseSource(bridgeId, bridge);
+    await this.dropSpool(bridgeId);
+  }
+
+  /**
+   * the bridge's spool stream in Redis. `CdcSpoolService.clear` existed and was
+   * never called, so every deleted spooled bridge left its stream — and whatever
+   * undelivered rows were in it — behind for good
+   */
+  private async dropSpool(bridgeId: string): Promise<void> {
+    await this.spool.clear(bridgeId).catch((err) => {
+      this.logger.warn(`CDC ${bridgeId}: could not clear its spool: ${(err as Error).message}`);
+    });
+  }
+
+  /**
+   * a bridge stops being a CDC bridge on this source: its trigger changed, or
+   * it now reads from another connection or database. `before` is the bridge AS
+   * IT WAS — what it created is on the OLD source, and nothing else will ever
+   * look there again. this used to be skipped entirely: every such edit left a
+   * replication slot behind, pinning WAL with no bridge pointing at it.
+   */
+  async abandon(bridgeId: string, before: ResolvedBridge): Promise<void> {
+    await this.teardown(bridgeId);
+    await this.releaseSource(bridgeId, before);
+    // rows spooled from the OLD source but not yet delivered belong to a
+    // configuration that no longer exists; the new one must not inherit them
+    await this.dropSpool(bridgeId);
+    // the saved position belonged to what was just released
+    await this.prisma.bridgeJob
+      .updateMany({ where: { bridgeId }, data: { cursorJson: null } })
+      .catch(() => undefined);
+  }
+
+  /**
+   * remove what `provision` created on the source. when that fails — the server
+   * is unreachable, a dying connection still holds the slot — it is written
+   * down and retried (see `retryCleanups`), because after a delete that record
+   * is the only thing left that knows the slot's name. true = nothing is left.
+   */
+  async releaseSource(bridgeId: string, bridge: ResolvedBridge): Promise<boolean> {
+    if (bridge.source.kind !== 'table') return true;
+    const src = bridge.source;
+    let engine: DatabaseEngine | null = null;
+    try {
+      const conn = await this.connStore.resolve(src.connectionId);
+      engine = conn.engine;
+      const provider = this.providerFor(conn.engine);
+      if (!provider) return true;
+      await provider.deprovision(bridgeId, bridge, conn);
+      await this.prisma.sourceCleanup
+        .deleteMany({ where: { bridgeId, connectionId: src.connectionId } })
+        .catch(() => undefined);
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      if (engine === null) {
+        // the connection itself is gone: there is no way left to reach the source
+        this.logger.error(`CDC ${bridgeId}: could not release the source, its connection cannot be resolved: ${message}`);
+        return false;
+      }
+      // only PostgreSQL leaves anything behind on the source
+      if (engine !== 'postgres') return true;
+      const slot = `syncle_slot_${bridgeId.replace(/-/g, '')}`;
+      this.logger.error(
+        `CDC ${bridgeId}: could not release the source, will retry: ${message}. ` +
+          `Until it succeeds the slot pins WAL there; to remove it by hand: SELECT pg_drop_replication_slot('${slot}');`,
+      );
+      await this.prisma.sourceCleanup
+        .upsert({
+          where: { bridgeId_connectionId: { bridgeId, connectionId: src.connectionId } },
+          create: {
+            id: randomUUID(),
+            bridgeId,
+            bridgeName: bridge.name,
+            connectionId: src.connectionId,
+            database: src.database ?? null,
+            engine,
+            resource: `replication slot ${slot}`,
+            attempts: 1,
+            lastError: message,
+          },
+          update: { attempts: { increment: 1 }, lastError: message },
+        })
+        .catch(() => undefined);
+      return false;
+    }
+  }
+
+  async listCleanups(): Promise<PendingSourceCleanup[]> {
+    const rows = await this.prisma.sourceCleanup.findMany({ orderBy: { createdAt: 'asc' } });
+    return rows.map((r) => ({
+      id: r.id,
+      bridgeId: r.bridgeId,
+      bridgeName: r.bridgeName,
+      connectionId: r.connectionId,
+      database: r.database,
+      engine: r.engine,
+      resource: r.resource,
+      attempts: r.attempts,
+      lastError: r.lastError,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  async dismissCleanup(id: string): Promise<void> {
+    const found = await this.prisma.sourceCleanup.deleteMany({ where: { id } });
+    if (found.count === 0) throw new NotFoundError('No such pending cleanup.');
+  }
+
+  /** try again to remove what could not be removed before. returns how many are left */
+  async retryCleanups(): Promise<number> {
+    const tasks = await this.prisma.sourceCleanup.findMany({ orderBy: { createdAt: 'asc' } });
+    let left = 0;
+    for (const task of tasks) {
+      // the bridge may be live again on this very source (deleted-then-recreated
+      // ids do not happen, but an `abandon` followed by an edit back does): its
+      // slot is in use, not left over
+      if (this.streams.has(task.bridgeId)) {
+        const current = await this.store.resolve(task.bridgeId).catch(() => null);
+        if (current?.source.kind === 'table' && current.source.connectionId === task.connectionId) {
+          await this.prisma.sourceCleanup.delete({ where: { id: task.id } }).catch(() => undefined);
+          continue;
+        }
+      }
+      const stub = {
+        id: task.bridgeId,
+        name: task.bridgeName ?? task.bridgeId,
+        source: { kind: 'table', connectionId: task.connectionId, database: task.database ?? undefined, table: '' },
+        trigger: { kind: 'cdc', operations: [] },
+      } as unknown as ResolvedBridge;
+      if (!(await this.releaseSource(task.bridgeId, stub))) left++;
+    }
+    return left;
+  }
+
+  /**
+   * what this bridge is holding on its source, judged: is it fine, worth a
+   * warning, or about to hurt someone. null = nothing is held (the bridge was
+   * never started, or the engine keeps nothing per reader).
+   */
+  async hold(bridgeId: string): Promise<BridgeSourceHold | null> {
+    const bridge = await this.store.resolve(bridgeId);
+    if (bridge.trigger.kind !== 'cdc' || bridge.source.kind !== 'table') return null;
+    const conn = await this.connStore.resolve(bridge.source.connectionId);
+    const provider = this.providerFor(conn.engine);
+    if (!provider?.inspect) return null;
+
+    const job = await this.prisma.bridgeJob.findFirst({
+      where: { bridgeId },
+      orderBy: { startedAt: 'desc' },
+      select: { cursorJson: true },
+    });
+    const state = readCursorState(job?.cursorJson ?? null);
+    const running = this.streams.has(bridgeId);
+    const found = await provider.inspect(bridgeId, bridge, conn, state.cursor);
+    if (!found) return null;
+    // never started: a slot that does not exist yet is not a slot that was lost
+    if (!found.exists && !state.cursor && !state.lost && !running) return null;
+
+    const held = found.retainedBytes ?? 0;
+    const size = formatBytes(held);
+    let level: BridgeSourceHold['level'] = 'ok';
+    let message: string | null = null;
+    if (!found.exists || found.status === 'lost' || state.lost) {
+      level = 'critical';
+      message = `${state.lost ?? found.detail ?? 'The bridge’s place in the source’s change log is gone.'} ${state.lost ? '' : GAP_ADVICE}`.trim();
+    } else if (found.status === 'at-risk') {
+      level = 'critical';
+      message = `${found.detail ?? 'The source is about to discard changes this bridge has not read.'} Start the bridge now to let it catch up.`;
+    } else if (found.limitBytes !== null && found.limitBytes > 0 && held >= found.limitBytes * 0.8) {
+      level = 'critical';
+      message =
+        `The source is keeping ${size} of WAL for this bridge, and gives the slot up at ${formatBytes(found.limitBytes)} (max_slot_wal_keep_size). ` +
+        (running ? 'The bridge is running but behind.' : 'The bridge is not running, so this only grows: start it.');
+    } else if (runtimeConfig.slotWarnBytes > 0 && held >= runtimeConfig.slotWarnBytes) {
+      level = 'warn';
+      message =
+        `The source is keeping ${size} of WAL for this bridge. ` +
+        (running
+          ? 'The bridge is running but behind; the amount falls as it catches up.'
+          : 'The bridge is not running, so this only grows — and nothing on the source limits it' +
+            (found.limitBytes === null ? '' : ` below ${formatBytes(found.limitBytes)}`) +
+            '. Start the bridge, or delete it to release the slot.');
+    }
+    return { ...found, level, message, running, checkedAt: new Date().toISOString() };
+  }
+
+  /**
+   * give up a STOPPED bridge's replication slot because of what it is costing
+   * the source. the job is marked so that the next start has to accept the gap
+   * in so many words. false = the bridge turned out to be running, or the slot
+   * could not be dropped.
+   */
+  async surrenderSlot(bridgeId: string, reason: string): Promise<boolean> {
+    if (this.streams.has(bridgeId)) return false;
+    const bridge = await this.store.resolve(bridgeId);
+    const job = await this.prisma.bridgeJob.findFirst({ where: { bridgeId }, orderBy: { startedAt: 'desc' } });
+    if (job && ['running', 'queued', 'canceling'].includes(job.status)) return false;
+    if (!(await this.releaseSource(bridgeId, bridge))) return false;
+    const lost = `${reason} ${GAP_ADVICE}`;
+    if (job) {
+      await this.prisma.bridgeJob.update({
+        where: { id: job.id },
+        data: {
+          status: 'failed',
+          error: lost,
+          finishedAt: job.finishedAt ?? new Date(),
+          cursorJson: JSON.stringify({ cursor: readCursor(job.cursorJson), lost }),
+        },
+      });
+    }
+    this.logger.warn(`CDC ${bridgeId}: ${lost}`);
+    return true;
+  }
+
+  /** the saved position is gone: why, or null when the bridge can resume */
+  private async positionLost(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+    provider: CdcProvider,
+    cursorJson: string | null,
+  ): Promise<string | null> {
+    const state = readCursorState(cursorJson);
+    if (state.lost) return state.lost;
+    if (!state.cursor || !provider.inspect) return null;
+    try {
+      const found = await provider.inspect(bridgeId, bridge, conn, state.cursor);
+      if (found && (!found.exists || found.status === 'lost')) {
+        return `${found.detail ?? 'its place in the source’s change log is gone'}.`;
+      }
+    } catch {
+      /* could not look: the stream itself will say if something is wrong */
+    }
+    return null;
   }
 
   /** close every streaming connection on shutdown, no zombie streamers */
@@ -383,6 +678,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
           onSkip: (cursor) => this.handleSkip(bridgeId, cursor),
           onNotice: (message, cursor) => this.handleNotice(bridgeId, message, cursor),
+          onPositionLost: (message) => this.handlePositionLost(bridgeId, message),
           onError: (err) => this.logger.warn(`CDC stream error for ${bridgeId}: ${err.message}`),
         },
       });
@@ -592,6 +888,35 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     }
     stream.wholeValueTarget = found;
     return found;
+  }
+
+  /**
+   * the source can no longer serve the position this stream was reading from.
+   * what was read before that is real and is delivered; then the bridge stops,
+   * marked so that it only starts again when told to continue from now.
+   */
+  private handlePositionLost(bridgeId: string, message: string): Promise<void> {
+    const stream = this.streams.get(bridgeId);
+    if (!stream) return Promise.resolve();
+    stream.pending = stream.pending
+      .then(async () => {
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        await this.flush(bridgeId, stream);
+        if (stream.inflight) await stream.inflight.catch(() => undefined);
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        const lost = `${message} ${GAP_ADVICE}`;
+        await this.prisma.bridgeJob
+          .update({
+            where: { id: stream.jobId },
+            data: { cursorJson: JSON.stringify({ cursor: stream.watermark, lost }) },
+          })
+          .catch(() => undefined);
+        await this.halt(bridgeId, stream, 'failed', lost);
+      })
+      .catch((err) => {
+        this.logger.error(`CDC position-lost chain broke for ${bridgeId}: ${(err as Error).message}`);
+      });
+    return stream.pending;
   }
 
   /** extend the pending batch's reach to `cursor` without adding a row */
@@ -1397,6 +1722,23 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         const conn = await this.connStore.resolve(bridge.source.connectionId);
         const provider = this.providerFor(conn.engine);
         if (!provider) continue;
+        // the slot may have been dropped, or invalidated by the server, while
+        // this process was down. provisioning would quietly make a new one
+        const gap = await this.positionLost(r.bridgeId, bridge, conn, provider, r.cursorJson);
+        if (gap) {
+          const lost = `This bridge could not resume where it stopped: ${gap} ${GAP_ADVICE}`;
+          await this.prisma.bridgeJob.update({
+            where: { id: r.id },
+            data: {
+              status: 'failed',
+              error: lost,
+              finishedAt: new Date(),
+              cursorJson: JSON.stringify({ cursor: readCursor(r.cursorJson), lost: gap }),
+            },
+          });
+          this.logger.warn(`CDC ${r.bridgeId}: ${lost}`);
+          continue;
+        }
         await provider.provision(r.bridgeId, bridge, conn).catch(() => undefined);
         await this.beginStream(r.bridgeId, bridge, conn, provider, r.id, r.cursorOffset, readCursor(r.cursorJson));
         this.logger.log(`Resumed CDC stream for bridge ${r.bridgeId} (${conn.engine})`);

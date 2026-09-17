@@ -208,6 +208,85 @@ export default function Page() {
           </tbody>
         </table>
       </div>
+      <h4 id="postgres-slots">Replication slots and the source&apos;s disk</h4>
+      <p>
+        A replication slot makes PostgreSQL keep every byte of WAL written
+        since the slot&apos;s position —{' '}
+        <strong>for as long as the slot exists, whether or not anything is
+        reading it</strong>. A bridge that is paused or has failed keeps its
+        slot so that it can resume without a gap, and the source keeps
+        accumulating WAL for it. Left alone for long enough, that fills the
+        source&apos;s disk, and a PostgreSQL with a full disk stops accepting
+        writes. This is the one way a Syncle bridge can hurt the database it
+        reads from, so it is watched:
+      </p>
+      <ul>
+        <li>
+          Every minute (<code>SYNCLE_SLOT_CHECK_SECONDS</code>) Syncle
+          measures how much WAL each CDC bridge&apos;s slot is pinning. Past{' '}
+          <code>SYNCLE_SLOT_WARN_BYTES</code> (1 GiB) the bridge&apos;s job
+          view shows a warning with the amount and what to do, and the same
+          line goes to the log. It is also available from{' '}
+          <code>GET /api/bridges/:id/source-hold</code>.
+        </li>
+        <li>
+          <strong>The real safety net is on the server.</strong> On
+          PostgreSQL 13+, set <code>max_slot_wal_keep_size</code> (for
+          example <code>10GB</code>): past it the server invalidates the slot
+          instead of filling the disk, and that protects you even while
+          Syncle itself is switched off. The readiness check tells you when
+          it is unlimited, which is the default.
+        </li>
+        <li>
+          Optionally, <code>SYNCLE_SLOT_MAX_BYTES</code> makes Syncle do the
+          same from its side: a bridge that is <em>not running</em> and pins
+          more than that has its slot dropped. It is off by default, because
+          it trades a gap in that bridge for the source staying up, and that
+          is a decision for whoever runs the source. A running bridge is
+          never touched — it is behind, not abandoned.
+        </li>
+      </ul>
+      <p>
+        A slot is released as soon as it is no longer needed: when the bridge
+        is deleted, when it is edited into a watch or replay bridge, and when
+        it is pointed at another connection or database (the slot lives on
+        the <em>old</em> server, where nothing else would ever look for it
+        again). If the drop fails — the server is unreachable at that moment —
+        it is recorded and retried every minute until it succeeds;{' '}
+        <code>GET /api/bridges/cdc/cleanups</code> lists what is still
+        outstanding, and the connection it has to go through cannot be deleted
+        in the meantime. To remove one by hand:{' '}
+        <code>SELECT pg_drop_replication_slot(&apos;syncle_slot_…&apos;);</code>
+      </p>
+      <p>
+        Each CDC bridge uses one slot and one WAL sender, and a server has a
+        fixed number of both (<code>max_replication_slots</code>,{' '}
+        <code>max_wal_senders</code>; 10 each by default). The readiness
+        check counts them, and a bridge is not started on a server that has
+        none left.
+      </p>
+
+      <h4 id="position-lost">When a bridge&apos;s place in the log is gone</h4>
+      <p>
+        A bridge resumes from a position in the source&apos;s change log, and
+        that position can stop existing: the slot was dropped (by hand, by{' '}
+        <code>SYNCLE_SLOT_MAX_BYTES</code>) or invalidated by the server
+        (<code>max_slot_wal_keep_size</code>); MySQL purged the binlog file;
+        MongoDB&apos;s oplog rolled past the resume token. Whatever changed at
+        the source between that position and now can no longer be read.
+      </p>
+      <p>
+        Syncle does not paper over that. The bridge stops (or refuses to
+        start) and says why; starting it again asks you to confirm{' '}
+        <strong>Continue from now</strong> —{' '}
+        <code>{'POST /api/bridges/:id/watch/start'}</code> with{' '}
+        <code>{'{ "fromNow": true }'}</code>. The timeline records the point
+        where the gap is, and a replay of the same bridge brings the
+        destination back in line. Earlier versions quietly made a new slot
+        (or restarted the change stream) at the current position and carried
+        on, leaving a hole in the destination that nothing showed.
+      </p>
+
       <Note>
         Bridges created before these positions existed keep working: the
         saved cursor is understood as &quot;everything up to here&quot;. The
@@ -260,8 +339,19 @@ server_id        = 1   # any unique id`}</CodeBlock>
         the server&apos;s <code>@@server_uuid</code> (and the GTID of the
         transaction it sits at). If the connection later reaches a different
         server — after a failover, say — the bridge refuses to resume rather
-        than reading unrelated offsets, and says so. Reset it to start from the
-        current position.
+        than reading unrelated offsets, and says so.
+      </p>
+      <p>
+        <strong>MySQL purges its binlog on its own schedule</strong>{' '}
+        (<code>binlog_expire_logs_seconds</code>, 30 days by default, often
+        far less on managed servers), whoever still needs it. A bridge paused
+        for longer than that has lost its place: the file its position is in
+        no longer exists. Syncle checks for this before it starts a bridge,
+        and in both cases asks you to confirm continuing from the current
+        position — see{' '}
+        <a href="#position-lost">when a bridge&apos;s place in the log is gone</a>.
+        Keep the binlog for at least as long as you might leave a bridge
+        stopped.
       </p>
 
       <h3 id="mongodb">MongoDB</h3>
@@ -281,9 +371,11 @@ server_id        = 1   # any unique id`}</CodeBlock>
         column could not find the row to remove downstream. On older servers
         this is a best-effort no-op and deletes carry only <code>_id</code>.
         The resume token is durable as long as it stays inside the oplog
-        window; if the bridge is paused long enough for the oplog to roll
-        past it, Syncle logs a warning and restarts from now instead of
-        failing.
+        window. If the bridge is paused long enough for the oplog to roll
+        past it, the bridge stops and says so, and starting it again asks you
+        to confirm continuing from now — see{' '}
+        <a href="#position-lost">when a bridge&apos;s place in the log is gone</a>.
+        Size the oplog for the longest pause you expect.
       </p>
 
       <h3 id="redis">Redis</h3>
@@ -443,7 +535,10 @@ server_id        = 1   # any unique id`}</CodeBlock>
         Deleting a CDC bridge deprovisions what was created for it. On
         Postgres the replication slot and publication are dropped — this
         matters, because a slot nothing reads pins WAL on the source and
-        eventually fills its disk. On Redis, notifications are left enabled,
+        eventually fills its disk. The same happens when a CDC bridge is
+        edited into another kind of bridge or moved to another connection,
+        and a drop that fails is retried until it succeeds (see{' '}
+        <a href="#postgres-slots">replication slots and the source&apos;s disk</a>). On Redis, notifications are left enabled,
         since other consumers may rely on them; MySQL has nothing to remove,
         and MongoDB pre-images stay enabled. Deleting a workspace does the
         same teardown for every bridge in it.

@@ -221,3 +221,32 @@ model BridgeDeadLetter {
   @@index([jobId])
   @@map("bridge_dead_letters")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Source cleanups — things a bridge created on a SOURCE database that could
+//  not be removed when they should have been (the server was unreachable, the
+//  slot was still held by a dying connection).
+//
+//  A PostgreSQL replication slot that nothing reads makes the server keep WAL
+//  until its disk is full. When the bridge that owned it is deleted, this row
+//  is the only record left that the slot exists; it is retried until it goes.
+//  Deliberately NOT tied to the Bridge by a foreign key: it has to outlive it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SourceCleanup {
+  id           String   @id
+  bridgeId     String   @map("bridge_id") // the bridge it belonged to (may no longer exist)
+  bridgeName   String?  @map("bridge_name")
+  connectionId String   @map("connection_id")
+  database     String?
+  engine       String
+  resource     String // what is left behind, for whoever has to remove it by hand
+  attempts     Int      @default(0)
+  lastError    String?  @map("last_error")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([bridgeId, connectionId])
+  @@index([connectionId])
+  @@map("source_cleanups")
+}

@@ -129,6 +129,9 @@
     "couldNotStartJob": "Impossibile avviare il processo",
     "listeningForData": "In ascolto di nuovi dati",
     "couldNotStartListening": "Impossibile avviare l'ascolto",
+    "positionLostTitle": "Questo bridge non può riprendere da dove si era fermato",
+    "positionLostDescription": "Continuando da adesso, il bridge riparte dalla posizione attuale dell'origine. Le modifiche avvenute nel frattempo sull'origine non vengono catturate: esegui poi un replay per riallineare la destinazione.",
+    "continueFromNow": "Continua da adesso",
     "stoppedListening": "Ascolto interrotto",
     "couldNotStop": "Impossibile interrompere",
     "deleteTitle": "Eliminare \"{name}\"?",
@@ -201,6 +204,7 @@
     "opDelete": "eliminazione",
     "opTruncate": "svuotamento (truncate)",
     "truncateHint": "Disattivato: se la tabella di origine viene svuotata con TRUNCATE, la destinazione conserva le righe e la cronologia lo segnala. Attivato: anche la tabella di destinazione viene svuotata.",
+    "goodToKnow": "Da sapere:",
     "cdcDesc": "Trasmette le modifiche dal log del DB in tempo reale (senza polling).",
     "checkReadiness": "Verifica idoneità",
     "cdcReady": "✓ Pronto — creeremo automaticamente la pubblicazione e lo slot all'avvio.",
@@ -290,5 +294,10 @@
     "discardDescription": "{count, plural, one {# voce non verrà mai consegnata. La riga resta registrata, ma l’operazione non può essere annullata.} other {# voci non verranno mai consegnate. Le righe restano registrate, ma l’operazione non può essere annullata.}}",
     "discarded": "{count, plural, one {# voce scartata} other {# voci scartate}}",
     "couldNotDiscard": "Impossibile scartare"
+  },
+  "sourceHold": {
+    "warnTitle": "Questo bridge sta trattenendo il log delle modifiche sull'origine",
+    "criticalTitle": "L'origine richiede attenzione",
+    "holding": "({size} trattenuti)"
   }
 }

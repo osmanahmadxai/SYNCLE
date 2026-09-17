@@ -24,4 +24,7 @@ export function applyTestEnv(): void {
   // connection secrets round-trip within a run. Test-only value.
   process.env.SYNCLE_MASTER_KEY ??= 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=';
   process.env.NODE_ENV = 'test';
+  // the source guard sweeps on a timer; tests that care run it by hand, and no
+  // other test should have it wake up halfway through
+  process.env.SYNCLE_SLOT_CHECK_SECONDS ??= '0';
 }

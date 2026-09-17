@@ -105,7 +105,10 @@ export class ConnectionsController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ id: string }> {
+  async remove(
+    @Param('id') id: string,
+    @Query('force') force?: string,
+  ): Promise<{ id: string }> {
     await this.store.get(id); // 404s if missing
     // Bridge.connectionId has no FK, so enforce the reference here: deleting a
     // connection out from under its bridges would leave zombie listeners and
@@ -126,6 +129,23 @@ export class ConnectionsController {
       throw new ConflictError(
         `This connection is used by ${inUse} bridge${inUse === 1 ? '' : 's'}. Delete or repoint ${inUse === 1 ? 'it' : 'them'} first.`,
       );
+    }
+    // a bridge that was deleted while this server was unreachable may have left
+    // a replication slot on it, which is retried through THIS connection. once
+    // the connection is gone nothing can reach the slot again, and it pins WAL
+    // there until someone finds it
+    const leftovers = await this.prisma.sourceCleanup.findMany({ where: { connectionId: id } });
+    if (leftovers.length > 0 && force !== 'true') {
+      const names = leftovers.map((l) => l.resource).join(', ');
+      throw new ConflictError(
+        `Syncle still has to remove something from this server and has not managed to yet: ${names}. ` +
+          'It retries every minute through this connection, so the usual fix is to make the server reachable and wait. ' +
+          'To delete the connection regardless, remove it yourself first — on PostgreSQL: ' +
+          "SELECT pg_drop_replication_slot('<slot name>'); — then delete with ?force=true.",
+      );
+    }
+    if (leftovers.length > 0) {
+      await this.prisma.sourceCleanup.deleteMany({ where: { connectionId: id } });
     }
     await this.pool.evict(id);
     await this.store.remove(id);
