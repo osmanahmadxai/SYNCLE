@@ -135,6 +135,22 @@ const copiedNotice = (
       /^Copied the \d+ rows? the table already had/.test(d.error ?? ''),
   );
 
+/**
+ * the timeline once the copy has been marked as over. the mark is recorded
+ * AFTER the last copied batch has landed, so "all the rows are there" is a
+ * moment too early to look for it
+ */
+async function timelineAfterCopy(bridgeId: string, notices = 1) {
+  return waitFor(`the end of copy #${notices} to be recorded`, async () => {
+    const state = await timeline(bridgeId);
+    return state.deliveries.filter(
+      (d: { error: string | null; status: string }) => copiedNotice([d]),
+    ).length >= notices
+      ? state
+      : null;
+  });
+}
+
 for (const source of ['postgres', 'mysql', 'mongodb'] as ConnKey[]) {
   describe(`${LABEL[source]}: copy, then follow`, () => {
     it('ends up identical to the source, though the source kept changing while it was copied', async () => {
@@ -216,7 +232,7 @@ for (const source of ['postgres', 'mysql', 'mongodb'] as ConnKey[]) {
       );
       expect(await contents('postgres_dest', s.destTable)).toEqual(want);
 
-      const { job, deliveries } = await timeline(s.bridgeId);
+      const { job, deliveries } = await timelineAfterCopy(s.bridgeId);
       expect(job.status).toBe('running');
       const notice = copiedNotice(deliveries);
       expect(
@@ -336,7 +352,7 @@ describe('PostgreSQL: a copy that is interrupted', () => {
     // plus the one added while the bridge was stopped — the copy had not reached
     // the end of the table yet, so it found that one itself. (row 2 was copied
     // before the stop; its delete then arrived as a change)
-    const { deliveries } = await timeline(s.bridgeId);
+    const { deliveries } = await timelineAfterCopy(s.bridgeId);
     const notice = copiedNotice(deliveries)!;
     expect(notice.error).toContain(`Copied the ${TOTAL + 1} rows`);
     const copiedRows = deliveries
@@ -387,7 +403,9 @@ describe('PostgreSQL: a copy that is interrupted', () => {
           : null,
       { timeoutMs: 120_000, intervalMs: 250 },
     );
-    expect(copiedNotice((await timeline(s.bridgeId)).deliveries)).toBeTruthy();
+    expect(
+      copiedNotice((await timelineAfterCopy(s.bridgeId)).deliveries),
+    ).toBeTruthy();
   }, 240_000);
 });
 
@@ -590,7 +608,7 @@ describe('PostgreSQL: a lost position, on a bridge that copies first', () => {
       { timeoutMs: 60_000 },
     );
     expect(await contents('postgres_dest', s.destTable)).toEqual(want);
-    const { deliveries } = await timeline(s.bridgeId);
+    const { deliveries } = await timelineAfterCopy(s.bridgeId, 2);
     expect(deliveries.filter((d) => copiedNotice([d]))).toHaveLength(2);
     expect(deliveries.some((d) => /copied again/.test(d.error ?? ''))).toBe(
       true,
@@ -701,6 +719,8 @@ describe('Redis: copy, then follow', () => {
       { timeoutMs: 120_000, intervalMs: 250 },
     );
     expect(await contents('postgres_dest', dest)).toEqual(want);
-    expect(copiedNotice((await timeline(bridge.id)).deliveries)).toBeTruthy();
+    expect(
+      copiedNotice((await timelineAfterCopy(bridge.id)).deliveries),
+    ).toBeTruthy();
   }, 240_000);
 });

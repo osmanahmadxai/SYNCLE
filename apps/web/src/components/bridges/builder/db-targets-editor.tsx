@@ -247,6 +247,57 @@ function DbTargetCard({
         </div>
       )}
 
+      {target.writeMode === 'upsert' && (
+        <div className="grid gap-1.5">
+          <Label className="text-xs">{t('onDelete')}</Label>
+          <Select
+            value={target.onDelete}
+            onValueChange={(v) => onChange({ onDelete: v as DbTarget['onDelete'] })}
+          >
+            <SelectTrigger className="h-8" aria-label={t('onDelete')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="delete">{t('onDeleteDelete')}</SelectItem>
+              <SelectItem value="soft">{t('onDeleteSoft')}</SelectItem>
+              <SelectItem value="ignore">{t('onDeleteIgnore')}</SelectItem>
+            </SelectContent>
+          </Select>
+          {target.onDelete === 'soft' && (
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                className="h-8 font-mono text-xs"
+                value={target.softDeleteColumn}
+                placeholder="deleted_at"
+                aria-label={t('softDeleteColumn')}
+                onChange={(e) => onChange({ softDeleteColumn: e.target.value })}
+              />
+              <Select
+                value={target.softDeleteValue}
+                onValueChange={(v) =>
+                  onChange({ softDeleteValue: v as DbTarget['softDeleteValue'] })
+                }
+              >
+                <SelectTrigger className="h-8" aria-label={t('softDeleteValue')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="timestamp">{t('softDeleteTimestamp')}</SelectItem>
+                  <SelectItem value="boolean">{t('softDeleteBoolean')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <p className="text-muted-foreground text-[11px]">
+            {target.onDelete === 'soft'
+              ? t('onDeleteSoftHint')
+              : target.onDelete === 'ignore'
+                ? t('onDeleteIgnoreHint')
+                : t('onDeleteDeleteHint')}
+          </p>
+        </div>
+      )}
+
       <button
         onClick={() => setShowMap((s) => !s)}
         className="text-muted-foreground hover:text-foreground text-[11px] underline"

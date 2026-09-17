@@ -66,7 +66,21 @@ export const columnMappingSchema = z.object({
 });
 
 /** a single database/table a bridge writes into (a bridge can have several) */
-export const databaseTargetSchema = z.object({
+/**
+ * what a DELETE at the source does to a target.
+ *
+ *   delete  (default) the row is removed
+ *   soft    the row stays and is MARKED: `softDelete.column` is set to the time
+ *           of the delete (or to `true`). a row that comes back at the source —
+ *           inserted again under the same key — is unmarked by the write that
+ *           brings it back
+ *   ignore  nothing. the target keeps every row it was ever sent: an archive, a
+ *           warehouse, an audit copy
+ */
+export const deletePolicySchema = z.enum(['delete', 'soft', 'ignore']);
+export type DeletePolicy = z.infer<typeof deletePolicySchema>;
+
+const databaseTargetObject = z.object({
   connectionId: z.string().min(1),
   database: z.string().optional(),
   schema: z.string().optional(),
@@ -83,6 +97,46 @@ export const databaseTargetSchema = z.object({
   mapping: z.array(columnMappingSchema).default([]),
   /** create the target table from the source schema when it doesn't exist */
   createMissingTable: z.boolean().default(true),
+  /** see {@link deletePolicySchema}. has no effect on a target with no key columns: there is nothing to find the row by */
+  onDelete: deletePolicySchema.default('delete'),
+  /** required by `onDelete: soft` */
+  softDelete: z
+    .object({
+      /** the TARGET column that marks a row as deleted. created with the table when Syncle creates it */
+      column: z.string().trim().min(1).max(200),
+      /** `timestamp`: when it was deleted (NULL = not deleted). `boolean`: true / false */
+      value: z.enum(['timestamp', 'boolean']).default('timestamp'),
+    })
+    .optional(),
+});
+
+export const databaseTargetSchema = databaseTargetObject.superRefine((target, ctx) => {
+  if (target.onDelete !== 'soft') return;
+  const column = target.softDelete?.column;
+  if (!column) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['softDelete', 'column'],
+      message: 'A soft delete needs a column to mark the row with.',
+    });
+    return;
+  }
+  // the marker is Syncle's to write. a column that also receives source data
+  // would be overwritten by every delete, and a key cannot change at all
+  if (target.keyColumns.includes(column)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['softDelete', 'column'],
+      message: `"${column}" is a key column; the soft-delete marker has to be a column of its own.`,
+    });
+  }
+  if (target.mapping.some((m) => m.target === column)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['softDelete', 'column'],
+      message: `"${column}" already receives a source column; the soft-delete marker has to be a column of its own.`,
+    });
+  }
 });
 
 export const databaseDestinationSchema = z.object({

@@ -215,7 +215,11 @@ export function BridgeBuilder() {
           (t) =>
             !!t.connectionId &&
             t.table.trim().length > 0 &&
-            (t.writeMode === 'insert' || t.keyColumns.length > 0),
+            (t.writeMode === 'insert' || t.keyColumns.length > 0) &&
+            // a soft delete marks the row in a column of its own
+            (t.onDelete !== 'soft' ||
+              (t.softDeleteColumn.trim().length > 0 &&
+                !t.keyColumns.includes(t.softDeleteColumn.trim()))),
         );
   const canSave =
     !!connectionId &&

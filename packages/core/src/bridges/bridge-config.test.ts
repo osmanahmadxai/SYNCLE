@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bridgeDeliverySchema,
   bridgeInputSchema,
+  databaseTargetSchema,
   deadLetterDiscardSchema,
   deadLetterRetrySchema,
 } from './bridge-config';
@@ -64,3 +65,60 @@ describe('dead-letter requests', () => {
     expect(deadLetterDiscardSchema.parse({})).toEqual({});
   });
 });
+
+describe('what a delete does to a target', () => {
+  const target = (extra: Record<string, unknown> = {}) =>
+    databaseTargetSchema.safeParse({ connectionId: 'c', table: 't', keyColumns: ['id'], ...extra });
+
+  it('removes the row unless told otherwise — what every target saved before this did', () => {
+    const parsed = target();
+    expect(parsed.success && parsed.data.onDelete).toBe('delete');
+    expect(parsed.success && parsed.data.softDelete).toBeUndefined();
+  });
+
+  it('can be ignored, with nothing more to say', () => {
+    expect(target({ onDelete: 'ignore' }).success).toBe(true);
+  });
+
+  it('a soft delete needs a column to mark the row with, and marks it with the time by default', () => {
+    const bare = target({ onDelete: 'soft' });
+    expect(bare.success).toBe(false);
+    expect(!bare.success && bare.error.issues[0]).toMatchObject({ path: ['softDelete', 'column'] });
+    expect(target({ onDelete: 'soft', softDelete: { column: '  ' } }).success).toBe(false);
+
+    const ok = target({ onDelete: 'soft', softDelete: { column: ' deleted_at ' } });
+    expect(ok.success && ok.data.softDelete).toEqual({ column: 'deleted_at', value: 'timestamp' });
+    expect(target({ onDelete: 'soft', softDelete: { column: 'gone', value: 'boolean' } }).success).toBe(true);
+    expect(target({ onDelete: 'soft', softDelete: { column: 'gone', value: 'tombstone' } }).success).toBe(false);
+  });
+
+  it('the marker is a column of its own: not a key, not one that receives source data', () => {
+    const asKey = target({ onDelete: 'soft', softDelete: { column: 'id' } });
+    expect(!asKey.success && asKey.error.issues[0]!.message).toMatch(/key column/);
+    const mapped = target({
+      onDelete: 'soft',
+      softDelete: { column: 'deleted_at' },
+      mapping: [
+        { source: 'id', target: 'id' },
+        { source: 'removed', target: 'deleted_at' },
+      ],
+    });
+    expect(!mapped.success && mapped.error.issues[0]!.message).toMatch(/already receives a source column/);
+    // the same NAME at the source, mapped elsewhere, is no clash
+    expect(
+      target({
+        onDelete: 'soft',
+        softDelete: { column: 'deleted_at' },
+        mapping: [
+          { source: 'id', target: 'id' },
+          { source: 'deleted_at', target: 'source_deleted_at' },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('a column left over from a soft delete does not get in the way of another policy', () => {
+    expect(target({ onDelete: 'delete', softDelete: { column: 'id' } }).success).toBe(true);
+  });
+});
+

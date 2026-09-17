@@ -117,6 +117,20 @@ export class DatabaseSinkService {
         summaries.push(`${label}: delete not applied (target has no key columns)`);
         continue;
       }
+      // this target keeps what it was sent (an archive, a warehouse): a delete
+      // — or the source being emptied — is not an error here, and not applied
+      if ((op === 'delete' || op === 'truncate') && target.onDelete === 'ignore') {
+        succeeded.push(key);
+        summaries.push(`${label}: ${op} not applied (this target ignores deletes)`);
+        continue;
+      }
+      // marking EVERY row would be the faithful soft version of a TRUNCATE, and
+      // is not something to do on the strength of one event: said, not done
+      if (op === 'truncate' && target.onDelete === 'soft') {
+        succeeded.push(key);
+        summaries.push(`${label}: truncate not applied (this target soft-deletes; its rows were left as they are)`);
+        continue;
+      }
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
         if (op === 'truncate') {
@@ -131,7 +145,8 @@ export class DatabaseSinkService {
           op,
         );
         succeeded.push(key);
-        summaries.push(`${label}: ${op === 'delete' ? 'deleted' : 'wrote'} ${affected}`);
+        const did = op !== 'delete' ? 'wrote' : target.onDelete === 'soft' ? 'marked as deleted' : 'deleted';
+        summaries.push(`${label}: ${did} ${affected}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         firstError ??= `${label}: ${message}`;
@@ -193,8 +208,15 @@ export class DatabaseSinkService {
         // otherwise the original row-at-a-time loop. Both paths must produce
         // the same rows and the same `affected` count — only the number of
         // round trips differs.
+        const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
         const writeBatch = async (): Promise<void> => {
-          const mapped = rows.map((row) => mapRow(row, target.mapping));
+          const mapped = rows.map((row) => {
+            const out = mapRow(row, target.mapping);
+            // a row that is written exists at the source: whatever a delete
+            // marked it with before is taken off by the write that brings it back
+            if (soft && op !== 'delete') out[soft.column] = soft.value === 'boolean' ? false : null;
+            return out;
+          });
           const isUpsert = op !== 'delete' && target.writeMode !== 'insert';
           if (isUpsert && target.keyColumns.length === 0) {
             throw new Error(
@@ -218,6 +240,19 @@ export class DatabaseSinkService {
                     'or make the source send whole rows (PostgreSQL: REPLICA IDENTITY FULL; MongoDB: pre-images).',
                 );
               }
+            }
+            if (soft) {
+              // the row stays; it is marked. one UPDATE per row: a row that was
+              // never here is not created just to be marked deleted
+              // a point in time, in the form this engine's driver binds: SQLite
+              // takes no Date object, and the others store one exactly
+              const now = new Date();
+              const mark = soft.value === 'boolean' ? true : adapter.engine === 'sqlite' ? now.toISOString() : now;
+              for (const identity of identities) {
+                const res = await adapter.updateRow({ schema, table, identity, changes: { [soft.column]: mark } });
+                affected += res.affectedRows ?? 0;
+              }
+              return;
             }
             if (adapter.deleteRows) {
               const res = await adapter.deleteRows({ schema, table, identities });
@@ -488,7 +523,9 @@ export class DatabaseSinkService {
     } catch {
       exists = null; // the target connection itself is unreachable
     }
-    if (exists !== false || !target.createMissingTable) return { exists, warnings: [] };
+    if (exists !== false || !target.createMissingTable) {
+      return { exists, warnings: exists ? await this.markerWarnings(target) : [] };
+    }
 
     const plan = await this.planTable(bridge, target, sampleRow);
     const shapes = await this.targetColumns(bridge, target, sampleRow);
@@ -504,6 +541,39 @@ export class DatabaseSinkService {
       })),
       warnings: plan.warnings,
     };
+  }
+
+  /**
+   * a soft delete writes to a column of the TARGET. an existing table that does
+   * not have it fails every write, deletes or not — the marker is taken off by
+   * every upsert — so the dry run says so before anything runs
+   */
+  private async markerWarnings(target: DatabaseTarget): Promise<ColumnTypeWarning[]> {
+    if (target.onDelete !== 'soft' || !target.softDelete) return [];
+    const column = target.softDelete.column;
+    try {
+      const names = await this.pool.withAdapter(target.connectionId, target.database, async (adapter) => {
+        const schema = await adapter.getSchema(target.database);
+        const tables = schema.namespaces
+          .filter((n) => !target.schema || n.name === target.schema)
+          .flatMap((n) => n.tables);
+        return tables.find((t) => t.name === target.table)?.columns.map((c) => c.name) ?? null;
+      });
+      // schemaless (a MongoDB collection) or unreadable: nothing to hold it to
+      if (!names || names.length === 0 || names.includes(column)) return [];
+      return [
+        {
+          column,
+          sourceType: '',
+          targetType: '',
+          message:
+            `"${target.table}" has no column "${column}" to mark deleted rows with, and an existing table is never altered: ` +
+            `add it (${target.softDelete.value === 'boolean' ? 'a boolean' : 'a nullable timestamp'}) or every write to this target will fail.`,
+        },
+      ];
+    } catch {
+      return [];
+    }
   }
 
   private async sourceEngine(bridge: ResolvedBridge): Promise<DatabaseEngine | undefined> {
@@ -547,7 +617,13 @@ export class DatabaseSinkService {
             ].map((name) => ({ name, source: name }))
           : Object.keys(mappedSample).map((name) => ({ name, source: name }));
 
-    return pairs.map(({ name, source: sourceName }) => {
+    const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+    const marker: TargetColumnShape[] =
+      soft && !pairs.some((p) => p.name === soft.column)
+        ? [{ name: soft.column, sourceType: soft.value === 'boolean' ? 'boolean' : 'timestamptz', generic: true, nullable: true }]
+        : [];
+
+    const planned = pairs.map(({ name, source: sourceName }) => {
       // a plain copy of a column (`{{price}}`) is typed like the column it copies
       const known = byName.get(copiedColumn(steps, sourceName) ?? sourceName);
       const isKey = target.keyColumns.includes(name);
@@ -564,6 +640,8 @@ export class DatabaseSinkService {
         nullable,
       };
     });
+    // the soft-delete marker is a column of the TARGET only: it comes last
+    return [...planned, ...marker];
   }
 
   /**

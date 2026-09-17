@@ -371,6 +371,16 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **A delete policy per target.** What a delete at the source does is now each
+  target's choice: *delete it here too* (the default), *keep it and mark it as
+  deleted* — a column of the target is set to the time of the delete, or to
+  `true`, and taken off again by the write that brings the row back — or *do
+  nothing*, for an archive or a warehouse that keeps every row it was ever sent.
+  One bridge can do all three to three targets. The marker column is created
+  with the table when Syncle creates it; for an existing table the dry run says
+  when it is missing. A `TRUNCATE` empties only the targets that delete, and the
+  delivery's summary says what each target did. API: `onDelete`, `softDelete` on
+  a database target.
 - **Alerts.** A bridge that stopped at three in the morning said so in one
   place: its own page. *Settings › Alerts* adds channels to say it out loud — a
   **webhook** (JSON, optionally signed: `X-Syncle-Signature: sha256=<hmac of the

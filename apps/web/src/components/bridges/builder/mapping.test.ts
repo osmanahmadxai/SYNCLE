@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bridge } from '@syncle/core';
-import { builderReducer, initialDraft } from './draft';
+import { blankDbTarget, builderReducer, initialDraft } from './draft';
 import {
   buildInput,
   coerceFilterValue,
@@ -326,6 +326,7 @@ describe('loadBridge', () => {
                 { source: 'email', target: 'mail' },
               ],
               createMissingTable: false,
+              onDelete: 'delete',
             },
           ],
         },
@@ -342,6 +343,9 @@ describe('loadBridge', () => {
         keyColumns: ['id'],
         createMissingTable: false,
         renames: { email: 'mail' }, // identity pairs dropped
+        onDelete: 'delete',
+        softDeleteColumn: 'deleted_at',
+        softDeleteValue: 'timestamp',
       },
     ]);
     // the http form resets to blank when the bridge writes to databases
@@ -483,13 +487,10 @@ describe('buildInput', () => {
     d.destKind = 'database';
     d.dbTargets = [
       {
+        ...blankDbTarget(),
         connectionId: 'c2',
-        database: '',
-        schema: '',
         table: '  users_copy  ',
-        writeMode: 'upsert',
         keyColumns: ['id'],
-        createMissingTable: true,
         renames: { email: ' mail ', name: 'ignored' },
       },
     ];
@@ -509,9 +510,46 @@ describe('buildInput', () => {
             { source: 'email', target: 'mail' }, // rename trimmed
           ],
           createMissingTable: true,
+          onDelete: 'delete',
+          softDelete: undefined,
         },
       ],
     });
+  });
+
+  it('what a delete does to a target: kept through an edit; the marker only while it means something', () => {
+    const d = loadBridge(
+      httpBridge({
+        destination: {
+          kind: 'database',
+          targets: [
+            { connectionId: 'c2', table: 'a', writeMode: 'upsert', keyColumns: ['id'], mapping: [], createMissingTable: true, onDelete: 'soft', softDelete: { column: 'gone_at', value: 'timestamp' } },
+            { connectionId: 'c2', table: 'b', writeMode: 'upsert', keyColumns: ['id'], mapping: [], createMissingTable: true, onDelete: 'ignore' },
+            // saved before the option existed
+            { connectionId: 'c2', table: 'c', writeMode: 'upsert', keyColumns: ['id'], mapping: [], createMissingTable: true } as never,
+          ],
+        },
+      }),
+    );
+    expect(d.dbTargets.map((t) => [t.onDelete, t.softDeleteColumn, t.softDeleteValue])).toEqual([
+      ['soft', 'gone_at', 'timestamp'],
+      ['ignore', 'deleted_at', 'timestamp'],
+      ['delete', 'deleted_at', 'timestamp'],
+    ]);
+    d.included = new Set(['id']);
+    const saved = buildInput(d, ctx()).destination;
+    expect(saved.kind === 'database' && saved.targets.map((t) => [t.onDelete, t.softDelete])).toEqual([
+      ['soft', { column: 'gone_at', value: 'timestamp' }],
+      ['ignore', undefined],
+      ['delete', undefined],
+    ]);
+
+    // switched from soft to delete: the marker column goes with it
+    d.dbTargets[0] = { ...d.dbTargets[0]!, onDelete: 'delete' };
+    const again = buildInput(d, ctx()).destination;
+    expect(again.kind === 'database' && again.targets[0]!.softDelete).toBeUndefined();
+    // a new target removes rows, like every target before this
+    expect(blankDbTarget()).toMatchObject({ onDelete: 'delete', softDeleteColumn: 'deleted_at', softDeleteValue: 'timestamp' });
   });
 
   it('builds watch triggers per strategy and clamps the poll interval to 1s', () => {
@@ -734,13 +772,10 @@ describe('column transforms', () => {
     d.destKind = 'database';
     d.dbTargets = [
       {
+        ...blankDbTarget(),
         connectionId: 'c2',
-        database: '',
-        schema: '',
         table: 'users_copy',
-        writeMode: 'upsert',
         keyColumns: ['id'],
-        createMissingTable: true,
         renames: { label: 'display_name' },
       },
     ];

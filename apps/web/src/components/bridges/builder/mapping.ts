@@ -103,6 +103,9 @@ export function loadBridge(h: Bridge): BuilderDraft {
           .filter((m) => m.source !== m.target)
           .map((m) => [m.source, m.target]),
       ),
+      onDelete: t.onDelete ?? 'delete',
+      softDeleteColumn: t.softDelete?.column ?? 'deleted_at',
+      softDeleteValue: t.softDelete?.value ?? 'timestamp',
     }));
     d.dest = blankDestination();
   } else {
@@ -257,6 +260,13 @@ export function buildInput(
               target: (t.renames[s]?.trim() || s),
             })),
             createMissingTable: t.createMissingTable,
+            onDelete: t.onDelete,
+            // kept only while it means something: a marker column left over from
+            // an earlier choice is not part of a target that removes its rows
+            softDelete:
+              t.onDelete === 'soft'
+                ? { column: t.softDeleteColumn.trim(), value: t.softDeleteValue }
+                : undefined,
           })),
         }
       : {

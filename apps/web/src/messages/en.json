@@ -286,7 +286,18 @@
     "cdcFromNow": "Only changes from now on",
     "cdcFromBeginning": "Copy what is there, then follow changes",
     "cdcFromNowHint": "Rows the table already holds are left alone. The bridge delivers what changes after its first start.",
-    "cdcFromBeginningHint": "On its first start the bridge takes its place in the change log, copies the table, then delivers everything that changed meanwhile — nothing is lost in between. A bridge that already has a position resumes from it."
+    "cdcFromBeginningHint": "On its first start the bridge takes its place in the change log, copies the table, then delivers everything that changed meanwhile — nothing is lost in between. A bridge that already has a position resumes from it.",
+    "onDelete": "When a row is deleted at the source",
+    "onDeleteDelete": "Delete it here too",
+    "onDeleteSoft": "Keep it, and mark it as deleted",
+    "onDeleteIgnore": "Do nothing: keep every row",
+    "softDeleteColumn": "Marker column",
+    "softDeleteValue": "What it is marked with",
+    "softDeleteTimestamp": "the time it was deleted",
+    "softDeleteBoolean": "true / false",
+    "onDeleteDeleteHint": "Applies to live (change-stream) bridges that capture deletes; a polling bridge cannot see one.",
+    "onDeleteSoftHint": "The row stays and the column is set; a row that comes back under the same key is unmarked. The column is created with the table when Syncle creates it — an existing table has to have it already. A TRUNCATE at the source is not mirrored.",
+    "onDeleteIgnoreHint": "This target keeps everything it was ever sent — an archive, a warehouse. A TRUNCATE at the source is not mirrored either."
   },
   "builderFilters": {
     "title": "Only rows where",

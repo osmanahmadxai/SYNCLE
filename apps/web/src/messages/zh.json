@@ -286,7 +286,18 @@
     "cdcFromNow": "仅从现在开始的变更",
     "cdcFromBeginning": "先复制现有数据，再跟随变更",
     "cdcFromNowHint": "表中已有的行保持不动。桥接只投递首次启动之后发生的变更。",
-    "cdcFromBeginningHint": "首次启动时，桥接先在变更日志中记下位置，复制整张表，然后投递复制期间发生的所有变更——中间不会丢失任何内容。已有位置的桥接会从该位置继续。"
+    "cdcFromBeginningHint": "首次启动时，桥接先在变更日志中记下位置，复制整张表，然后投递复制期间发生的所有变更——中间不会丢失任何内容。已有位置的桥接会从该位置继续。",
+    "onDelete": "源端删除某行时",
+    "onDeleteDelete": "这里也删除",
+    "onDeleteSoft": "保留该行，并标记为已删除",
+    "onDeleteIgnore": "什么都不做：保留每一行",
+    "softDeleteColumn": "标记列",
+    "softDeleteValue": "用什么来标记",
+    "softDeleteTimestamp": "删除时间",
+    "softDeleteBoolean": "true / false",
+    "onDeleteDeleteHint": "适用于捕获删除操作的实时（变更流）桥接；轮询桥接看不到删除。",
+    "onDeleteSoftHint": "该行会保留，并设置标记列；同一主键的行再次出现时会取消标记。由 Syncle 建表时会一并创建该列——已有的表必须已包含该列。源端的 TRUNCATE 不会被同步。",
+    "onDeleteIgnoreHint": "此目标保留收到过的所有数据——归档库、数据仓库。源端的 TRUNCATE 同样不会被同步。"
   },
   "builderFilters": {
     "title": "仅发送满足条件的行",

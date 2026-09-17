@@ -475,9 +475,60 @@ export default function Page() {
                 does not exist
               </td>
             </tr>
+            <tr>
+              <td>
+                <code>onDelete</code>, <code>softDelete</code>
+              </td>
+              <td>
+                <code>delete</code>
+              </td>
+              <td>
+                what a delete at the source does to this target — see{' '}
+                <a href="#delete-policy">below</a>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+      <h3 id="delete-policy">When a row is deleted at the source</h3>
+      <p>
+        A live bridge that captures deletes applies them, and each target
+        says how — so one bridge can keep a working copy in step and feed an
+        archive that never forgets:
+      </p>
+      <ul>
+        <li>
+          <strong>Delete it here too</strong> (<code>delete</code>, the
+          default): a keyed delete.
+        </li>
+        <li>
+          <strong>Keep it, and mark it as deleted</strong> (<code>soft</code>
+          ): the row stays, and a column of the target —{' '}
+          <code>softDelete.column</code>, <code>deleted_at</code> by default
+          — is set to the time of the delete, or to <code>true</code> with{' '}
+          <code>softDelete.value: &quot;boolean&quot;</code>. Every ordinary
+          write sets it back to <code>NULL</code> / <code>false</code>, so a
+          row that comes back at the source under the same key is unmarked by
+          the write that brings it back. The marker is a column of its own:
+          not a key, not one that receives source data. Syncle creates it
+          with the table when it creates the table; an existing table has to
+          have it already — the <a href="#dry-run">dry run</a> says so when
+          it does not — because an existing table is never altered.
+        </li>
+        <li>
+          <strong>Do nothing</strong> (<code>ignore</code>): the target keeps
+          every row it was ever sent.
+        </li>
+      </ul>
+      <p>
+        A <code>TRUNCATE</code> (PostgreSQL sources, opt-in) empties only the
+        targets that delete; a soft-delete or ignore target is left as it is,
+        and the delivery&apos;s summary says so per target. A target with no
+        key columns (append-only <code>insert</code> mode) has nothing to
+        find a row by, so deletes are never applied to it, whatever the
+        policy. Polling (watch) bridges cannot see deletes at all.
+      </p>
+
       <h3 id="type-translation">How column types are translated</h3>
       <p>
         An auto-created table takes <code>keyColumns</code> as its NOT NULL

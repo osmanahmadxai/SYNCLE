@@ -286,7 +286,18 @@
     "cdcFromNow": "Solo le modifiche da ora in poi",
     "cdcFromBeginning": "Copia ciò che c'è, poi segui le modifiche",
     "cdcFromNowHint": "Le righe già presenti nella tabella non vengono toccate. Il bridge consegna ciò che cambia dopo il primo avvio.",
-    "cdcFromBeginningHint": "Al primo avvio il bridge prende posizione nel log delle modifiche, copia la tabella, poi consegna tutto ciò che è cambiato nel frattempo: non si perde nulla. Un bridge che ha già una posizione riprende da lì."
+    "cdcFromBeginningHint": "Al primo avvio il bridge prende posizione nel log delle modifiche, copia la tabella, poi consegna tutto ciò che è cambiato nel frattempo: non si perde nulla. Un bridge che ha già una posizione riprende da lì.",
+    "onDelete": "Quando una riga viene eliminata nell'origine",
+    "onDeleteDelete": "Eliminala anche qui",
+    "onDeleteSoft": "Mantienila e segnala come eliminata",
+    "onDeleteIgnore": "Non fare nulla: mantieni ogni riga",
+    "softDeleteColumn": "Colonna marcatore",
+    "softDeleteValue": "Con cosa viene segnata",
+    "softDeleteTimestamp": "l'ora dell'eliminazione",
+    "softDeleteBoolean": "vero / falso",
+    "onDeleteDeleteHint": "Vale per i bridge live (flusso di modifiche) che catturano le eliminazioni; un bridge a polling non può vederle.",
+    "onDeleteSoftHint": "La riga resta e la colonna viene impostata; una riga che ritorna con la stessa chiave viene smarcata. La colonna viene creata con la tabella quando è Syncle a crearla: una tabella esistente deve già averla. Un TRUNCATE nell'origine non viene replicato.",
+    "onDeleteIgnoreHint": "Questa destinazione conserva tutto ciò che ha ricevuto: un archivio, un data warehouse. Nemmeno un TRUNCATE nell'origine viene replicato."
   },
   "builderFilters": {
     "title": "Solo le righe in cui",

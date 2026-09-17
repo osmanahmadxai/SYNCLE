@@ -34,6 +34,11 @@ export interface DbTarget {
   createMissingTable: boolean;
   /** optional source column → target column renames (default identity) */
   renames: Record<string, string>;
+  /** what a DELETE at the source does here: remove the row, mark it, or leave it */
+  onDelete: 'delete' | 'soft' | 'ignore';
+  /** the target column a soft delete marks the row with, and what with */
+  softDeleteColumn: string;
+  softDeleteValue: 'timestamp' | 'boolean';
 }
 
 export interface Delivery {
@@ -54,6 +59,9 @@ export function blankDbTarget(): DbTarget {
     keyColumns: [],
     createMissingTable: true,
     renames: {},
+    onDelete: 'delete',
+    softDeleteColumn: 'deleted_at',
+    softDeleteValue: 'timestamp',
   };
 }
 
