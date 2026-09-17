@@ -633,7 +633,12 @@
     "writeResult": "Write result",
     "response": "Response",
     "emptyBody": "(empty)",
-    "emptyRow": "(empty row)"
+    "emptyRow": "(empty row)",
+    "retryThis": "Retry",
+    "retryThisHint": "Retry this one delivery now",
+    "retriedOk": "Delivered",
+    "retriedStillFailing": "Still failing",
+    "couldNotRetry": "Could not retry the delivery"
   },
   "jobDetail": {
     "status": {
@@ -665,7 +670,19 @@
     "couldNotResume": "Could not resume",
     "retryStarted": "Resending failed deliveries with the current config",
     "couldNotRetry": "Could not retry",
-    "prunedNote": "{count, plural, one {Details of # older delivery has been removed (Settings → Engine → delivery history). The totals above still count them.} other {Details of # older deliveries have been removed (Settings → Engine → delivery history). The totals above still count them.}}"
+    "prunedNote": "{count, plural, one {Details of # older delivery has been removed (Settings → Engine → delivery history). The totals above still count them.} other {Details of # older deliveries have been removed (Settings → Engine → delivery history). The totals above still count them.}}",
+    "downloadFailures": "Failures:"
+  },
+  "jobStrip": {
+    "label": "Runs of this bridge",
+    "runs": "{count} runs",
+    "tone": {
+      "running": "Running",
+      "ok": "Completed",
+      "warn": "{failed} failed deliveries",
+      "bad": "Stopped by a failure",
+      "idle": "Stopped"
+    }
   },
   "queryEditor": {
     "selectConnection": "Select a connection to run queries.",

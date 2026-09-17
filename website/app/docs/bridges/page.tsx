@@ -1170,7 +1170,17 @@ export default function Page() {
         re-sends just its failed delivery cells, which flip to success in
         place. On a live bridge the failed rows are in its dead-letter queue,
         and <em>Retry failed</em> retries that instead, without stopping the
-        bridge. All of these are also plain endpoints,
+        bridge. A replay that had <strong>stopped</strong> at a failure (on
+        failure: abort, the default) does not end there: once the failed
+        delivery has gone through, it carries on from where it stopped, with
+        the bridge as it is configured now — the rows after the failure were
+        never read, and <em>completed</em> has to mean them too. A single
+        failed delivery can be retried on its own from its detail panel, a
+        job&apos;s failures can be downloaded as CSV or NDJSON (the rows&apos;
+        keys, the error, the payload that was sent), and a bridge with more
+        than one run shows them as a strip above the timeline — green for a
+        clean run, amber for one that finished with failed deliveries, red
+        for one a failure stopped. All of these are also plain endpoints,
         documented on the <a href="/docs/api">HTTP API page</a>; reading the
         delivery timeline is covered in the{' '}
         <a href="/docs/quickstart">quickstart</a>.

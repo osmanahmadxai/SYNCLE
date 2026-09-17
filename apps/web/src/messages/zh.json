@@ -633,7 +633,12 @@
     "writeResult": "写入结果",
     "response": "响应",
     "emptyBody": "（空）",
-    "emptyRow": "（空行）"
+    "emptyRow": "（空行）",
+    "retryThis": "重试",
+    "retryThisHint": "立即重试这一次投递",
+    "retriedOk": "已送达",
+    "retriedStillFailing": "仍然失败",
+    "couldNotRetry": "无法重试该投递"
   },
   "jobDetail": {
     "status": {
@@ -665,7 +670,19 @@
     "couldNotResume": "无法恢复",
     "retryStarted": "正在使用当前配置重新发送失败的投递",
     "couldNotRetry": "无法重试",
-    "prunedNote": "{count, plural, other {较早的 # 次投递的详情已被移除（设置 → 引擎 → 投递历史）。上方的总数仍包含这些投递。}}"
+    "prunedNote": "{count, plural, other {较早的 # 次投递的详情已被移除（设置 → 引擎 → 投递历史）。上方的总数仍包含这些投递。}}",
+    "downloadFailures": "失败记录："
+  },
+  "jobStrip": {
+    "label": "此桥接的运行记录",
+    "runs": "{count} 次运行",
+    "tone": {
+      "running": "运行中",
+      "ok": "已完成",
+      "warn": "{failed} 次投递失败",
+      "bad": "因失败而停止",
+      "idle": "已停止"
+    }
   },
   "queryEditor": {
     "selectConnection": "选择一个连接以运行查询。",

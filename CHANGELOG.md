@@ -325,6 +325,15 @@ can no longer lose a row to a failed delivery.
   - Syncle's own keys (its job queues, a bridge's spool) are left out of a
     replay when the Redis being read is the one Syncle runs on, as they already
     were from a change stream.
+- **"Retry failed" on a replay that had stopped at a failure marked it
+  completed — without ever sending the rows after the failure.** A replay stops
+  at the first failed delivery by default (`onError: abort`). Fix the cause,
+  press *Retry failed*: the failed delivery was re-sent, succeeded, and the job
+  turned `completed`. The rows the run had never reached were not read, not
+  sent, and not mentioned. A replay now records when it has read its source to
+  the end; one that has not carries on from where it stopped once its failures
+  are cleared (with the bridge as it is configured *now* — the fix is often
+  there), and stops again at the next failure rather than go past it.
 - **On MongoDB, nothing that looked a document up by its `_id` found it.** A row
   shows an ObjectId as its 24 hex characters, and that text is what came back in
   every filter on `_id`. MongoDB does not compare an ObjectId with a string, so
@@ -371,6 +380,15 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Failure tooling.** Retry **one** failed delivery from its detail panel
+  (`POST …/deliveries/:sequence/retry`; on a live bridge it retries the rows
+  from the dead-letter queue, re-read from the source). **Download a job's
+  failures** as CSV or NDJSON — the rows' keys, the error, attempts, the payload
+  that was sent — streamed, and with CSV cells that a spreadsheet would run as a
+  formula neutralised. And a **run history strip** on a bridge with more than
+  one run: green, amber (finished with failed deliveries), red (stopped by a
+  failure); the page used to show the latest run and nothing else. Deliveries
+  now carry their operation (`op`) in the API.
 - **A delete policy per target.** What a delete at the source does is now each
   target's choice: *delete it here too* (the default), *keep it and mark it as
   deleted* — a column of the target is set to the time of the delete, or to

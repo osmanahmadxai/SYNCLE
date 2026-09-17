@@ -170,6 +170,15 @@ export class DeadLetterService {
 
   /* ----- reading ----- */
 
+  /** the pending entries that hold the rows of ONE delivery */
+  async pendingIds(bridgeId: string, jobId: string, sequence: number): Promise<string[]> {
+    const rows = await this.prisma.bridgeDeadLetter.findMany({
+      where: { bridgeId, jobId, sequence, status: 'pending' },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  }
+
   /** undelivered rows a bridge is holding, for the queue-size bound */
   async pendingRows(bridgeId: string): Promise<number> {
     const agg = await this.prisma.bridgeDeadLetter.aggregate({

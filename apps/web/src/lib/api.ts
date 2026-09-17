@@ -358,6 +358,14 @@ export const api = {
     request<CdcReadiness>('/bridges/cdc/readiness', { method: 'POST', ...jsonBody(body) }),
   retryFailedDeliveries: (id: string, jobId: string) =>
     request<BridgeJob>(`/bridges/${id}/jobs/${jobId}/retry-failed`, { method: 'POST' }),
+  /** retry ONE failed delivery, now */
+  retryDelivery: (id: string, jobId: string, sequence: number) =>
+    request<BridgeDelivery>(`/bridges/${id}/jobs/${jobId}/deliveries/${sequence}/retry`, {
+      method: 'POST',
+    }),
+  /** where a job's failed deliveries download from (the session cookie goes with a same-origin link) */
+  failuresUrl: (id: string, jobId: string, format: 'csv' | 'ndjson') =>
+    `${BASE_URL}/bridges/${id}/jobs/${jobId}/failures?format=${format}`,
 
   /* ----- dead letters: rows a live bridge set aside instead of losing ----- */
 

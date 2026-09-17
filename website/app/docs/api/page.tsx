@@ -795,7 +795,40 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 Re-queue the same job to re-send only its failed deliveries.
                 On a watch or CDC bridge whose failed rows are in the
                 dead-letter queue, retries the queue instead — without
-                stopping the bridge
+                stopping the bridge. A replay that had <em>stopped</em> at a
+                failure (on failure: abort) then carries on from where it
+                stopped: the rows after the failure were never read, and
+                &quot;completed&quot; has to mean them too
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>
+                  POST /api/bridges/:id/jobs/:jobId/deliveries/:sequence/retry
+                </code>
+              </td>
+              <td>
+                Retry one failed delivery, now; answers with the delivery as
+                it is afterwards. Rows a live bridge set aside are retried
+                from its dead-letter queue (re-read from the source);
+                anything else is re-sent from what was captured. 400 unless
+                the delivery is <code>failed</code>, 409 while the job is
+                active
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>
+                  GET /api/bridges/:id/jobs/:jobId/failures?format=csv|ndjson
+                </code>
+              </td>
+              <td>
+                The job&apos;s failed deliveries as a file download:
+                sequence, operation, row count, the rows&apos; keys,
+                attempts, HTTP status, error, time and the payload that was
+                sent. Streamed, so a job with very many failures is fine. CSV
+                cells that would be read as a formula by a spreadsheet are
+                neutralised with a leading apostrophe
               </td>
             </tr>
             <tr>

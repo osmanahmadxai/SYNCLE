@@ -419,6 +419,20 @@ export function useRetryFailed(bridgeId: string) {
   });
 }
 
+/** retry ONE failed delivery; the job's counters and the delivery itself change */
+export function useRetryDelivery(bridgeId: string, jobId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sequence: number) => api.retryDelivery(bridgeId, jobId, sequence),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId) });
+      qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
+    },
+  });
+}
+
 /**
  * rows the bridge set aside instead of losing. polled while the bridge is live
  * (new ones can arrive at any moment), otherwise fetched once.

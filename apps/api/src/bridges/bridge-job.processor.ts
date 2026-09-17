@@ -123,7 +123,21 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
       // normal job streams rows from the source. both share the registry's
       // abort machinery so cancel works identically for either mode.
       if (job.data.mode === 'resend') {
-        await this.jobs.executeResend(jobId, controller.signal);
+        const next = await this.jobs.executeResend(jobId, controller.signal);
+        if (next === 'continue') {
+          // the failure this replay had stopped at is out of the way: read on
+          // from where it stopped (in this same queue entry — a second one
+          // under the same id would be dropped as a duplicate)
+          const resumed = await this.jobs.getJobRow(jobId);
+          await this.execute(
+            jobId,
+            resumed.cursorOffset,
+            parseKeysetCheckpoint(resumed.cursorJson),
+            resumed.configSnapshotJson,
+            resumed.bridgeId,
+            controller.signal,
+          );
+        }
       } else {
         await this.execute(
           jobId,
@@ -219,7 +233,15 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
         }
       }
 
-      await this.jobs.finalize(jobId, (await stopRequested()) ? 'canceled' : 'completed');
+      if (await stopRequested()) {
+        await this.jobs.finalize(jobId, 'canceled');
+        return;
+      }
+      // the source was read to its end. recorded, because "every delivery is
+      // green" does not say it: a run that stopped early is green too, up to
+      // where it stopped
+      await this.jobs.markStreamed(jobId);
+      await this.jobs.finalize(jobId, 'completed');
     } catch (err) {
       if (signal.aborted || (await this.jobs.cancelRequested(jobId))) {
         await this.jobs.finalize(jobId, 'canceled');

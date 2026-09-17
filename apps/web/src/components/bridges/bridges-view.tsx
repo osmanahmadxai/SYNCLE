@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import { useConfirm } from '@/components/confirm';
 import { Button } from '@/components/ui/button';
 import { JobDetail, JobStatusBadge } from './job-detail';
+import { JobStrip } from './job-strip';
 import { WorkspaceMap } from './workspace-map';
 
 export function BridgesView() {
@@ -83,6 +84,7 @@ function BridgePanel({
   onDeleted: () => void;
 }) {
   const confirm = useConfirm();
+  const locale = useLocale();
   const t = useTranslations('bridges');
   const tc = useTranslations('common');
   const { openBridgeEditor } = useStudio();
@@ -271,6 +273,7 @@ function BridgePanel({
       </div>
 
       {/* jobs strip */}
+      <JobStrip jobs={jobs ?? []} selectedId={selectedJobId} onSelect={setSelectedJobId} locale={locale} />
 
       {/* selected job */}
       <div className="flex min-h-0 flex-1 flex-col">

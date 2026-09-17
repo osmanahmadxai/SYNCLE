@@ -1,10 +1,10 @@
 'use client';
 
-import { Ban, Loader2, Play, RotateCcw } from 'lucide-react';
+import { Ban, Download, Loader2, Play, RotateCcw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import type { EndpointInfo, BridgeJob, BridgeJobStatus } from '@syncle/core';
-import { ApiError } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import {
   useCancelBridgeJob,
   useRetryFailed,
@@ -195,6 +195,29 @@ export function JobDetail({
               )}
               {t('retryFailed', { count: job.failedCount })}
             </Button>
+          )}
+          {canRetry && (
+            // plain links: the browser downloads them with the session cookie,
+            // and a big file never passes through the page's memory
+            <span className="text-muted-foreground flex items-center gap-1 text-xs">
+              <Download className="h-3.5 w-3.5" />
+              {t('downloadFailures')}
+              <a
+                className="hover:text-foreground underline"
+                href={api.failuresUrl(bridgeId, job.id, 'csv')}
+                download
+              >
+                CSV
+              </a>
+              <span className="opacity-40">·</span>
+              <a
+                className="hover:text-foreground underline"
+                href={api.failuresUrl(bridgeId, job.id, 'ndjson')}
+                download
+              >
+                NDJSON
+              </a>
+            </span>
           )}
           {!isLive && RESUMABLE.includes(job.status) && (
             <Button

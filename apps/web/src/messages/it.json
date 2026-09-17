@@ -633,7 +633,12 @@
     "writeResult": "Risultato della scrittura",
     "response": "Risposta",
     "emptyBody": "(vuoto)",
-    "emptyRow": "(riga vuota)"
+    "emptyRow": "(riga vuota)",
+    "retryThis": "Riprova",
+    "retryThisHint": "Riprova subito questa sola consegna",
+    "retriedOk": "Consegnata",
+    "retriedStillFailing": "Continua a fallire",
+    "couldNotRetry": "Impossibile riprovare la consegna"
   },
   "jobDetail": {
     "status": {
@@ -665,7 +670,19 @@
     "couldNotResume": "Impossibile riprendere",
     "retryStarted": "Reinvio delle consegne fallite con la configurazione attuale",
     "couldNotRetry": "Impossibile riprovare",
-    "prunedNote": "{count, plural, one {I dettagli di # consegna meno recente sono stati rimossi (Impostazioni → Motore → cronologia delle consegne). I totali qui sopra la includono comunque.} other {I dettagli di # consegne meno recenti sono stati rimossi (Impostazioni → Motore → cronologia delle consegne). I totali qui sopra le includono comunque.}}"
+    "prunedNote": "{count, plural, one {I dettagli di # consegna meno recente sono stati rimossi (Impostazioni → Motore → cronologia delle consegne). I totali qui sopra la includono comunque.} other {I dettagli di # consegne meno recenti sono stati rimossi (Impostazioni → Motore → cronologia delle consegne). I totali qui sopra le includono comunque.}}",
+    "downloadFailures": "Errori:"
+  },
+  "jobStrip": {
+    "label": "Esecuzioni di questo bridge",
+    "runs": "{count} esecuzioni",
+    "tone": {
+      "running": "In corso",
+      "ok": "Completata",
+      "warn": "{failed} consegne fallite",
+      "bad": "Fermata da un errore",
+      "idle": "Fermata"
+    }
   },
   "queryEditor": {
     "selectConnection": "Seleziona una connessione per eseguire query.",

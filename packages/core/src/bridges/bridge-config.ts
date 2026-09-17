@@ -572,6 +572,8 @@ export interface BridgeDelivery {
   responseBody: string | null;
   durationMs: number | null;
   createdAt: string;
+  /** what kind of change a live bridge delivered here; null for a replay's rows */
+  op?: CdcOperation | null;
 }
 
 /** one column of a table a bridge is about to create */

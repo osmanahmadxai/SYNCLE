@@ -4,12 +4,15 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Logger,
   Param,
   Post,
   Put,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   type Bridge,
   type BridgeDelivery,
@@ -498,6 +501,58 @@ export class BridgesController {
     });
   }
 
+  /**
+   * retry ONE failed delivery, now. rows a live bridge set aside are retried
+   * from its dead-letter queue (by re-reading the source); anything else is
+   * re-sent from what was captured of it
+   */
+  @Post(':id/jobs/:jobId/deliveries/:sequence/retry')
+  @HttpCode(200)
+  async retryDelivery(
+    @Param('id') id: string,
+    @Param('jobId') jobId: string,
+    @Param('sequence') sequence: string,
+  ): Promise<BridgeDelivery> {
+    await this.jobs.getJob(id, jobId); // 404 unless the job belongs to this bridge
+    const seq = parseBound('sequence', sequence)!;
+    const parked = await this.deadLetters.pendingIds(id, jobId, seq);
+    if (parked.length > 0) {
+      await this.deadLetters.retry(id, { ids: parked, force: false });
+      return this.jobs.getDelivery(jobId, seq);
+    }
+    return this.jobs.retryDelivery(id, jobId, seq);
+  }
+
+  /**
+   * a job's failed deliveries as a file: which rows, why, and what was sent —
+   * to hand to whoever owns the destination, or to fix and load by hand.
+   * `format=csv` (default) or `ndjson`
+   */
+  @Get(':id/jobs/:jobId/failures')
+  async downloadFailures(
+    @Param('id') id: string,
+    @Param('jobId') jobId: string,
+    @Query('format') format: string | undefined,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.jobs.getJob(id, jobId); // 404 unless the job belongs to this bridge
+    const ndjson = format === 'ndjson';
+    if (format !== undefined && !ndjson && format !== 'csv') {
+      throw new BadRequestError('format must be "csv" or "ndjson".');
+    }
+    // (node's own response API throughout: it is all a stream of lines needs)
+    res.statusCode = 200;
+    res.setHeader('Content-Type', ndjson ? 'application/x-ndjson; charset=utf-8' : 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="syncle-failures-${jobId}.${ndjson ? 'ndjson' : 'csv'}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    if (!ndjson) res.write(`${FAILURE_COLUMNS.join(',')}\r\n`);
+    // a page at a time: a job can have more failures than fit in memory at once
+    for await (const d of this.jobs.failedDeliveries(jobId)) {
+      res.write(ndjson ? `${JSON.stringify(failureRecord(d))}\n` : `${failureCsvLine(d)}\r\n`);
+    }
+    res.end();
+  }
+
   @Post(':id/jobs/:jobId/skip')
   async skip(
     @Param('id') id: string,
@@ -508,6 +563,43 @@ export class BridgesController {
     const skipped = await this.jobs.skipDeliveries(jobId, dto.sequences);
     return { skipped };
   }
+}
+
+const FAILURE_COLUMNS = ['sequence', 'operation', 'rows', 'row_keys', 'attempts', 'http_status', 'error', 'at', 'payload'] as const;
+
+/** one failed delivery, flat */
+export function failureRecord(
+  d: BridgeDelivery & { rowKeys?: unknown[] | null },
+): Record<(typeof FAILURE_COLUMNS)[number], unknown> {
+  return {
+    sequence: d.sequence,
+    operation: d.op ?? null,
+    rows: d.rowCount,
+    row_keys: d.rowKeys ?? null,
+    attempts: d.attempts,
+    http_status: d.httpStatus ?? null,
+    error: d.error ?? null,
+    at: d.createdAt,
+    payload: d.requestBody ?? null,
+  };
+}
+
+/**
+ * RFC 4180, and safe to open in a spreadsheet: a cell that starts with `=`,
+ * `+`, `-`, `@` (or a tab / CR) is a FORMULA to Excel and friends, and an error
+ * text or a row's value is somebody else's data. such a cell gets a leading
+ * apostrophe, which a spreadsheet shows as text and everything else can strip
+ */
+export function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  let text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+export function failureCsvLine(d: BridgeDelivery & { rowKeys?: unknown[] | null }): string {
+  const record = failureRecord(d);
+  return FAILURE_COLUMNS.map((c) => csvCell(record[c])).join(',');
 }
 
 /** parse a numeric query param, rejecting NaN/negatives instead of 500ing */

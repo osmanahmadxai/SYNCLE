@@ -10,6 +10,7 @@ import {
   List,
   Loader2,
   MousePointerClick,
+  RotateCcw,
   Search,
   SkipForward,
   Table as TableIcon,
@@ -23,7 +24,7 @@ import type {
   BridgeDelivery,
 } from '@syncle/core';
 import { ApiError } from '@/lib/api';
-import { useBridgeDeliveries, useSkipDeliveries } from '@/lib/queries';
+import { useBridgeDeliveries, useRetryDelivery, useSkipDeliveries } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -781,6 +782,8 @@ export function DeliveryMonitor({
       {openDelivery && (
         <div className="bg-muted/20 w-[44%] min-w-[320px] border-l">
           <DeliveryDetail
+            bridgeId={bridgeId}
+            jobId={jobId}
             delivery={openDelivery}
             endpoint={endpoint}
             onClose={() => setOpenId(null)}
@@ -1004,16 +1007,33 @@ function RecordsFeed({
 }
 
 function DeliveryDetail({
+  bridgeId,
+  jobId,
   delivery: d,
   endpoint,
   onClose,
 }: {
+  bridgeId: string;
+  jobId:    string;
   delivery: BridgeDelivery;
   endpoint: EndpointInfo;
   onClose:  () => void;
 }) {
   const t = useTranslations('deliveryLog');
   const [raw, setRaw] = useState(false);
+  const retry = useRetryDelivery(bridgeId, jobId);
+
+  async function handleRetry() {
+    try {
+      const after = await retry.mutateAsync(d.sequence);
+      if (after.status === 'success') toast.success(t('retriedOk'));
+      else toast.error(t('retriedStillFailing'), { description: after.error ?? undefined });
+    } catch (err) {
+      toast.error(t('couldNotRetry'), {
+        description: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
   const rows = parseRows(d.requestBody);
 
   function copyCurl() {
@@ -1049,6 +1069,23 @@ function DeliveryDetail({
             <span className="text-muted-foreground font-mono">{t('dbWrite')}</span>
           )}
           <div className="ml-auto flex items-center gap-1">
+            {d.status === 'failed' && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2"
+                disabled={retry.isPending}
+                onClick={() => void handleRetry()}
+                title={t('retryThisHint')}
+              >
+                {retry.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                )}
+                {t('retryThis')}
+              </Button>
+            )}
             {rows && (
               <Button
                 variant="ghost"
