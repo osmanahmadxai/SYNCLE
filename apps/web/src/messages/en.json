@@ -22,6 +22,8 @@
   },
   "auth": {
     "login": {
+      "forgot": "Forgot your password?",
+      "resetTitle": "Reset the password",
       "title": "Sign in",
       "description": "Enter your credentials to access Syncle.",
       "username": "Username",
@@ -29,6 +31,21 @@
       "submit": "Sign in",
       "enterBoth": "Enter your username and password.",
       "couldNotSignIn": "Could not sign in"
+    },
+    "reset": {
+      "how": "There is no e-mail to send a link to. Syncle prints a reset code on the server it runs on: being able to read it there is what shows you are its operator.",
+      "ask": "Print a reset code on the server",
+      "where": "If there is an account, a code has just been printed in the API’s log, and written to the file “reset-code” in its data directory. It works once, for 15 minutes.",
+      "code": "Reset code",
+      "newPassword": "New password",
+      "confirm": "Confirm the new password",
+      "submit": "Set the password and sign in",
+      "back": "Back to signing in",
+      "problem": {
+        "code": "Enter the reset code from the server’s log.",
+        "short": "The password needs at least 8 characters.",
+        "mismatch": "The two passwords are not the same."
+      }
     },
     "setup": {
       "title": "Create the admin account",

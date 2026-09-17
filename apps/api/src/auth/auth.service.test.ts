@@ -49,6 +49,10 @@ function fakePrisma() {
         const user = {
           ...data,
           sessionVersion: 0,
+          resetCodeHash: null,
+          resetCodeMintedAt: null,
+          resetCodeExpiresAt: null,
+          resetCodeFailures: 0,
           createdAt: now,
           updatedAt: now,
         } as AppUser;
@@ -63,21 +67,23 @@ function fakePrisma() {
         [...users.values()].find((u) =>
           where.id ? u.id === where.id : u.username === where.username,
         ) ?? null,
+      findFirst: async () => [...users.values()][0] ?? null,
       update: async ({
         where,
         data,
       }: {
         where: { id: string };
-        data: { passwordHash: string };
+        data: Record<string, unknown>;
       }) => {
         const user = users.get(where.id)!;
-        const next = {
-          ...user,
-          passwordHash: data.passwordHash,
-          sessionVersion: user.sessionVersion + 1,
-        };
-        users.set(next.id, next);
-        return next;
+        const next = { ...user } as Record<string, unknown>;
+        for (const [key, value] of Object.entries(data)) {
+          const step = (value as { increment?: number } | null)?.increment;
+          next[key] =
+            typeof step === 'number' ? (next[key] as number) + step : value;
+        }
+        users.set(where.id, next as unknown as AppUser);
+        return next as unknown as AppUser;
       },
     },
   };
@@ -303,8 +309,15 @@ describe('sessions', () => {
     const { res, cookies } = fakeRes();
     await service.issueSession(res, user);
     const token = cookies.get(SESSION_COOKIE)!.value;
+    // (the last character of unpadded base64url can carry bits that decode to
+    // nothing, so it is the one before it that is changed — to something it is
+    // NOT: this used to write an 'A' over it, which one token in 64 already had)
+    const at = token.length - 2;
     const flipped =
-      token.slice(0, -2) + (token.endsWith('A') ? 'B' : 'A') + token.slice(-1);
+      token.slice(0, at) +
+      (token[at] === 'A' ? 'B' : 'A') +
+      token.slice(at + 1);
+    expect(flipped).not.toBe(token);
     expect(await service.userFromRequest(reqWith(flipped))).toBeNull();
     expect(await service.userFromRequest(reqWith('garbage'))).toBeNull();
     expect(await service.userFromRequest(reqWith(''))).toBeNull();
@@ -415,5 +428,152 @@ describe('sessions', () => {
     expect(
       await service.renewIfDue(streaming.res, { user, ageSec: 99_999 }),
     ).toBe(false);
+  });
+});
+
+describe('a password that has been forgotten', () => {
+  /** the code, read where the operator reads it: the server's console */
+  const printedCode = (): string | null => {
+    const calls = (console.log as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls;
+    for (const [text] of [...calls].reverse()) {
+      const m = /Password reset code[\s\S]*?│\s+(\S+)\s+│/.exec(String(text));
+      if (m) return m[1]!;
+    }
+    return null;
+  };
+
+  it('the code is printed on the server, and only its hash is kept', async () => {
+    const { service, prisma } = make();
+    const user = await account(service);
+    await service.requestPasswordReset();
+    const code = printedCode()!;
+    expect(code).toMatch(/^[A-Za-z0-9_-]{12}$/);
+    const stored = prisma.users.get(user.id)!;
+    expect(stored.resetCodeHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(stored)).not.toContain(code);
+    expect(stored.resetCodeExpiresAt!.getTime() - Date.now()).toBeGreaterThan(
+      14 * 60_000,
+    );
+  });
+
+  it('with the code: a new password, the old one and every old session gone — and the code works once', async () => {
+    const { service } = make();
+    const user = await account(service);
+    const { res, cookies } = fakeRes();
+    await service.issueSession(res, user);
+    const oldSession = cookies.get(SESSION_COOKIE)!.value;
+
+    await service.requestPasswordReset();
+    const code = printedCode()!;
+    const updated = await service.resetPassword(
+      `  ${code} `,
+      'a brand new password',
+      '10.0.0.9',
+    );
+    expect(updated.sessionVersion).toBe(user.sessionVersion + 1);
+    expect(await service.userFromRequest(reqWith(oldSession))).toBeNull();
+    await expect(
+      service.login('admin', 'correct horse battery', '10.0.0.9'),
+    ).rejects.toThrow();
+    await expect(
+      service.login('admin', 'a brand new password', '10.0.0.9'),
+    ).resolves.toMatchObject({ username: 'admin' });
+    await expect(
+      service.resetPassword(code, 'yet another password', '10.0.0.9'),
+    ).rejects.toThrow(/not valid/);
+  });
+
+  it('without it: nothing — and ten wrong guesses, from wherever, kill the code', async () => {
+    const { service, prisma } = make();
+    const user = await account(service);
+    await expect(
+      service.resetPassword('anything', 'a brand new password', '10.0.0.1'),
+    ).rejects.toThrow(/not valid/);
+    await service.requestPasswordReset();
+    const code = printedCode()!;
+    for (let i = 0; i < 10; i++) {
+      // a new address every time: the per-address lockout never fires, the count on the code does
+      await expect(
+        service.resetPassword(
+          `wrong-${i}`,
+          'a brand new password',
+          `10.9.${i}.1`,
+        ),
+      ).rejects.toThrow(/not valid/);
+    }
+    expect(prisma.users.get(user.id)!.resetCodeHash).toBeNull();
+    await expect(
+      service.resetPassword(code, 'a brand new password', '10.0.0.77'),
+    ).rejects.toThrow(/not valid/);
+    await expect(
+      service.login('admin', 'correct horse battery', '10.0.0.77'),
+    ).resolves.toBeDefined();
+  });
+
+  it('one address guessing is locked out before that', async () => {
+    const { service } = make();
+    await account(service);
+    await service.requestPasswordReset();
+    for (let i = 0; i < 5; i++)
+      await service
+        .resetPassword(`wrong-${i}`, 'a brand new password', '10.1.1.1')
+        .catch(() => undefined);
+    await expect(
+      service.resetPassword(printedCode()!, 'a brand new password', '10.1.1.1'),
+    ).rejects.toThrow(/too many|try again|wait/i);
+  });
+
+  it('a code that has run out does not work', async () => {
+    const { service, prisma } = make();
+    const user = await account(service);
+    await service.requestPasswordReset();
+    const code = printedCode()!;
+    prisma.users.set(user.id, {
+      ...prisma.users.get(user.id)!,
+      resetCodeExpiresAt: new Date(Date.now() - 1000),
+    });
+    await expect(
+      service.resetPassword(code, 'a brand new password', '10.0.0.1'),
+    ).rejects.toThrow(/not valid/);
+  });
+
+  it('asking again within a minute makes no new code: the button cannot flood the log, or replace a code being typed', async () => {
+    const { service, prisma } = make();
+    const user = await account(service);
+    await service.requestPasswordReset();
+    const first = prisma.users.get(user.id)!.resetCodeHash;
+    await service.requestPasswordReset();
+    await service.requestPasswordReset();
+    expect(prisma.users.get(user.id)!.resetCodeHash).toBe(first);
+    // a minute later it does
+    prisma.users.set(user.id, {
+      ...prisma.users.get(user.id)!,
+      resetCodeMintedAt: new Date(Date.now() - 61_000),
+    });
+    await service.requestPasswordReset();
+    expect(prisma.users.get(user.id)!.resetCodeHash).not.toBe(first);
+  });
+
+  it('with no account there is nothing to reset, and nothing is printed', async () => {
+    const { service } = make();
+    await service.requestPasswordReset();
+    expect(printedCode()).toBeNull();
+  });
+
+  it('changing the password the ordinary way cancels a reset that was asked for', async () => {
+    const { service, prisma } = make();
+    const user = await account(service);
+    await service.requestPasswordReset();
+    const code = printedCode()!;
+    await service.changePassword(
+      user.id,
+      'correct horse battery',
+      'changed the usual way',
+    );
+    expect(prisma.users.get(user.id)!.resetCodeHash).toBeNull();
+    await expect(
+      service.resetPassword(code, 'a brand new password', '10.0.0.1'),
+    ).rejects.toThrow(/not valid/);
   });
 });

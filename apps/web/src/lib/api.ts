@@ -38,6 +38,7 @@ import type {
   BridgeJob,
   InsertRowParams,
   LoginDTO,
+  PasswordResetDTO,
   QueryResult,
   SetupDTO,
   UpdateRowParams,
@@ -122,6 +123,12 @@ export const api = {
     request<AuthUser>('/auth/setup', { method: 'POST', ...jsonBody(input) }),
   login: (input: LoginDTO) =>
     request<AuthUser>('/auth/login', { method: 'POST', ...jsonBody(input) }),
+  /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way */
+  requestPasswordReset: () =>
+    request<{ requested: true }>('/auth/reset/request', { method: 'POST' }),
+  /** a new password with that code; signs in */
+  resetPassword: (input: PasswordResetDTO) =>
+    request<AuthUser>('/auth/reset', { method: 'POST', ...jsonBody(input) }),
   logout: () =>
     request<{ success: true }>('/auth/logout', { method: 'POST' }),
   getMe: () => request<AuthUser>('/auth/me'),

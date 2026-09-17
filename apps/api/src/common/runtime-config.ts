@@ -71,6 +71,8 @@ export const runtimeConfig = {
    * exists only while the instance has no account.
    */
   setupTokenFile: resolve(dataDir, 'setup-token'),
+  /** where a password-reset code is put for the operator to read (0600, removed once used or expired) */
+  resetCodeFile: resolve(dataDir, 'reset-code'),
   masterKey: env('SYNCLE_MASTER_KEY') ?? null,
   maxQueryRows: numberEnv('SYNCLE_MAX_QUERY_ROWS', 5000),
   poolIdleMs: numberEnv('SYNCLE_POOL_IDLE_MS', 300_000),

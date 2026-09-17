@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Post,
   Req,
   Res,
@@ -10,11 +11,13 @@ import type { Request, Response } from 'express';
 import {
   changePasswordSchema,
   loginSchema,
+  passwordResetSchema,
   setupSchema,
   type AuthStatus,
   type AuthUser,
   type ChangePasswordDTO,
   type LoginDTO,
+  type PasswordResetDTO,
   type SetupDTO,
   UnauthorizedError,
 } from '@syncle/core';
@@ -68,6 +71,32 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthUser> {
     const user = await this.auth.login(dto.username, dto.password, req.ip ?? '');
+    await this.auth.issueSession(res, user);
+    return this.auth.toAuthUser(user);
+  }
+
+  /**
+   * "I cannot sign in." a reset code is printed on the server's console (and
+   * put in its data directory): being able to read it there is the proof of
+   * being the operator. answers the same whatever happened
+   */
+  @Public()
+  @Post('reset/request')
+  @HttpCode(202)
+  async requestReset(): Promise<{ requested: true }> {
+    await this.auth.requestPasswordReset();
+    return { requested: true };
+  }
+
+  /** a new password, with the code from the server's console; signs in, and ends every other session */
+  @Public()
+  @Post('reset')
+  async reset(
+    @Body(new ZodValidationPipe(passwordResetSchema)) dto: PasswordResetDTO,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthUser> {
+    const user = await this.auth.resetPassword(dto.resetCode, dto.newPassword, req.ip ?? '');
     await this.auth.issueSession(res, user);
     return this.auth.toAuthUser(user);
   }

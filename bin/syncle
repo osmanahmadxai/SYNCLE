@@ -47,6 +47,14 @@ setup_token() {
     | tr -d '\r\n'
 }
 
+# A password-reset code is handed over the same way: the API puts it in its data
+# dir when one is asked for, and reading it there needs this host.
+reset_code() {
+  compose exec -T api \
+    sh -c 'cat "${SYNCLE_DATA_DIR:-.syncle}/reset-code" 2>/dev/null' 2>/dev/null \
+    | tr -d '\r\n'
+}
+
 wait_for_web() {
   printf 'Waiting for the web GUI'
   for _ in $(seq 1 60); do
@@ -69,6 +77,7 @@ Usage: syncle <command>
   status      Show container status
   logs [svc]  Follow logs (optionally: api | web | postgres | redis)
   open        Open the web GUI in your browser
+  reset-password  Get a code to set a new password with (when you cannot sign in)
   update      Fetch the newest release and restart
   uninstall   Stop everything and delete all data (asks first)
   version     Show the installed Syncle version
@@ -115,6 +124,16 @@ case "$cmd" in
     else
       open_url "$WEB_URL"
     fi
+    ;;
+  reset-password)
+    # the GUI's own "Forgot your password?" does the same; this saves looking
+    # through the logs for the code
+    curl -fsS -o /dev/null -X POST "$WEB_URL/api/auth/reset/request" \
+      || die "Syncle is not answering at $WEB_URL — is it running? Try: syncle up"
+    code=$(reset_code || true)
+    [ -n "$code" ] || die "no reset code was made. Either there is no account yet (open the GUI to create one), or a code was made less than a minute ago: see 'syncle logs api'."
+    printf 'Password reset code — works once, for 15 minutes:\n\n    %s\n\n' "$code"
+    printf 'Open %s, choose "Forgot your password?", and enter it with a new password.\n' "$WEB_URL"
     ;;
   update)
     # re-runs the installer, which refreshes the compose file and launcher and

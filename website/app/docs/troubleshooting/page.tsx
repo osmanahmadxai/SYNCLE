@@ -46,6 +46,26 @@ export default function Page() {
         account is present. Use the login form instead.
       </p>
 
+      <h2 id="forgot-password">I cannot sign in: the password is gone</h2>
+      <p>
+        There is no e-mail to send a link to. The proof of being the operator is
+        what it was on the first day — being able to read the server — so a
+        reset code is printed there:
+      </p>
+      <CodeBlock>{`syncle reset-password`}</CodeBlock>
+      <p>
+        …or choose <em>Forgot your password?</em> on the sign-in screen, press
+        the button, and read the code from <code>syncle logs api</code> (without
+        the launcher: the API&apos;s console, or the file{' '}
+        <code>reset-code</code> in its data directory). Enter it with a new
+        password. The code works once, for fifteen minutes, and dies after ten
+        wrong guesses; setting the password signs you in and ends every session
+        there was. Pressing the button tells a stranger nothing — not even
+        whether an account exists — and without access to the server the code
+        it produces is a line in a log they cannot read. At most one code a
+        minute is made, so the button cannot flood the log either.
+      </p>
+
       <h2 id="cross-origin-403">
         Signing in (or saving anything) answers &quot;came from another
         site&quot;

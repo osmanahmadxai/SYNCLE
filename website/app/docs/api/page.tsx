@@ -147,8 +147,15 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         in, and an <a href="#api-keys">API key</a> for what cannot sign in. A
         handful of routes work without either: the two probes{' '}
         <code>GET /api/health</code> and <code>GET /api/health/ready</code>,{' '}
-        <code>GET /api/auth/status</code>, <code>POST /api/auth/setup</code>{' '}
-        and <code>POST /api/auth/login</code>. <code>GET /api/metrics</code>{' '}
+        <code>GET /api/auth/status</code>, <code>POST /api/auth/setup</code>,{' '}
+        <code>POST /api/auth/login</code>, and the two a locked-out operator
+        needs: <code>POST /api/auth/reset/request</code> (answers{' '}
+        <code>202</code> and says nothing; if there is an account, a one-time
+        code is printed on the server&apos;s console and written to{' '}
+        <code>reset-code</code> in its data directory) and{' '}
+        <code>POST /api/auth/reset</code> with{' '}
+        <code>{'{ resetCode, newPassword }'}</code> (sets the password, signs
+        in, ends every other session). <code>GET /api/metrics</code>{' '}
         takes a bearer token of its own instead of a session (and does not
         exist until one is configured). Everything else answers 401.
       </Note>

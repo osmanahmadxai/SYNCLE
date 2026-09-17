@@ -22,6 +22,9 @@ const PUBLIC = new Set([
   'GET /api/auth/status',
   'POST /api/auth/setup',
   'POST /api/auth/login',
+  // for somebody who cannot sign in: a code is printed on the SERVER, and asked for here
+  'POST /api/auth/reset/request',
+  'POST /api/auth/reset',
 ]);
 
 beforeAll(async () => {
@@ -251,6 +254,66 @@ describe('setup, sign in, sign out', () => {
     expect(
       (await call('GET', '/api/auth/me', { cookie: renewed })).status,
     ).toBe(200);
+  });
+});
+
+describe('a password that has been forgotten', () => {
+  it('asking for a reset says nothing, and puts the code where only the operator can read it', async () => {
+    const { readFileSync, existsSync, statSync } = await import('node:fs');
+    const { runtimeConfig } = await import('../../src/common/runtime-config');
+    const res = await call('POST', '/api/auth/reset/request');
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ data: { requested: true } });
+    expect(existsSync(runtimeConfig.resetCodeFile)).toBe(true);
+    // nobody but the owner
+    expect(statSync(runtimeConfig.resetCodeFile).mode & 0o077).toBe(0);
+    const code = readFileSync(runtimeConfig.resetCodeFile, 'utf8').trim();
+    expect(code).toMatch(/^[A-Za-z0-9_-]{12}$/);
+
+    const wrong = await call('POST', '/api/auth/reset', {
+      body: {
+        resetCode: 'not-the-code',
+        newPassword: 'a different long password',
+      },
+    });
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get('set-cookie')).toBeNull();
+    const weak = await call('POST', '/api/auth/reset', {
+      body: { resetCode: code, newPassword: 'short' },
+    });
+    expect(weak.status).toBe(400);
+
+    // a session from before the reset
+    const before = await call('POST', '/api/auth/login', {
+      body: { username: 'admin', password: 'a different long password' },
+    });
+    const oldCookie = (before.headers.get('set-cookie') ?? '').split(';')[0]!;
+
+    const ok = await call('POST', '/api/auth/reset', {
+      body: { resetCode: code, newPassword: 'a different long password' },
+    });
+    expect(ok.status).toBe(201);
+    const cookie = (ok.headers.get('set-cookie') ?? '').split(';')[0]!;
+    expect((await call('GET', '/api/auth/me', { cookie })).status).toBe(200);
+    expect(
+      (await call('GET', '/api/auth/me', { cookie: oldCookie })).status,
+    ).toBe(401);
+    // used: the file is gone, and the code is no good a second time
+    expect(existsSync(runtimeConfig.resetCodeFile)).toBe(false);
+    const again = await call('POST', '/api/auth/reset', {
+      body: { resetCode: code, newPassword: 'a different long password' },
+    });
+    expect(again.status).toBe(401);
+    expect(JSON.stringify(await ok.json())).not.toMatch(
+      /passwordHash|resetCode/,
+    );
+  });
+
+  it('another site cannot press the button for you, let alone use a code', async () => {
+    const res = await call('POST', '/api/auth/reset/request', {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(res.status).toBe(403);
   });
 });
 

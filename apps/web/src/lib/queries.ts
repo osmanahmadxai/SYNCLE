@@ -18,6 +18,7 @@ import type {
   BridgeInputDTO,
   BridgeJob,
   LoginDTO,
+  PasswordResetDTO,
   SetupDTO,
   WorkspaceInputDTO,
   BridgeBulkInput,
@@ -67,6 +68,19 @@ export function useLogin() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: LoginDTO) => api.login(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authStatus }),
+  });
+}
+
+export function useRequestPasswordReset() {
+  return useMutation({ mutationFn: () => api.requestPasswordReset() });
+}
+
+export function useResetPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PasswordResetDTO) => api.resetPassword(input),
+    // it signs in
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authStatus }),
   });
 }

@@ -35,7 +35,19 @@ export const changePasswordSchema = z.object({
   newPassword: passwordSchema,
 });
 
+/**
+ * a password reset for an operator who cannot sign in. there is no e-mail to
+ * send a link to: the proof of being the operator is the same as at first run —
+ * being able to read the server's console (or its data directory), where the
+ * code is put when it is asked for
+ */
+export const passwordResetSchema = z.object({
+  resetCode: z.string().trim().min(1, 'Reset code is required').max(64),
+  newPassword: passwordSchema,
+});
+
 export type SetupDTO = z.infer<typeof setupSchema>;
+export type PasswordResetDTO = z.infer<typeof passwordResetSchema>;
 export type LoginDTO = z.infer<typeof loginSchema>;
 export type ChangePasswordDTO = z.infer<typeof changePasswordSchema>;
 

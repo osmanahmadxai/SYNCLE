@@ -6,6 +6,7 @@
  * invalidates every outstanding cookie.
  */
 import {
+  createHash,
   randomBytes,
   randomUUID,
   scrypt as scryptCb,
@@ -30,6 +31,17 @@ import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
 
 const scrypt = promisify(scryptCb);
+
+/** a reset code lives this long… */
+const RESET_TTL_MS = 15 * 60_000;
+/** …a new one is made at most this often… */
+const RESET_MIN_INTERVAL_MS = 60_000;
+/** …and it is gone after this many wrong guesses, wherever they came from */
+const RESET_MAX_FAILURES = 10;
+const CLEARED_RESET = { resetCodeHash: null, resetCodeMintedAt: null, resetCodeExpiresAt: null, resetCodeFailures: 0 };
+
+/** what is stored of a reset code (72 random bits: a fast hash is enough, and it is compared in constant time) */
+const hashResetCode = (code: string): string => createHash('sha256').update(code.trim()).digest('hex');
 
 /** the session cookie name; cookies aren't port-scoped, so this is host-wide */
 export const SESSION_COOKIE = 'db_session';
@@ -88,6 +100,8 @@ export class AuthService implements OnModuleInit {
   private readonly usernameLimiter = new AttemptLimiter(10, 5_000, 60_000);
   /** per-ip lockout against setup-token guessing */
   private readonly setupLimiter = new AttemptLimiter(5, 60_000);
+  /** …and against guessing a password-reset code */
+  private readonly resetLimiter = new AttemptLimiter(5, 60_000);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -247,6 +261,106 @@ export class AuthService implements OnModuleInit {
     ].join('\n');
   }
 
+  /* ----- a password that has been forgotten ----- */
+
+  /**
+   * somebody at the login screen says they cannot sign in.
+   *
+   * there is no e-mail to send a link to, and the proof of being the operator is
+   * what it was on the first day: being able to read the server's console, or
+   * its data directory. so a code is made, PRINTED THERE, and asked for in the
+   * browser. whoever pressed the button without that access has made a line
+   * appear in a log they cannot read.
+   *
+   * answers nothing either way — not whether there is an account, not whether
+   * a code was made. at most one code a minute, so the button can neither flood
+   * the log nor keep replacing a code the operator is busy typing in; a code
+   * lives for fifteen minutes, works once, and dies after ten wrong guesses
+   * whoever made them. only its hash is stored, so it works whichever API
+   * process the reset then reaches.
+   */
+  async requestPasswordReset(): Promise<void> {
+    const user = await this.prisma.appUser.findFirst({ orderBy: { createdAt: 'asc' } });
+    if (!user) return; // nothing to reset: first-run setup is the way in
+    const now = Date.now();
+    const fresh =
+      user.resetCodeHash &&
+      user.resetCodeMintedAt &&
+      user.resetCodeExpiresAt &&
+      user.resetCodeExpiresAt.getTime() > now &&
+      now - user.resetCodeMintedAt.getTime() < RESET_MIN_INTERVAL_MS;
+    if (fresh) return;
+
+    const code = randomBytes(9).toString('base64url');
+    await this.prisma.appUser.update({
+      where: { id: user.id },
+      data: {
+        resetCodeHash: hashResetCode(code),
+        resetCodeMintedAt: new Date(now),
+        resetCodeExpiresAt: new Date(now + RESET_TTL_MS),
+        resetCodeFailures: 0,
+      },
+    });
+    try {
+      writeFileSync(runtimeConfig.resetCodeFile, `${code}\n`, { mode: 0o600 });
+    } catch (err) {
+      this.logger.warn(`Could not write the reset-code file: ${(err as Error).message}`);
+    }
+    // eslint-disable-next-line no-console -- like the setup token: it must print whatever the log level
+    console.log(
+      [
+        '',
+        '  ┌──────────────────────────────────────────────────┐',
+        '  │  Password reset code (valid for 15 minutes)      │',
+        `  │      ${code.padEnd(44)}│`,
+        '  │  Nobody asked for this? Then ignore it.          │',
+        '  └──────────────────────────────────────────────────┘',
+      ].join('\n'),
+    );
+  }
+
+  /** set a new password with a reset code; every session there was ends */
+  async resetPassword(code: string, newPassword: string, ip: string): Promise<AppUser> {
+    const key = `reset:${ip}`;
+    this.assertNotLocked(this.resetLimiter, key);
+    const user = await this.prisma.appUser.findFirst({ orderBy: { createdAt: 'asc' } });
+    const live = !!user?.resetCodeHash && !!user.resetCodeExpiresAt && user.resetCodeExpiresAt.getTime() > Date.now();
+    if (!user || !live || !tokensEqual(hashResetCode(code), user.resetCodeHash!)) {
+      this.resetLimiter.fail(key);
+      if (user && live) {
+        // guesses from many addresses add up too: ten of them and the code is gone
+        const failures = user.resetCodeFailures + 1;
+        await this.prisma.appUser.update({
+          where: { id: user.id },
+          data: failures >= RESET_MAX_FAILURES ? CLEARED_RESET : { resetCodeFailures: failures },
+        });
+        if (failures >= RESET_MAX_FAILURES) this.clearResetCodeFile();
+      }
+      throw new UnauthorizedError('That reset code is not valid, or is no longer. Ask for a new one: it is printed in the server logs.');
+    }
+    const updated = await this.prisma.appUser.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: await this.hashPassword(newPassword),
+        // whoever was signed in with the old password no longer is
+        sessionVersion: { increment: 1 },
+        ...CLEARED_RESET,
+      },
+    });
+    this.clearResetCodeFile();
+    this.resetLimiter.succeed(key);
+    this.logger.warn(`The password of "${updated.username}" was reset with a reset code.`);
+    return updated;
+  }
+
+  private clearResetCodeFile(): void {
+    try {
+      rmSync(runtimeConfig.resetCodeFile, { force: true });
+    } catch (err) {
+      this.logger.warn(`Could not remove the reset-code file: ${(err as Error).message}`);
+    }
+  }
+
   async changePassword(
     userId: string,
     currentPassword: string,
@@ -259,13 +373,17 @@ export class AuthService implements OnModuleInit {
     }
     // bump sessionVersion so every existing cookie (including other devices)
     // stops validating; the caller re-issues a fresh cookie for this session
-    return this.prisma.appUser.update({
+    const updated = await this.prisma.appUser.update({
       where: { id: userId },
       data: {
         passwordHash: await this.hashPassword(newPassword),
         sessionVersion: { increment: 1 },
+        // a reset that was asked for is moot now, and must not outlive the password it was for
+        ...CLEARED_RESET,
       },
     });
+    this.clearResetCodeFile();
+    return updated;
   }
 
   /* ----- session cookie ----- */

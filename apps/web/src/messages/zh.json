@@ -22,6 +22,8 @@
   },
   "auth": {
     "login": {
+      "forgot": "忘记密码？",
+      "resetTitle": "重置密码",
       "title": "登录",
       "description": "输入凭据以访问 Syncle。",
       "username": "用户名",
@@ -29,6 +31,21 @@
       "submit": "登录",
       "enterBoth": "请输入用户名和密码。",
       "couldNotSignIn": "无法登录"
+    },
+    "reset": {
+      "how": "这里没有可以发送链接的电子邮箱。Syncle 会在其运行的服务器上打印一个重置码：能在那里读到它，就证明你是它的运维者。",
+      "ask": "在服务器上打印重置码",
+      "where": "如果存在账户，重置码刚刚已打印到 API 的日志中，并写入其数据目录下的“reset-code”文件。它只能使用一次，15 分钟内有效。",
+      "code": "重置码",
+      "newPassword": "新密码",
+      "confirm": "确认新密码",
+      "submit": "设置密码并登录",
+      "back": "返回登录",
+      "problem": {
+        "code": "请输入服务器日志中的重置码。",
+        "short": "密码至少需要 8 个字符。",
+        "mismatch": "两次输入的密码不一致。"
+      }
     },
     "setup": {
       "title": "创建管理员账号",

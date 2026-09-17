@@ -22,6 +22,8 @@
   },
   "auth": {
     "login": {
+      "forgot": "Password dimenticata?",
+      "resetTitle": "Reimposta la password",
       "title": "Accedi",
       "description": "Inserisci le tue credenziali per accedere a Syncle.",
       "username": "Nome utente",
@@ -29,6 +31,21 @@
       "submit": "Accedi",
       "enterBoth": "Inserisci il nome utente e la password.",
       "couldNotSignIn": "Impossibile accedere"
+    },
+    "reset": {
+      "how": "Non c’è un’e-mail a cui inviare un link. Syncle stampa un codice di reimpostazione sul server su cui è in esecuzione: poterlo leggere lì è ciò che dimostra che ne sei l’operatore.",
+      "ask": "Stampa un codice di reimpostazione sul server",
+      "where": "Se esiste un account, un codice è appena stato stampato nel log dell’API e scritto nel file “reset-code” nella sua directory dei dati. Funziona una sola volta, per 15 minuti.",
+      "code": "Codice di reimpostazione",
+      "newPassword": "Nuova password",
+      "confirm": "Conferma la nuova password",
+      "submit": "Imposta la password e accedi",
+      "back": "Torna all’accesso",
+      "problem": {
+        "code": "Inserisci il codice di reimpostazione dal log del server.",
+        "short": "La password deve avere almeno 8 caratteri.",
+        "mismatch": "Le due password non coincidono."
+      }
     },
     "setup": {
       "title": "Crea l'account amministratore",

@@ -31,6 +31,13 @@ model AppUser {
   username       String   @unique
   passwordHash   String   @map("password_hash") // scrypt: "salt:derivedKey", hex
   sessionVersion Int      @default(0) @map("session_version")
+  // a password reset that has been asked for: the SHA-256 of its code (the code
+  // itself is only ever on the server's console and in a 0600 file), when it
+  // was made, when it stops working, and how many wrong guesses it has taken
+  resetCodeHash      String?   @map("reset_code_hash")
+  resetCodeMintedAt  DateTime? @map("reset_code_minted_at")
+  resetCodeExpiresAt DateTime? @map("reset_code_expires_at")
+  resetCodeFailures  Int       @default(0) @map("reset_code_failures")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 

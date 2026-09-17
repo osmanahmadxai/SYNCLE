@@ -177,6 +177,19 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>syncle reset-password</code>
+              </td>
+              <td>
+                Locked out: prints a one-time code to set a new password with
+                (<em>Forgot your password?</em> on the sign-in screen). See{' '}
+                <a href="/docs/troubleshooting#forgot-password">
+                  I cannot sign in
+                </a>
+                .
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>syncle update</code>
               </td>
               <td>Fetch the newest release and restart.</td>

@@ -438,6 +438,17 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **A way back in when the password is gone.** Until now a forgotten password
+  meant editing the database by hand. *Forgot your password?* on the sign-in
+  screen (or `syncle reset-password`) makes the API print a one-time code on
+  its console and into `reset-code` in its data directory — being able to read
+  it there is the proof of being the operator, as the setup token is on the
+  first day — and that code with a new password signs you in and ends every
+  other session. The code lives fifteen minutes, works once, dies after ten
+  wrong guesses from anywhere, and only its hash is stored. Asking for one
+  answers the same whether or not an account exists, and at most one a minute
+  is made, so the button can neither probe nor flood the log.
+
 - **Many tables, one PostgreSQL replication slot.** A CDC bridge can read
   through a slot it shares with every other shared bridge on the same
   connection and database (`trigger.slot: "shared"`; *Replication slot* in the
