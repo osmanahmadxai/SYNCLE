@@ -353,6 +353,28 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Copy what is there, then follow — in one bridge.** A CDC bridge can now
+  start from the `beginning`: on its first start it takes its place in the
+  source's change log, copies the table through the normal delivery pipeline
+  (filters, transforms, batching, the dead-letter queue), and only then opens
+  the stream *at the place it took before the copy began*. Nothing that changed
+  in between is lost, and no old value read by the copy lands on top of a newer
+  one — the two things a replay followed by a separate CDC bridge cannot avoid.
+  - PostgreSQL (the slot is the place), MySQL (binlog file and position) and
+    MongoDB (the resume token of an empty stream). Redis has no log: it
+    subscribes first and holds what it hears, the newest change per key, until
+    its keys have been read (`SYNCLE_SNAPSHOT_HOLD_MAX`, default 100,000 keys).
+  - The copy is checkpointed like any position: a bridge stopped mid-copy, or a
+    Syncle restarted, carries on from the row it had reached. The timeline marks
+    where the copy ended and the stream began.
+  - It happens once. A bridge with a position resumes from it; "continue from
+    now" after a lost position copies nothing — unless asked to
+    (`{ "fromNow": true, "recopy": true }`, offered in the UI), which brings
+    every row that still exists up to date.
+  - A table that cannot be read in a stable order (no primary key, no sort) is
+    refused at the start, before anything is touched.
+  - Builder: *Start from* on a change-stream trigger. API:
+    `trigger.startFrom: "now" | "beginning"` (default `now`).
 - **Filters and column transforms in the bridge builder.** Two new sections,
   both saved with the bridge and both applied the same way for a replay, a watch
   and a CDC bridge, into a database or an HTTP destination.

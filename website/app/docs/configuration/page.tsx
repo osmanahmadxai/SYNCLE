@@ -345,6 +345,25 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_SNAPSHOT_HOLD_MAX</code>
+              </td>
+              <td>
+                <code>100000</code>
+              </td>
+              <td>
+                A Redis CDC bridge that{' '}
+                <a href="/docs/bridges#copy-then-follow">
+                  copies its keys before following them
+                </a>{' '}
+                holds the changes made meanwhile in memory — the newest per
+                key, since Redis has no log to read them back from. This is
+                how many keys may be held before the bridge stops rather than
+                grow without limit. PostgreSQL, MySQL and MongoDB keep those
+                changes in their own log and are not affected.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
               </td>
               <td>

@@ -83,6 +83,7 @@ export function loadBridge(h: Bridge): BuilderDraft {
     d.syncMode = 'live';
     d.triggerKind = 'cdc';
     d.cdcOps = new Set(h.trigger.operations);
+    d.cdcStartFrom = h.trigger.startFrom ?? 'now';
   } else {
     d.syncMode = 'oneTime';
     d.triggerKind = 'replay';
@@ -300,7 +301,7 @@ export function buildInput(
     },
     trigger:
       draft.triggerKind === 'cdc'
-        ? { kind: 'cdc', operations: [...draft.cdcOps] }
+        ? { kind: 'cdc', operations: [...draft.cdcOps], startFrom: draft.cdcStartFrom }
         : draft.triggerKind === 'watch'
           ? {
               kind: 'watch',

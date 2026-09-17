@@ -596,6 +596,17 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         most 100, each one of the five kinds below. A kind the server does
         not know is refused with a <code>400</code>, never ignored.
       </p>
+      <p>
+        A CDC trigger is{' '}
+        <code>{'{ "kind": "cdc", "operations": [...], "startFrom": "now" | "beginning" }'}</code>
+        . <code>beginning</code>{' '}
+        <a href="/docs/bridges#copy-then-follow">
+          copies the table, then follows its changes
+        </a>{' '}
+        with nothing lost in between; <code>now</code> (the default, and what
+        every bridge saved before this option existed is) follows changes
+        only.
+      </p>
       <CodeBlock title="Filters and column transforms in a bridge body">{`{
   "source": {
     "kind": "table", "connectionId": "…", "table": "customers",
@@ -842,7 +853,11 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 source&apos;s change log is gone, it answers 400 with{' '}
                 <code>{'details: { reason: "position-lost" }'}</code>; send{' '}
                 <code>{'{ "fromNow": true }'}</code> to continue from the
-                current position and accept the gap
+                current position and accept the gap. On a CDC bridge whose
+                trigger has <code>startFrom: &quot;beginning&quot;</code>, add{' '}
+                <code>{'"recopy": true'}</code> to{' '}
+                <a href="/docs/bridges#copy-then-follow">copy the table again</a>{' '}
+                first; without it, &quot;from now&quot; copies nothing
               </td>
             </tr>
             <tr>

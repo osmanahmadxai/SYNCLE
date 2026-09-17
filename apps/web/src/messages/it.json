@@ -139,7 +139,10 @@
     "deleteTitle": "Eliminare \"{name}\"?",
     "deleteDescription": "Questo rimuoverà il bridge e la cronologia dei suoi processi. Questa operazione non può essere annullata.",
     "bridgeDeleted": "Bridge eliminato",
-    "couldNotDelete": "Impossibile eliminare"
+    "couldNotDelete": "Impossibile eliminare",
+    "positionLostRecopyDescription": "Questo bridge copia la tabella prima di seguirla, e può farlo di nuovo: ogni riga che esiste ancora nell'origine viene aggiornata, poi le modifiche vengono seguite da ora. Le righe eliminate nell'origine nel frattempo restano nella destinazione.",
+    "copyAgainThenFollow": "Copia di nuovo la tabella, poi segui",
+    "withoutCopying": "Non così"
   },
   "bridgeList": {
     "map": "Mappa",
@@ -279,7 +282,11 @@
     "stopBridge": "Ferma il bridge",
     "onFailureContinueHint": "Le righe che falliscono vengono conservate per intero nella coda dead-letter del bridge e possono essere ritentate una volta risolta la causa. Il bridge si ferma comunque se la destinazione stessa non è disponibile.",
     "onFailureStopHint": "Il bridge si ferma al primo errore senza oltrepassarlo. Riavvialo e le stesse righe verranno ritentate; nulla viene saltato.",
-    "hashStandIn": "Qui un valore con hash è mostrato come segnaposto. La prova a vuoto mostra quello reale."
+    "hashStandIn": "Qui un valore con hash è mostrato come segnaposto. La prova a vuoto mostra quello reale.",
+    "cdcFromNow": "Solo le modifiche da ora in poi",
+    "cdcFromBeginning": "Copia ciò che c'è, poi segui le modifiche",
+    "cdcFromNowHint": "Le righe già presenti nella tabella non vengono toccate. Il bridge consegna ciò che cambia dopo il primo avvio.",
+    "cdcFromBeginningHint": "Al primo avvio il bridge prende posizione nel log delle modifiche, copia la tabella, poi consegna tutto ciò che è cambiato nel frattempo: non si perde nulla. Un bridge che ha già una posizione riprende da lì."
   },
   "builderFilters": {
     "title": "Solo le righe in cui",

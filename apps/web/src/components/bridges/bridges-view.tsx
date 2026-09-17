@@ -53,6 +53,10 @@ export function BridgesView() {
       destLabel={destinationLabel(dest)}
       endpoint={endpoint}
       isWatch={bridge.trigger.kind !== 'replay'}
+      copiesFirst={
+        bridge.trigger.kind === 'cdc' &&
+        bridge.trigger.startFrom === 'beginning'
+      }
       onDeleted={() => selectBridge(null)}
     />
   );
@@ -65,6 +69,7 @@ function BridgePanel({
   destLabel,
   endpoint,
   isWatch,
+  copiesFirst,
   onDeleted,
 }: {
   bridgeId: string;
@@ -73,6 +78,8 @@ function BridgePanel({
   destLabel: string;
   endpoint: EndpointInfo;
   isWatch: boolean;
+  /** a change-stream bridge that copies its table before it follows it */
+  copiesFirst: boolean;
   onDeleted: () => void;
 }) {
   const confirm = useConfirm();
@@ -114,9 +121,9 @@ function BridgePanel({
     }
   }
 
-  async function handleStartWatch(fromNow = false) {
+  async function handleStartWatch(fromNow = false, recopy = false) {
     try {
-      const job = await startWatch.mutateAsync({ fromNow });
+      const job = await startWatch.mutateAsync({ fromNow, recopy });
       setSelectedJobId(job.id);
       toast.success(t('listeningForData'));
     } catch (err) {
@@ -127,6 +134,28 @@ function BridgePanel({
         (err.details as { reason?: string } | undefined)?.reason ===
           'position-lost';
       if (lost && !fromNow) {
+        // a bridge that copied its table once can do it again, which brings
+        // every row that still exists up to date. offered first; declining it
+        // leads to the plain "continue from now", never straight to a start
+        if (copiesFirst) {
+          const again = await confirm({
+            title: t('positionLostTitle'),
+            description: (
+              <span className="space-y-2">
+                <span className="block">{(err as ApiError).message}</span>
+                <span className="block">
+                  {t('positionLostRecopyDescription')}
+                </span>
+              </span>
+            ),
+            confirmText: t('copyAgainThenFollow'),
+            cancelText: t('withoutCopying'),
+          });
+          if (again) {
+            await handleStartWatch(true, true);
+            return;
+          }
+        }
         const ok = await confirm({
           title: t('positionLostTitle'),
           description: (

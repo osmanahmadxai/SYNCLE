@@ -142,6 +142,12 @@ export async function makeBridge(
     start?: boolean;
     /** engine the source table lives on; defaults to postgres */
     sourceEngine?: ConnKey;
+    /** `beginning`: copy what the table already holds, then follow its changes */
+    startFrom?: 'now' | 'beginning';
+    /** rows written to the source before the bridge exists */
+    seed?: Array<Record<string, unknown>>;
+    /** source filters of the bridge */
+    filters?: Array<{ column: string; operator: string; value?: unknown }>;
   },
 ): Promise<SyncSetup> {
   const { destEngine, sourceConnId, destConnId, cleanups } = opts;
@@ -182,13 +188,15 @@ export async function makeBridge(
     withAdapter(destEngine, (a) => a.dropTable(destTable)).catch(() => undefined),
   );
 
+  if (opts.seed?.length) await writeSourceRows(sourceEngine, sourceTable, opts.seed);
+
   const mapping = mappingFor(sourceEngine, destEngine);
   const keyColumns = shapeOf(destEngine) === 'kv' ? ['key'] : ['id'];
 
   const { bridgeInputSchema } = await import('@syncle/core');
   const input = bridgeInputSchema.parse({
     name: `it-bridge-${sourceTable}`,
-    source: { kind: 'table', connectionId: sourceConnId, table: sourceTable },
+    source: { kind: 'table', connectionId: sourceConnId, table: sourceTable, filters: opts.filters },
     destination: {
       kind: 'database',
       targets: [
@@ -203,7 +211,11 @@ export async function makeBridge(
       ],
     },
     transform: { template: '{{$row}}' },
-    trigger: { kind: 'cdc', operations: ['insert', 'update', 'delete'] },
+    trigger: {
+      kind: 'cdc',
+      operations: ['insert', 'update', 'delete'],
+      startFrom: opts.startFrom ?? 'now',
+    },
   });
   const bridge = await app.bridges.create(input);
 

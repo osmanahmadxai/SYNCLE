@@ -130,6 +130,80 @@ export default function Page() {
         all of it.
       </p>
 
+      <h4 id="copy-then-follow">Copy what is there, then follow</h4>
+      <p>
+        A change log only knows about changes. A CDC bridge set to{' '}
+        <strong>Only changes from now on</strong> (the default) leaves the
+        rows a table already holds where they are. Set to{' '}
+        <strong>Copy what is there, then follow changes</strong>, the same
+        bridge does both — and the point of doing both in one bridge is the
+        seam between them. A replay followed by a separate CDC bridge either
+        misses what changed in between, or lets an old value the replay read
+        land on top of a newer one. So, on its first start, the bridge:
+      </p>
+      <ol>
+        <li>
+          takes its place in the source&apos;s change log — without reading
+          from it yet;
+        </li>
+        <li>
+          reads the table from one end to the other and delivers every row
+          as an <code>insert</code>, through the same pipeline changes use
+          (filters, transforms, batching, the dead-letter queue);
+        </li>
+        <li>
+          opens the change stream <em>at the place it took in step 1</em>.
+          Everything that changed while the copy ran arrives now, after the
+          copied rows, in order.
+        </li>
+      </ol>
+      <p>
+        A row that changed during the copy is therefore delivered twice —
+        once as the copy read it, once as the change — and ends up right,
+        because a keyed target is written with an idempotent upsert. An
+        append-only (<code>insert</code>-mode) target or an HTTP receiver
+        sees it twice; that is the same at-least-once contract every live
+        bridge has. The timeline marks the end of the copy with a note
+        (&quot;Copied the 1,204,551 rows the table already had…&quot;).
+      </p>
+      <ul>
+        <li>
+          <strong>It resumes.</strong> The copy&apos;s progress is
+          checkpointed like any other position: a bridge stopped — or a
+          Syncle restarted — mid-copy carries on from the row it had reached,
+          with the place in the log it took the <em>first</em> time.
+        </li>
+        <li>
+          <strong>It happens once.</strong> A bridge that already has a
+          position resumes from it; changing the setting later does not
+          re-copy anything. The table needs a primary key (or the bridge a
+          sort) to be read in a stable order — without one the start is
+          refused, before anything is touched.
+        </li>
+        <li>
+          <strong>The source holds the log for as long as the copy
+          runs.</strong>{' '}
+          On PostgreSQL the replication slot pins WAL from the moment it is
+          created (the <a href="/docs/cdc#postgres-slots">slot guard</a>{' '}
+          reports how much); on MySQL and MongoDB the binlog / oplog has to
+          outlast the copy, or the bridge stops and says its position was
+          lost. Redis has no log: the stream is opened first and its changes
+          are held in memory — the newest per key — until the copy is done
+          (see{' '}
+          <a href="/docs/configuration">
+            <code>SYNCLE_SNAPSHOT_HOLD_MAX</code>
+          </a>
+          ).
+        </li>
+        <li>
+          <strong>After a lost position</strong>, such a bridge offers to
+          copy the table again, which brings every row that still exists up
+          to date. Rows deleted at the source in the meantime stay at the
+          destination. &quot;Continue from now&quot; still means exactly
+          that: no copy.
+        </li>
+      </ul>
+
       <h2 id="filters-and-transforms">Filters and column transforms</h2>
       <p>
         Two things can happen to a row between the source and the

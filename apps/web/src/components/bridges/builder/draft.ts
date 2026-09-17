@@ -142,6 +142,11 @@ export interface BuilderDraft {
   pollSeconds: number;
   watchStartFrom: 'now' | 'beginning';
   /**
+   * a change-stream bridge: follow changes from now on, or copy what the table
+   * already holds first and then follow it (nothing is lost in between)
+   */
+  cdcStartFrom: 'now' | 'beginning';
+  /**
    * parts of a watch trigger the builder has no control for. they are carried
    * through an edit untouched: saving used to write the constants 500 / 50,000
    * / 3,000 every time, so opening a bridge and pressing Save quietly undid
@@ -215,6 +220,7 @@ export function initialDraft(
     watchColumn: '',
     pollSeconds: Math.max(1, Math.round(defaults.pollIntervalMs / 1000)),
     watchStartFrom: 'now',
+    cdcStartFrom: 'now',
     maxPerPoll: defaults.maxPerPoll,
     snapshotMaxTracked: 50_000,
     lookbackMs: 3000,
@@ -269,6 +275,7 @@ export type BuilderAction =
   | { type: 'setWatchColumn'; column: string }
   | { type: 'setPollSeconds'; seconds: number }
   | { type: 'setWatchStartFrom'; startFrom: 'now' | 'beginning' }
+  | { type: 'setCdcStartFrom'; startFrom: 'now' | 'beginning' }
   | { type: 'toggleCdcOp'; op: CdcOp }
   | { type: 'setReadiness'; readiness: CdcReadiness | null }
   | { type: 'setCheckingCdc'; checking: boolean }
@@ -394,6 +401,8 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, pollSeconds: action.seconds };
     case 'setWatchStartFrom':
       return { ...d, watchStartFrom: action.startFrom };
+    case 'setCdcStartFrom':
+      return { ...d, cdcStartFrom: action.startFrom };
     case 'toggleCdcOp': {
       const next = new Set(d.cdcOps);
       if (next.has(action.op)) next.delete(action.op);

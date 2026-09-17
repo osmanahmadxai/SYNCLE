@@ -85,6 +85,12 @@ export interface CdcStreamHandlers {
    * accept the gap explicitly.
    */
   onPositionLost?(message: string): Promise<void>;
+  /**
+   * the stream cannot go on, and retrying has not helped: stop the bridge with
+   * this explanation. nothing is lost by it — the position that was last
+   * checkpointed is where the next start picks up
+   */
+  onFatal?(message: string): Promise<void>;
   /** a non-fatal transport error. logged, the provider keeps/reconnects */
   onError(err: Error): void;
 }
@@ -96,6 +102,13 @@ export interface CdcStreamContext {
   conn: ConnectionConfig;
   /** last persisted cursor (resume point), or null to start from "now" */
   fromCursor: string | null;
+  /**
+   * with no cursor yet: copy the table as it is, THEN follow its changes (the
+   * bridge's `startFrom: beginning`). honoured by the snapshot wrapper every
+   * provider is handed out in (see `snapshot-provider.ts`); an engine's own
+   * provider never sees it
+   */
+  snapshot?: boolean;
   handlers: CdcStreamHandlers;
 }
 
@@ -215,6 +228,26 @@ export interface CdcProvider {
     conn: ConnectionConfig,
     cursor: string | null,
   ): Promise<CdcSourceHold | null>;
+
+  /**
+   * take a place in the change log NOW, without reading from it: a cursor that,
+   * handed to {@link startStream} later, delivers every change made after this
+   * call. it is what lets a bridge copy a table and then follow it with nothing
+   * lost in between — the place is taken first, the copy is made, and the
+   * changes made meanwhile are waiting when the stream opens.
+   *
+   * resolves to null when {@link provision} has already pinned that place on
+   * the server (a PostgreSQL slot starts at the moment it was created).
+   *
+   * NOT implemented by an engine with no log to hold a place in (Redis): there
+   * the stream is opened first and its changes are held back until the copy is
+   * done.
+   */
+  capturePosition?(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+  ): Promise<string | null>;
 
   /** open the long-lived connection and start emitting changes */
   startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle>;

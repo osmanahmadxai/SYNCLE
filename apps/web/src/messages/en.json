@@ -139,7 +139,10 @@
     "deleteTitle": "Delete \"{name}\"?",
     "deleteDescription": "This removes the bridge and its job history. This cannot be undone.",
     "bridgeDeleted": "Bridge deleted",
-    "couldNotDelete": "Could not delete"
+    "couldNotDelete": "Could not delete",
+    "positionLostRecopyDescription": "This bridge copies its table before it follows it, and can do that again: every row that still exists at the source is brought up to date, then changes are followed from now. Rows that were deleted at the source in the meantime stay at the destination.",
+    "copyAgainThenFollow": "Copy the table again, then follow",
+    "withoutCopying": "Not like this"
   },
   "bridgeList": {
     "map": "Map",
@@ -279,7 +282,11 @@
     "stopBridge": "Stop the bridge",
     "onFailureContinueHint": "Rows that fail are kept in the bridge's dead-letter queue, in full, and can be retried once the cause is fixed. The bridge still stops if the destination itself is unavailable.",
     "onFailureStopHint": "The bridge stops at the first failure without moving past it. Start it again and the same rows are retried; nothing is skipped.",
-    "hashStandIn": "A hashed value is shown as a stand-in here. Dry run shows the real one."
+    "hashStandIn": "A hashed value is shown as a stand-in here. Dry run shows the real one.",
+    "cdcFromNow": "Only changes from now on",
+    "cdcFromBeginning": "Copy what is there, then follow changes",
+    "cdcFromNowHint": "Rows the table already holds are left alone. The bridge delivers what changes after its first start.",
+    "cdcFromBeginningHint": "On its first start the bridge takes its place in the change log, copies the table, then delivers everything that changed meanwhile — nothing is lost in between. A bridge that already has a position resumes from it."
   },
   "builderFilters": {
     "title": "Only rows where",

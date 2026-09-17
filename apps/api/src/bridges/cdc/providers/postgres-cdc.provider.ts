@@ -653,6 +653,16 @@ export class PostgresCdcProvider implements CdcProvider {
 
   /* ----- the stream ----- */
 
+  /**
+   * nothing to take: {@link provision} created the slot, and a slot's position
+   * IS the moment it was created (the server waits for the transactions open at
+   * that moment to end, so none of them straddles it). a stream opened with no
+   * cursor starts there, however much later it is opened
+   */
+  async capturePosition(): Promise<string | null> {
+    return null;
+  }
+
   async startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle> {
     const { bridgeId, bridge, conn, handlers } = ctx;
     if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') {

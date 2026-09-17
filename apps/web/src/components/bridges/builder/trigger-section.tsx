@@ -44,6 +44,7 @@ export function TriggerSection({
     | 'pollSeconds'
     | 'watchStartFrom'
     | 'cdcOps'
+    | 'cdcStartFrom'
     | 'readiness'
     | 'checkingCdc'
   >;
@@ -66,6 +67,7 @@ export function TriggerSection({
     pollSeconds,
     watchStartFrom,
     cdcOps,
+    cdcStartFrom,
     readiness,
     checkingCdc,
   } = draft;
@@ -189,6 +191,32 @@ export function TriggerSection({
                 {t('truncateHint')}
               </p>
             )}
+
+            <div className="grid gap-1.5">
+              <Label className="text-xs">{t('startFrom')}</Label>
+              <Select
+                value={cdcStartFrom}
+                onValueChange={(v) =>
+                  dispatch({
+                    type: 'setCdcStartFrom',
+                    startFrom: v as 'now' | 'beginning',
+                  })
+                }
+              >
+                <SelectTrigger className="h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="now">{t('cdcFromNow')}</SelectItem>
+                  <SelectItem value="beginning">{t('cdcFromBeginning')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-[11px]">
+                {cdcStartFrom === 'beginning'
+                  ? t('cdcFromBeginningHint')
+                  : t('cdcFromNowHint')}
+              </p>
+            </div>
 
             {/* readiness / setup */}
             <div className="flex items-center justify-between">

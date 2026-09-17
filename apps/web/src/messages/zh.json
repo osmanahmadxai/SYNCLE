@@ -139,7 +139,10 @@
     "deleteTitle": "删除“{name}”？",
     "deleteDescription": "这将删除该桥接及其任务历史，且无法撤销。",
     "bridgeDeleted": "桥接已删除",
-    "couldNotDelete": "删除失败"
+    "couldNotDelete": "删除失败",
+    "positionLostRecopyDescription": "此桥接会先复制表再跟随变更，并且可以再复制一次：源端仍然存在的每一行都会被更新到最新，然后从现在开始跟随变更。在此期间源端已删除的行仍会保留在目标端。",
+    "copyAgainThenFollow": "重新复制表，然后跟随变更",
+    "withoutCopying": "不这样做"
   },
   "bridgeList": {
     "map": "地图",
@@ -279,7 +282,11 @@
     "stopBridge": "停止桥接",
     "onFailureContinueHint": "失败的行会完整保存在该桥接的死信队列中，原因修复后可以重试。如果目标本身不可用，桥接仍会停止。",
     "onFailureStopHint": "桥接会在第一次失败处停止，不会越过它。重新启动后会重试相同的行，不会跳过任何数据。",
-    "hashStandIn": "此处的哈希值以占位符显示。试运行会显示真实值。"
+    "hashStandIn": "此处的哈希值以占位符显示。试运行会显示真实值。",
+    "cdcFromNow": "仅从现在开始的变更",
+    "cdcFromBeginning": "先复制现有数据，再跟随变更",
+    "cdcFromNowHint": "表中已有的行保持不动。桥接只投递首次启动之后发生的变更。",
+    "cdcFromBeginningHint": "首次启动时，桥接先在变更日志中记下位置，复制整张表，然后投递复制期间发生的所有变更——中间不会丢失任何内容。已有位置的桥接会从该位置继续。"
   },
   "builderFilters": {
     "title": "仅发送满足条件的行",

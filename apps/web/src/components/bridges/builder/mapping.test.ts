@@ -178,23 +178,47 @@ describe('loadBridge', () => {
 
   it('hydrates a cdc trigger with its operations', () => {
     const d = loadBridge(
-      httpBridge({ trigger: { kind: 'cdc', operations: ['insert', 'delete'] } }),
+      httpBridge({ trigger: { kind: 'cdc', operations: ['insert', 'delete'], startFrom: 'now' } }),
     );
     expect(d.syncMode).toBe('live');
     expect(d.triggerKind).toBe('cdc');
     expect([...d.cdcOps]).toEqual(['insert', 'delete']);
+    expect(d.cdcStartFrom).toBe('now');
+  });
+
+  it('keeps "copy what is there first" through a load and a save — and a bridge saved before it existed follows from now', () => {
+    const copying = loadBridge(
+      httpBridge({ trigger: { kind: 'cdc', operations: ['insert'], startFrom: 'beginning' } }),
+    );
+    expect(copying.cdcStartFrom).toBe('beginning');
+    expect(buildInput(copying, ctx()).trigger).toEqual({ kind: 'cdc', operations: ['insert'], startFrom: 'beginning' });
+
+    // stored before the option existed: no `startFrom` at all
+    const older = loadBridge(httpBridge({ trigger: { kind: 'cdc', operations: ['insert'] } as never }));
+    expect(older.cdcStartFrom).toBe('now');
+    // a new bridge never copies a table nobody asked it to
+    expect(initialDraft().cdcStartFrom).toBe('now');
+  });
+
+  it('the reducer switches it', () => {
+    let d = readyDraft();
+    d = builderReducer(d, { type: 'setCdcStartFrom', startFrom: 'beginning' });
+    expect(d.cdcStartFrom).toBe('beginning');
+    // the polling trigger has a start-from of its own; neither moves the other
+    expect(d.watchStartFrom).toBe('now');
   });
 
   it('keeps the opt-in truncate operation through a load and a save', () => {
     const d = loadBridge(
       httpBridge({
-        trigger: { kind: 'cdc', operations: ['insert', 'truncate'] },
+        trigger: { kind: 'cdc', operations: ['insert', 'truncate'], startFrom: 'now' },
       }),
     );
     expect(d.cdcOps.has('truncate')).toBe(true);
     expect(buildInput(d, ctx()).trigger).toEqual({
       kind: 'cdc',
       operations: ['insert', 'truncate'],
+      startFrom: 'now',
     });
   });
 
@@ -538,6 +562,7 @@ describe('buildInput', () => {
     expect(buildInput(d, ctx()).trigger).toEqual({
       kind: 'cdc',
       operations: ['update', 'delete'],
+      startFrom: 'now',
     });
   });
 

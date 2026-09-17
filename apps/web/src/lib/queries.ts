@@ -339,7 +339,7 @@ export function useStartBridgeJob(bridgeId: string) {
 export function useStartWatch(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (opts: { fromNow?: boolean } = {}) =>
+    mutationFn: (opts: { fromNow?: boolean; recopy?: boolean } = {}) =>
       api.startWatch(bridgeId, opts),
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: queryKeys.sourceHold(bridgeId) });

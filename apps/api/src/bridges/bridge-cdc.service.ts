@@ -56,6 +56,8 @@ import {
   type CdcStreamHandle,
 } from './cdc/cdc-provider';
 import { rowMatchesFilters } from './cdc/filter-match';
+import { SnapshotCdcProvider } from './cdc/snapshot-provider';
+import { TableReaderService } from './table-reader.service';
 import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
 
 /** live runtime state for one active CDC stream */
@@ -190,14 +192,35 @@ function readCursor(cursorJson: string | null): string | null {
  * (to the explanation) once the source has said it can no longer serve that
  * position; from then on the bridge only starts when told to continue from now
  */
-function readCursorState(cursorJson: string | null): { cursor: string | null; lost: string | null } {
-  if (!cursorJson) return { cursor: null, lost: null };
+function readCursorState(cursorJson: string | null): {
+  cursor: string | null;
+  lost: string | null;
+  /**
+   * this bridge has no position, and is NOT to copy its table to get one: it
+   * was told to continue "from now" after losing its place. without the mark, a
+   * bridge that starts from the `beginning` would answer "continue from now" by
+   * re-reading a table of any size
+   */
+  noCopy: boolean;
+} {
+  if (!cursorJson) return { cursor: null, lost: null, noCopy: false };
   try {
-    const o = JSON.parse(cursorJson) as { cursor?: string; lsn?: string; lost?: string };
-    return { cursor: o.cursor ?? o.lsn ?? null, lost: typeof o.lost === 'string' && o.lost ? o.lost : null };
+    const o = JSON.parse(cursorJson) as { cursor?: string; lsn?: string; lost?: string; copy?: string };
+    return {
+      cursor: o.cursor ?? o.lsn ?? null,
+      lost: typeof o.lost === 'string' && o.lost ? o.lost : null,
+      noCopy: o.copy === 'skip',
+    };
   } catch {
-    return { cursor: null, lost: null };
+    return { cursor: null, lost: null, noCopy: false };
   }
+}
+
+/** does this start copy the table first? only a bridge with no position at all does */
+function copiesFirst(bridge: ResolvedBridge, cursorJson: string | null): boolean {
+  if (bridge.trigger.kind !== 'cdc' || bridge.trigger.startFrom !== 'beginning') return false;
+  const state = readCursorState(cursorJson);
+  return state.cursor === null && !state.noCopy;
 }
 
 /** 1536 -> "1.5 KB"; whole numbers stay whole */
@@ -233,9 +256,20 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly spool: CdcSpoolService,
     private readonly deadLetters: DeadLetterService,
     private readonly tunnels: SshTunnelService,
+    private readonly reader: TableReaderService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
-    for (const p of providers) this.providers.set(p.engine, p);
+    // every engine's provider is handed out inside the wrapper that can copy a
+    // table before following it. it is transparent until a bridge asks for that
+    for (const p of providers) {
+      this.providers.set(
+        p.engine,
+        new SnapshotCdcProvider(p, this.reader, {
+          holdMax: runtimeConfig.snapshotHoldMax,
+          log: (message) => this.logger.log(message),
+        }),
+      );
+    }
   }
 
   private providerFor(engine: DatabaseEngine): CdcProvider | null {
@@ -304,7 +338,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
 
   /* ----- start / stop ----- */
 
-  async start(bridgeId: string, opts: { fromNow?: boolean } = {}): Promise<BridgeJob> {
+  async start(bridgeId: string, opts: { fromNow?: boolean; recopy?: boolean } = {}): Promise<BridgeJob> {
     const bridge = await this.store.resolve(bridgeId);
     if (bridge.trigger.kind !== 'cdc') {
       throw new BadRequestError('This bridge is not configured for event-based delivery.');
@@ -350,7 +384,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     bridgeId: string,
     bridge: ResolvedBridge,
     provider: CdcProvider,
-    opts: { fromNow?: boolean },
+    opts: { fromNow?: boolean; recopy?: boolean },
   ): Promise<BridgeJob> {
     if (bridge.source.kind !== 'table') throw new BadRequestError('Event-based bridges must read from a table.');
     const conn = route.conn;
@@ -392,20 +426,27 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       // take its name. this one is allowed to fail the start: carrying on with
       // an invalidated slot in place cannot work
       await provider.deprovision(bridgeId, bridge, conn);
+      // "from now" means from now. a bridge that copies its table before it
+      // follows it does that again only when asked to in so many words
+      const recopy = opts.recopy === true && bridge.trigger.kind === 'cdc' && bridge.trigger.startFrom === 'beginning';
       if (latest) {
         const seq = latest.cursorOffset;
         await this.jobs.recordNotice(
           latest.id,
           seq,
           `Continued from the current position on ${new Date().toISOString()}: ${gap} ` +
-            'Changes made at the source before this point and after the previous delivery were NOT captured. Run a replay to bring the destination up to date.',
+            (recopy
+              ? 'The table is being copied again, which brings every row that still exists up to date. Rows DELETED at the source in the meantime are still at the destination.'
+              : 'Changes made at the source before this point and after the previous delivery were NOT captured. Run a replay to bring the destination up to date.'),
         );
         latest = await this.prisma.bridgeJob.update({
           where: { id: latest.id },
-          data: { cursorJson: null, cursorOffset: seq + 1 },
+          data: { cursorJson: recopy ? null : JSON.stringify({ copy: 'skip' }), cursorOffset: seq + 1 },
         });
       }
-      this.logger.warn(`CDC ${bridgeId}: continuing from now, accepting a gap (${gap})`);
+      this.logger.warn(
+        `CDC ${bridgeId}: continuing from now${recopy ? ', copying the table again' : ', accepting a gap'} (${gap})`,
+      );
     }
 
     await provider.provision(bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
@@ -426,9 +467,10 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
-    await this.beginStream(bridgeId, bridge, route, provider, job.id, job.cursorOffset, readCursor(job.cursorJson));
+    const copies = copiesFirst(bridge, job.cursorJson);
+    await this.beginStream(bridgeId, bridge, route, provider, job.id, job.cursorOffset, job.cursorJson);
     this.logger.log(
-      `Streaming changes for bridge ${bridgeId} (job ${job.id}, ${conn.engine}${route.tunnel ? ', through its SSH tunnel' : ''})`,
+      `${copies ? 'Copying the table, then streaming' : 'Streaming'} changes for bridge ${bridgeId} (job ${job.id}, ${conn.engine}${route.tunnel ? ', through its SSH tunnel' : ''})`,
     );
     return this.jobs.getJob(bridgeId, job.id);
   }
@@ -732,8 +774,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     provider: CdcProvider,
     jobId: string,
     startSeq: number,
-    startCursor: string | null,
+    cursorJson: string | null,
   ): Promise<void> {
+    const startCursor = readCursor(cursorJson);
     // two live streams for one bridge would double-deliver every change
     if (this.streams.has(bridgeId)) {
       throw new ConflictError('This bridge already has a live stream. Stop it first.');
@@ -784,11 +827,13 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         bridge,
         conn: route.conn,
         fromCursor: startCursor,
+        snapshot: copiesFirst(bridge, cursorJson),
         handlers: {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
           onSkip: (cursor) => this.handleSkip(bridgeId, cursor),
           onNotice: (message, cursor) => this.handleNotice(bridgeId, message, cursor),
           onPositionLost: (message) => this.handlePositionLost(bridgeId, message),
+          onFatal: (message) => this.handleFatal(bridgeId, message),
           onError: (err) => this.logger.warn(`CDC stream error for ${bridgeId}: ${err.message}`),
         },
       });
@@ -1010,6 +1055,27 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
    * what was read before that is real and is delivered; then the bridge stops,
    * marked so that it only starts again when told to continue from now.
    */
+  /**
+   * the stream cannot go on (the table could not be read, however often it was
+   * tried). ordered behind everything already read, so that what was read is
+   * delivered and checkpointed first; then the bridge stops, where it is
+   */
+  private handleFatal(bridgeId: string, message: string): Promise<void> {
+    const stream = this.streams.get(bridgeId);
+    if (!stream) return Promise.resolve();
+    stream.pending = stream.pending
+      .then(async () => {
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        await this.flush(bridgeId, stream);
+        if (stream.inflight) await stream.inflight.catch(() => undefined);
+        await this.halt(bridgeId, stream, 'failed', message);
+      })
+      .catch((err) => {
+        this.logger.error(`CDC fatal chain broke for ${bridgeId}: ${(err as Error).message}`);
+      });
+    return stream.pending;
+  }
+
   private handlePositionLost(bridgeId: string, message: string): Promise<void> {
     const stream = this.streams.get(bridgeId);
     if (!stream) return Promise.resolve();
@@ -1887,7 +1953,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           return;
         }
       }
-      await this.beginStream(r.bridgeId, bridge, route, provider, r.id, r.cursorOffset, readCursor(r.cursorJson));
+      await this.beginStream(r.bridgeId, bridge, route, provider, r.id, r.cursorOffset, r.cursorJson);
       this.logger.log(`Resumed CDC stream for bridge ${r.bridgeId} (${raw.engine})`);
     } catch (err) {
       if (this.streams.get(r.bridgeId)?.route !== route) await route.close();

@@ -214,6 +214,17 @@ export const bridgeTriggerSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('cdc'),
     operations: z.array(cdcOperationSchema).min(1).default(['insert', 'update', 'delete']),
+    /**
+     * `now` follows changes made from the moment the bridge first starts; what
+     * is already in the table stays where it is.
+     *
+     * `beginning` copies the table as it is FIRST, then follows changes — in one
+     * bridge, with nothing lost in between: the place in the change log is
+     * taken before the first row is read, and the changes made while the copy
+     * runs are delivered after it. applies when the bridge has no position yet
+     * (its first start, or a start over); a bridge that has one resumes from it.
+     */
+    startFrom: z.enum(['now', 'beginning']).default('now'),
   }),
 ]);
 
@@ -319,6 +330,13 @@ export const liveStartSchema = z
      * not captured. without this such a bridge refuses to start
      */
     fromNow: z.boolean().optional(),
+    /**
+     * with `fromNow`, on a bridge that starts from the `beginning`: copy the
+     * table again before following changes. that closes the gap for every row
+     * that still exists (what was DELETED at the source in between stays at the
+     * destination). without it, `fromNow` means exactly that: no copy
+     */
+    recopy: z.boolean().optional(),
   })
   .default({});
 export type LiveStartDTO = z.infer<typeof liveStartSchema>;

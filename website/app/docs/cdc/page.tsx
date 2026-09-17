@@ -398,8 +398,25 @@ server_id        = 1   # any unique id`}</CodeBlock>
         delivered as an <strong>update</strong>; <code>del</code>,{' '}
         <code>unlink</code>, <code>expired</code> and <code>evicted</code>{' '}
         arrive as deletes. Setting a TTL is not a delete — only the TTL
-        actually firing is. A filter on the <code>key</code> column acts as a
-        Redis-style glob (<code>user:*</code>) applied at the subscription.
+        actually firing is. A filter on the <code>key</code> column is a
+        Redis-style glob, read the same way by the change stream, by a replay
+        and by the copy a bridge makes before following: <em>equals</em> is
+        the glob as written (<code>user:*</code>, <code>session:??</code>,{' '}
+        <code>h[ae]llo</code>); <em>contains</em>, <em>starts with</em> and{' '}
+        <em>ends with</em> are <code>*value*</code>, <code>value*</code> and{' '}
+        <code>*value</code>. Syncle&apos;s own keys — its job queues, a
+        bridge&apos;s spool — are never delivered, from a stream or a replay,
+        when the Redis being read is the one Syncle runs on.
+      </p>
+      <p>
+        A Redis bridge that{' '}
+        <a href="/docs/bridges#copy-then-follow">copies its keys first</a>{' '}
+        has no log to take a place in. It subscribes first and holds what it
+        hears — the newest change per key — until the keys have been read
+        (by following <code>SCAN</code> to its end, which returns every key
+        that exists for the length of the read), then delivers what it held.
+        If the process stops mid-copy, what was held is gone with it, like
+        anything else Redis publishes to a subscriber that is not there.
       </p>
       <Note>
         Redis keyspace notifications are fire-and-forget pub/sub with no

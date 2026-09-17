@@ -174,6 +174,14 @@ export const runtimeConfig = {
    */
   slotMaxBytes: nonNegativeInt(env('SYNCLE_SLOT_MAX_BYTES'), 0),
   /**
+   * A change-stream bridge that copies its table first has to keep the changes
+   * made meanwhile somewhere. PostgreSQL, MySQL and MongoDB keep them in their
+   * own log; Redis has none, so they are held in memory — the newest change per
+   * key — until the copy is done. This is how many keys may be held before the
+   * bridge stops rather than grow without limit.
+   */
+  snapshotHoldMax: Math.max(1, nonNegativeInt(env('SYNCLE_SNAPSHOT_HOLD_MAX'), 100_000)),
+  /**
    * Delivery history. Every delivery is recorded with what was sent and what
    * came back, and nothing used to remove those rows: a live bridge writes them
    * for ever. These are the DEFAULTS for the two settings that bound it (both

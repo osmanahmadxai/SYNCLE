@@ -335,7 +335,7 @@ export class BridgesController {
   ): Promise<BridgeJob> {
     const bridge = await this.store.get(id);
     return bridge.trigger.kind === 'cdc'
-      ? this.cdc.start(id, { fromNow: dto.fromNow === true })
+      ? this.cdc.start(id, { fromNow: dto.fromNow === true, recopy: dto.recopy === true })
       : this.watch.start(id);
   }
 

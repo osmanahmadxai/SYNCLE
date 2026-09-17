@@ -329,7 +329,7 @@ export const api = {
    * `fromNow`: the bridge's place in the source's change log is gone, and the
    * caller accepts that what happened in between will not be captured
    */
-  startWatch: (id: string, opts: { fromNow?: boolean } = {}) =>
+  startWatch: (id: string, opts: { fromNow?: boolean; recopy?: boolean } = {}) =>
     request<BridgeJob>(`/bridges/${id}/watch/start`, {
       method: 'POST',
       ...jsonBody(opts),

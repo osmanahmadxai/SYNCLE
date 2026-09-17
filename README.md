@@ -106,7 +106,10 @@ What makes the database-to-database sync trustworthy:
 - **CDC** — true change-data-capture straight from the database's change log, in
   **real time, no polling**. Postgres logical replication, MySQL binlog, MongoDB
   change streams, Redis keyspace notifications. Inserts, updates, and deletes all
-  come through, each tagged with its operation.
+  come through, each tagged with its operation. It can **copy what the table
+  already holds first and then follow it, in one bridge** — the place in the
+  change log is taken before the copy starts, so nothing that changes meanwhile
+  is lost and no stale row lands on top of a fresh one.
 
 The rest is the same whichever destination and trigger you pick:
 
@@ -430,6 +433,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_SLOT_CHECK_SECONDS` | api | How often to measure the WAL each CDC bridge's replication slot pins on its source (default `60`; `0` = off) |
 | `SYNCLE_SLOT_WARN_BYTES` | api | WAL pinned by one bridge before it is flagged (default 1 GiB) |
 | `SYNCLE_SLOT_MAX_BYTES` | api | WAL pinned by a *stopped* bridge before its slot is dropped to protect the source (default `0` = never) |
+| `SYNCLE_SNAPSHOT_HOLD_MAX` | api | Keys whose changes a Redis bridge may hold in memory while it copies the existing keys, before it stops instead (default `100000`) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |

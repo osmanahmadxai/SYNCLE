@@ -433,6 +433,44 @@ export class MysqlCdcProvider implements CdcProvider {
     /* no-op */
   }
 
+  /**
+   * the end of the binlog as it is now. a transaction still open at this moment
+   * is written to the log when it commits — after this position — so nothing
+   * that a later read of the table could miss is ahead of it
+   */
+  async capturePosition(_bridgeId: string, bridge: ResolvedBridge): Promise<string | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    const status = async (statement: string) =>
+      (await this.pool.withAdapter(src.connectionId, src.database, (a) => a.query(statement))).rows[0] as
+        | Record<string, unknown>
+        | undefined;
+    let row: Record<string, unknown> | undefined;
+    try {
+      // MySQL 8.4 renamed it, and removed the old spelling
+      row = await status('SHOW BINARY LOG STATUS');
+    } catch {
+      row = await status('SHOW MASTER STATUS');
+    }
+    const file = String(row?.File ?? '');
+    const pos = Number(row?.Position ?? 0);
+    if (!file || !Number.isFinite(pos) || pos <= 0) {
+      throw new Error(
+        'MySQL did not report a binlog position (is binary logging on, and may this user run SHOW BINARY LOG STATUS / SHOW MASTER STATUS — the REPLICATION CLIENT privilege?)',
+      );
+    }
+    return this.makeCursor({
+      file,
+      pos,
+      // no row of any statement has been seen: row 0 of a statement that starts
+      // exactly here is still "after" this
+      row: -1,
+      isStart: true,
+      serverUuid: await this.serverUuid(src.connectionId, src.database),
+      gtid: null,
+    });
+  }
+
   /* ----- the stream ----- */
 
   async startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle> {
