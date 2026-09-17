@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import createNextIntlPlugin from 'next-intl/plugin';
+import { securityHeaders } from './security-headers.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -23,6 +24,19 @@ const nextConfig = {
   devIndicators: false,
   // Don't leak the framework in response headers.
   poweredByHeader: false,
+  // On every page and asset. (Responses of /api are the API's own, relayed with
+  // the headers the API gave them: the proxy route sets those itself.)
+  async headers() {
+    return [
+      {
+        source: '/((?!api/).*)',
+        headers: securityHeaders({
+          apiUrl: process.env.NEXT_PUBLIC_API_URL,
+          dev: process.env.NODE_ENV !== 'production',
+        }),
+      },
+    ];
+  },
 };
 
 export default withNextIntl(nextConfig);

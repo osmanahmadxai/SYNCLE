@@ -46,6 +46,25 @@ export default function Page() {
         account is present. Use the login form instead.
       </p>
 
+      <h2 id="cross-origin-403">
+        Signing in (or saving anything) answers &quot;came from another
+        site&quot;
+      </h2>
+      <p>
+        A request that changes something is only{' '}
+        <a href="/docs/self-hosting#request-origin">taken from the app itself</a>
+        . A <code>403</code> with that message means the API could not tell
+        that it was: the browser is too old to say so (
+        <code>Sec-Fetch-Site</code>), <em>and</em> the address in the
+        browser&apos;s bar is not the one the API was reached under — a reverse
+        proxy that replaces the <code>Host</code> header is the usual cause.
+        Either have the proxy pass it on (nginx:{' '}
+        <code>proxy_set_header Host $host;</code>) or set{' '}
+        <code>WEB_ORIGIN</code> to the public address, for example{' '}
+        <code>https://syncle.example.com</code>. The origin it saw is in the
+        message.
+      </p>
+
       <h2 id="cdc-never-fires">A CDC bridge never delivers anything</h2>
       <p>
         Almost always the source server is not configured for change data

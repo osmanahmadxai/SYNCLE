@@ -11,6 +11,25 @@ can no longer lose a row to a failed delivery.
 
 ### Security
 
+- **Requests that change something must come from the app.** The session is a
+  cookie, and `SameSite=Lax` is not the whole answer to cross-site request
+  forgery (a sibling subdomain is the same site; older browsers ignore it).
+  Anything but `GET`/`HEAD`/`OPTIONS` is now checked before it reaches a route:
+  the browser's own `Sec-Fetch-Site: same-origin`, else an `Origin` that is the
+  address the app was reached under or one of `WEB_ORIGIN`. A request with no
+  `Origin` is not a browser and is unaffected (scripts, API keys). Anything else
+  is a `403` — a login with the right password included.
+- **Security headers on every response.** API: `nosniff`, `X-Frame-Options:
+  DENY`, `Content-Security-Policy: default-src 'none'`, `Referrer-Policy`,
+  `Cache-Control: no-store`, and HSTS when the browser came over HTTPS;
+  `X-Powered-By` is gone. Web app: a Content-Security-Policy that allows
+  script, style, fonts and workers from the app itself only, no framing, a
+  `Permissions-Policy` that asks for no device.
+- **Nothing is loaded from a CDN any more.** The query editor (Monaco) was
+  fetched from jsDelivr at run time: no editor on a network without internet,
+  and a third party's script in a page that handles database credentials. It
+  is now served by the app (copied out of `node_modules` at build time).
+
 - **Next.js 15.5.25** in the app and in the documentation site. 15.5.18 — what
   the app shipped — is affected by two critical advisories (unauthenticated
   remote code execution, one in the image optimizer) and eight more rated high

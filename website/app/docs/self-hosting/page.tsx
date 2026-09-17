@@ -149,6 +149,16 @@ export default function Page() {
           the decision is not keyed off <code>NODE_ENV</code>.
         </li>
         <li>
+          <strong>Keep the <code>Host</code> header.</strong> A request that
+          changes something is only taken from the app itself (see{' '}
+          <a href="#request-origin">below</a>). Current browsers say so
+          themselves; for older ones the API compares the request&apos;s{' '}
+          <code>Origin</code> with the host it was reached under, so let your
+          proxy pass that on (nginx: <code>proxy_set_header Host $host;</code>
+          — Caddy and Traefik do by default), or name the public address in{' '}
+          <code>WEB_ORIGIN</code>.
+        </li>
+        <li>
           <strong>Restrict destinations.</strong> Set{' '}
           <code>SYNCLE_BLOCK_PRIVATE_DESTINATIONS=true</code> so bridge
           deliveries refuse loopback, private and link-local addresses — see
@@ -305,6 +315,51 @@ export default function Page() {
         a 15-second scrape interval is fine. Set{' '}
         <code>SYNCLE_LOG_LEVEL=log</code> to have the API also log lifecycle
         events (it logs warnings and errors only by default).
+      </p>
+
+      <h3 id="request-origin">Where a request may come from</h3>
+      <p>
+        The session is a cookie, and a browser sends a cookie with every
+        request to the app — also one that <em>another</em> site made it send.{' '}
+        <code>SameSite=Lax</code> stops most of that and not all of it (a
+        sibling subdomain is the same &quot;site&quot;). So every request that
+        changes something — anything but <code>GET</code>, <code>HEAD</code>{' '}
+        and <code>OPTIONS</code> — is checked before it reaches a route:
+      </p>
+      <ul>
+        <li>
+          <code>Sec-Fetch-Site: same-origin</code>, which every current browser
+          sends and no page can set, is the browser&apos;s own word that a page
+          of the app made the request;
+        </li>
+        <li>
+          otherwise the <code>Origin</code> header has to be the address the
+          app was reached under, or one of <code>WEB_ORIGIN</code>;
+        </li>
+        <li>
+          a request with no <code>Origin</code> at all is not a browser (curl,
+          a script with an <a href="/docs/api#api-keys">API key</a>) and is not
+          what this is about;
+        </li>
+        <li>
+          anything else is answered <code>403</code> with{' '}
+          <code>{'details.reason: "cross-origin"'}</code> — including a login
+          with the right password.
+        </li>
+      </ul>
+      <p>
+        Every response also says what it is. The API&apos;s are data:{' '}
+        <code>nosniff</code>, <code>X-Frame-Options: DENY</code>, a{' '}
+        <code>Content-Security-Policy</code> of <code>default-src
+        &apos;none&apos;</code>, <code>Cache-Control: no-store</code>, and{' '}
+        <code>Strict-Transport-Security</code> when the browser came over
+        HTTPS. The web app&apos;s pages allow scripts, styles, fonts and
+        workers from the app itself and nowhere else, connections only to the
+        app (and to <code>NEXT_PUBLIC_API_URL</code> where that is set), and
+        may not be framed. Nothing is loaded from a CDN: the query editor is
+        served by the app, so Syncle works on a network with no internet.
+        (Inline scripts are allowed — Next.js hydrates through them; what the
+        policy takes away is script from <em>another</em> origin.)
       </p>
 
       <h3 id="alerts">Alerts</h3>

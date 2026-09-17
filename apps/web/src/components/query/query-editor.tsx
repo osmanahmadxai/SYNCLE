@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Editor, { type Monaco, type OnMount } from '@monaco-editor/react';
+import Editor, { loader, type Monaco, type OnMount } from '@monaco-editor/react';
 import { useTranslations } from 'next-intl';
 import { useTheme } from 'next-themes';
 import { Loader2, Play, Plus, Sparkles, X } from 'lucide-react';
@@ -22,6 +22,12 @@ import {
 } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { ResultTable } from './result-table';
+
+// the editor's own code is served by this app (copied out of node_modules at
+// build time: scripts/copy-monaco.mjs). left alone, the wrapper fetches it from
+// a public CDN at run time — no editor on a network without internet, and
+// somebody else's script in a page that handles database credentials
+loader.config({ paths: { vs: '/monaco/vs' } });
 
 const MONACO_LANG: Record<QueryLanguage, string> = {
   sql: 'sql',

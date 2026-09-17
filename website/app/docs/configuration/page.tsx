@@ -183,9 +183,15 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
                 <code>http://localhost:3002</code>
               </td>
               <td>
-                Browser origins allowed by credentialed CORS, comma-separated.
-                Only matters when the browser calls the API directly via{' '}
-                <code>NEXT_PUBLIC_API_URL</code>.
+                Origins a browser may use Syncle from <em>besides the
+                app&apos;s own</em>, comma-separated. They are allowed by
+                credentialed CORS, and they are the only other origins a request
+                that changes something is{' '}
+                <a href="/docs/self-hosting#request-origin">taken from</a>.
+                Needed when the browser calls the API directly via{' '}
+                <code>NEXT_PUBLIC_API_URL</code>; otherwise only behind a
+                reverse proxy that rewrites the <code>Host</code> header, for
+                browsers too old to send <code>Sec-Fetch-Site</code>.
               </td>
             </tr>
             <tr>

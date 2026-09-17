@@ -254,6 +254,171 @@ describe('setup, sign in, sign out', () => {
   });
 });
 
+describe('a request another site made the browser send', () => {
+  // the session is a cookie, and a cookie goes wherever the browser sends a
+  // request. what changes something has to come FROM the app — and a browser
+  // says where a request comes from, in a header a page cannot forge
+  const credentials = {
+    username: 'admin',
+    password: 'a different long password',
+  };
+  const signIn = async () => {
+    const res = await call('POST', '/api/auth/login', { body: credentials });
+    expect(res.status).toBe(201);
+    return (res.headers.get('set-cookie') ?? '').split(';')[0]!;
+  };
+
+  it('is refused before it reaches a route — with the right password, with a valid session', async () => {
+    const forged = await call('POST', '/api/auth/login', {
+      body: credentials,
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(forged.status).toBe(403);
+    expect((await forged.json()).error).toMatchObject({
+      code: 'FORBIDDEN',
+      details: { reason: 'cross-origin' },
+    });
+    expect(forged.headers.get('set-cookie')).toBeNull();
+
+    const cookie = await signIn();
+    const before = await (
+      await call('GET', '/api/workspaces', { cookie })
+    ).json();
+    for (const origin of [
+      'https://evil.example',
+      'null',
+      'https://127.0.0.1.evil.example',
+    ]) {
+      const res = await call('POST', '/api/workspaces', {
+        cookie,
+        body: { name: `made by ${origin}` },
+        headers: { origin },
+      });
+      expect(res.status, origin).toBe(403);
+    }
+    const del = await call('DELETE', '/api/workspaces/default', {
+      cookie,
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(del.status).toBe(403);
+    const after = await (
+      await call('GET', '/api/workspaces', { cookie })
+    ).json();
+    expect(after.data).toEqual(before.data);
+  });
+
+  it('from the app itself it is taken: directly, behind the web app’s proxy, or from a configured origin', async () => {
+    const cookie = await signIn();
+    const made: string[] = [];
+    const create = async (headers: Record<string, string>) => {
+      const res = await call('POST', '/api/workspaces', {
+        cookie,
+        body: { name: `ws-${made.length}-${Date.now()}` },
+        headers,
+      });
+      if (res.status === 201) made.push((await res.json()).data.id);
+      return res.status;
+    };
+    try {
+      // no Origin at all: not a browser
+      expect(await create({})).toBe(201);
+      // the API's own origin (the browser talks to it directly)
+      expect(await create({ origin: base })).toBe(201);
+      // behind the web app: it forwards the browser's Origin, and says which host and scheme the browser used
+      expect(
+        await create({
+          origin: 'https://syncle.example.com',
+          'x-forwarded-host': 'syncle.example.com',
+          'x-forwarded-proto': 'https',
+        }),
+      ).toBe(201);
+      // …and only that host: the same headers do not vouch for another origin
+      expect(
+        await create({
+          origin: 'https://evil.example',
+          'x-forwarded-host': 'syncle.example.com',
+          'x-forwarded-proto': 'https',
+        }),
+      ).toBe(403);
+      // WEB_ORIGIN (its default, here)
+      expect(await create({ origin: 'http://localhost:3002' })).toBe(201);
+      // behind a reverse proxy that rewrites Host, the API does not know its own public name — the
+      // browser does, and says so in a header no page can set
+      expect(
+        await create({
+          origin: 'https://syncle.example.com',
+          'sec-fetch-site': 'same-origin',
+        }),
+      ).toBe(201);
+      expect(
+        await create({
+          origin: 'https://evil.example',
+          'sec-fetch-site': 'cross-site',
+        }),
+      ).toBe(403);
+      expect(
+        await create({
+          origin: 'https://sibling.example.com',
+          'sec-fetch-site': 'same-site',
+        }),
+      ).toBe(403);
+    } finally {
+      for (const id of made)
+        await call('DELETE', `/api/workspaces/${id}`, { cookie });
+    }
+  });
+
+  it('reading is never refused for where it comes from: a GET changes nothing (CORS decides who may READ the answer)', async () => {
+    const cookie = await signIn();
+    const res = await call('GET', '/api/auth/me', {
+      cookie,
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(res.status).toBe(200);
+    // …and the answer is not one that site's page is allowed to see
+    expect(res.headers.get('access-control-allow-origin')).not.toBe(
+      'https://evil.example',
+    );
+    expect(res.headers.get('access-control-allow-origin')).not.toBe('*');
+  });
+});
+
+describe('what every response says about itself', () => {
+  it('data: not markup, not to be framed, not to be cached — signed in or not, found or not', async () => {
+    const login = await call('POST', '/api/auth/login', {
+      body: { username: 'admin', password: 'a different long password' },
+    });
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    for (const res of [
+      await call('GET', '/api/health'),
+      await call('GET', '/api/connections'),
+      await call('GET', '/api/connections', { cookie }),
+      await call('GET', '/api/no-such-route', { cookie }),
+      await call('POST', '/api/auth/login', {
+        body: {},
+        headers: { origin: 'https://evil.example' },
+      }),
+    ]) {
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; frame-ancestors 'none'",
+      );
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('x-powered-by')).toBeNull();
+      // plain HTTP: asking for HTTPS-only here would lock a LAN install out of itself
+      expect(res.headers.get('strict-transport-security')).toBeNull();
+    }
+    const tls = await call('GET', '/api/health', {
+      headers: { 'x-forwarded-proto': 'https' },
+    });
+    expect(tls.headers.get('strict-transport-security')).toBe(
+      'max-age=15552000',
+    );
+  });
+});
+
 describe('guessing the password', () => {
   it('is stopped even when every attempt claims to come from somewhere new', async () => {
     // `trust proxy` makes req.ip the left-most X-Forwarded-For entry, and the

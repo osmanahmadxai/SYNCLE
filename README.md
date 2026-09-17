@@ -134,6 +134,12 @@ The rest is the same whichever destination and trigger you pick:
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
+- **Locked down by default.** Requests that change anything must come from the
+  app itself (the browser's own `Sec-Fetch-Site` / `Origin`, so a forged
+  cross-site request is refused before it reaches a route), every response
+  carries a strict Content-Security-Policy and the usual hardening headers, and
+  nothing is loaded from a CDN — the query editor included, so Syncle works on a
+  network with no internet.
 - **Thirty tables, one replication slot.** On PostgreSQL, bridges can share a
   slot: one connection and one decoding of the WAL for every table of a source,
   confirmed only as far as the slowest bridge has got, each bridge still its own
@@ -463,7 +469,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |
-| `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
+| `WEB_ORIGIN`                  | api   | Origins a browser may use Syncle from besides the app's own, comma-separated: allowed by CORS and to make changes (default `http://localhost:3002`) |
 
 On the Docker install these go in `~/.syncle/.env` (one `NAME=value` per line),
 followed by `syncle up` — not `syncle restart`, which keeps the environment the
