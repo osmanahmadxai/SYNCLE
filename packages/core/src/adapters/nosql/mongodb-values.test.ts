@@ -18,6 +18,7 @@ import {
   mergeSampledType,
   mongoTunnelOptions,
   normalizeMongoDocument,
+  stripLineComments,
   normalizeMongoValue,
 } from './mongodb-adapter';
 
@@ -147,5 +148,31 @@ describe('mongoTunnelOptions', () => {
         connectionString: 'mongodb://a,b,c/?replicaSet=rs0',
       }),
     ).toEqual({});
+  });
+});
+
+describe('stripLineComments', () => {
+  it('lets the query editor’s own starter text run', () => {
+    const starter =
+      '// Write a JSON command and press Ctrl + Enter\n{\n  "collection": "users",\n  "find": {},\n  "limit": 20\n}';
+    expect(JSON.parse(stripLineComments(starter))).toEqual({
+      collection: 'users',
+      find: {},
+      limit: 20,
+    });
+  });
+
+  it('only takes lines that START with //: a URL inside a value is data', () => {
+    const doc =
+      '  // indented comment\n{ "collection": "links", "find": { "url": "https://example.test//path" } }';
+    expect(JSON.parse(stripLineComments(doc))).toEqual({
+      collection: 'links',
+      find: { url: 'https://example.test//path' },
+    });
+  });
+
+  it('leaves a document without comments exactly as it was', () => {
+    const doc = '{ "collection": "users" }';
+    expect(stripLineComments(doc)).toBe(doc);
   });
 });

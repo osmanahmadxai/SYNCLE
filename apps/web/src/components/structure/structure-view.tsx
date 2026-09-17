@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { KeyRound, Link2 } from 'lucide-react';
 import { useSchema } from '@/lib/queries';
 import { useStudio } from '@/lib/store';
@@ -7,13 +8,14 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function StructureView() {
+  const t = useTranslations('structureView');
   const { activeConnectionId, activeDatabase, selected } = useStudio();
   const { data: schema } = useSchema(activeConnectionId, activeDatabase);
 
   if (!selected) {
     return (
       <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-        Select a table to inspect its structure.
+        {t('empty')}
       </div>
     );
   }
@@ -21,16 +23,14 @@ export function StructureView() {
   const table = schema?.namespaces
     .flatMap((ns) => ns.tables)
     .find(
-      (t) =>
-        t.name === selected.table &&
-        (t.schema ?? '') === (selected.schema ?? ''),
+      (tbl) =>
+        tbl.name === selected.table &&
+        (tbl.schema ?? '') === (selected.schema ?? ''),
     );
 
   if (!table) {
     return (
-      <div className="text-muted-foreground p-4 text-sm">
-        Loading structure…
-      </div>
+      <div className="text-muted-foreground p-4 text-sm">{t('loading')}</div>
     );
   }
 
@@ -39,7 +39,7 @@ export function StructureView() {
       <div className="space-y-6 p-4">
         <section>
           <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-            Columns
+            {t('columns')}
             <Badge variant="secondary" className="font-normal">
               {table.columns.length}
             </Badge>
@@ -48,11 +48,11 @@ export function StructureView() {
             <table className="w-full text-sm">
               <thead className="bg-muted/60 text-muted-foreground text-left text-xs">
                 <tr>
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Type</th>
-                  <th className="px-3 py-2 font-medium">Nullable</th>
-                  <th className="px-3 py-2 font-medium">Default</th>
-                  <th className="px-3 py-2 font-medium">Key</th>
+                  <th className="px-3 py-2 font-medium">{t('name')}</th>
+                  <th className="px-3 py-2 font-medium">{t('type')}</th>
+                  <th className="px-3 py-2 font-medium">{t('nullable')}</th>
+                  <th className="px-3 py-2 font-medium">{t('default')}</th>
+                  <th className="px-3 py-2 font-medium">{t('key')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -65,7 +65,7 @@ export function StructureView() {
                       {col.dataType}
                     </td>
                     <td className="px-3 py-1.5 text-xs">
-                      {col.nullable ? 'YES' : 'NO'}
+                      {col.nullable ? t('yes') : t('no')}
                     </td>
                     <td className="text-muted-foreground px-3 py-1.5 font-mono text-xs">
                       {col.defaultValue ?? '—'}
@@ -77,7 +77,7 @@ export function StructureView() {
                             variant="outline"
                             className="gap-1 text-amber-500"
                           >
-                            <KeyRound className="h-3 w-3" /> PK
+                            <KeyRound className="h-3 w-3" /> {t('pk')}
                           </Badge>
                         )}
                         {col.references && (
@@ -87,7 +87,7 @@ export function StructureView() {
                           </Badge>
                         )}
                         {col.isAutoIncrement && (
-                          <Badge variant="outline">auto</Badge>
+                          <Badge variant="outline">{t('auto')}</Badge>
                         )}
                       </div>
                     </td>
@@ -100,7 +100,7 @@ export function StructureView() {
 
         {table.indexes.length > 0 && (
           <section>
-            <h3 className="mb-2 text-sm font-semibold">Indexes</h3>
+            <h3 className="mb-2 text-sm font-semibold">{t('indexes')}</h3>
             <div className="space-y-1">
               {table.indexes.map((idx) => (
                 <div
@@ -111,9 +111,11 @@ export function StructureView() {
                   <span className="text-muted-foreground">
                     ({idx.columns.join(', ')})
                   </span>
-                  {idx.primary && <Badge variant="outline">primary</Badge>}
+                  {idx.primary && (
+                    <Badge variant="outline">{t('primary')}</Badge>
+                  )}
                   {idx.unique && !idx.primary && (
-                    <Badge variant="outline">unique</Badge>
+                    <Badge variant="outline">{t('unique')}</Badge>
                   )}
                 </div>
               ))}
@@ -123,7 +125,7 @@ export function StructureView() {
 
         {table.foreignKeys.length > 0 && (
           <section>
-            <h3 className="mb-2 text-sm font-semibold">Foreign keys</h3>
+            <h3 className="mb-2 text-sm font-semibold">{t('foreignKeys')}</h3>
             <div className="space-y-1">
               {table.foreignKeys.map((fk) => (
                 <div

@@ -108,6 +108,22 @@ function buildUpsert(
 }
 
 /**
+ * drop whole-line `//` comments from a query document. the query editor's own
+ * starter text for MongoDB opens with one ("// Write a JSON command…"), and
+ * JSON has no comments — so pressing Run on the untouched starter answered
+ * "must be a JSON command document". (the Redis dialect has always skipped its
+ * `#` lines.) only a line that STARTS with `//` goes: JSON strings cannot span
+ * lines, so such a line is never inside one, and a `//` within a value — a URL
+ * — is left alone.
+ */
+export function stripLineComments(statement: string): string {
+  return statement
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('//'))
+    .join('\n');
+}
+
+/**
  * through an SSH tunnel the driver must talk ONLY to the address it was given.
  *
  * left to itself it treats that address as a seed: it asks the server which
@@ -274,7 +290,7 @@ export class MongodbAdapter implements DatabaseAdapter {
   async query(statement: string): Promise<QueryResult> {
     let spec: Record<string, unknown>;
     try {
-      spec = JSON.parse(statement);
+      spec = JSON.parse(stripLineComments(statement));
     } catch {
       throw new BadRequestError(
         'MongoDB query must be a JSON command document, e.g. ' +

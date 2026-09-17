@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import {
   AlertCircle,
   Archive,
@@ -66,6 +67,7 @@ function RelationIcon({ kind }: { kind: RelationKind }) {
 }
 
 export function SchemaTree() {
+  const t = useTranslations('schemaTree');
   const {
     activeConnectionId,
     activeDatabase,
@@ -108,7 +110,7 @@ export function SchemaTree() {
       .map((ns) => ({
         ...ns,
         tables: q
-          ? ns.tables.filter((t) => t.name.toLowerCase().includes(q))
+          ? ns.tables.filter((tbl) => tbl.name.toLowerCase().includes(q))
           : ns.tables,
       }))
       .filter((ns) => ns.tables.length > 0);
@@ -122,10 +124,9 @@ export function SchemaTree() {
 
   async function handleDrop(table: string, tableSchema?: string) {
     const ok = await confirm({
-      title: `Drop “${table}”?`,
-      description:
-        'This permanently deletes the table and all of its data. This cannot be undone.',
-      confirmText: 'Drop table',
+      title: t('dropTableTitle', { name: table }),
+      description: t('dropTableDescription'),
+      confirmText: t('dropTableConfirm'),
       destructive: true,
     });
     if (!ok) return;
@@ -148,9 +149,9 @@ export function SchemaTree() {
         queryKey: ['connections', activeConnectionId, 'browse'],
       });
       await refreshSchema();
-      toast.success(`Dropped ${table}`);
+      toast.success(t('droppedTable', { name: table }));
     } catch (err) {
-      toast.error('Drop failed', {
+      toast.error(t('dropFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -168,9 +169,9 @@ export function SchemaTree() {
         activeDatabase,
       );
       downloadText(res.filename, res.content);
-      toast.success('Backup downloaded', { description: res.filename });
+      toast.success(t('backupDownloaded'), { description: res.filename });
     } catch (err) {
-      toast.error('Backup failed', {
+      toast.error(t('backupFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -179,9 +180,9 @@ export function SchemaTree() {
   async function handleRestoreFile(file: File) {
     const format: BackupFormat = file.name.endsWith('.sql') ? 'sql' : 'json';
     const ok = await confirm({
-      title: 'Restore from file?',
-      description: `“${file.name}” will be written into the current database. Existing rows may be overwritten.`,
-      confirmText: 'Restore',
+      title: t('restoreTitle'),
+      description: t('restoreDescription', { file: file.name }),
+      confirmText: t('restoreConfirm'),
     });
     if (!ok) return;
     try {
@@ -196,10 +197,12 @@ export function SchemaTree() {
         queryKey: ['connections', activeConnectionId, 'browse'],
       });
       toast.success(
-        `Restored ${res.rows} row(s)${res.tables ? ` across ${res.tables} table(s)` : ''}`,
+        res.tables
+          ? t('restoredRowsTables', { rows: res.rows, tables: res.tables })
+          : t('restoredRows', { rows: res.rows }),
       );
     } catch (err) {
-      toast.error('Restore failed', {
+      toast.error(t('restoreFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -207,10 +210,9 @@ export function SchemaTree() {
 
   async function handleDropDatabase(name: string) {
     const ok = await confirm({
-      title: `Drop database “${name}”?`,
-      description:
-        'This permanently deletes the database and all of its data. This cannot be undone.',
-      confirmText: 'Drop database',
+      title: t('dropDatabaseTitle', { name }),
+      description: t('dropDatabaseDescription'),
+      confirmText: t('dropDatabaseConfirm'),
       destructive: true,
     });
     if (!ok) return;
@@ -223,9 +225,9 @@ export function SchemaTree() {
       await qc.invalidateQueries({
         queryKey: ['connections', activeConnectionId, 'schema'],
       });
-      toast.success(`Dropped database ${name}`);
+      toast.success(t('droppedDatabase', { name }));
     } catch (err) {
-      toast.error('Drop failed', {
+      toast.error(t('dropFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -233,9 +235,9 @@ export function SchemaTree() {
 
   async function handleTruncate(table: string, tableSchema?: string) {
     const ok = await confirm({
-      title: `Truncate “${table}”?`,
-      description: 'This deletes all rows in the table. This cannot be undone.',
-      confirmText: 'Truncate',
+      title: t('truncateTitle', { name: table }),
+      description: t('truncateDescription'),
+      confirmText: t('truncateConfirm'),
       destructive: true,
     });
     if (!ok) return;
@@ -249,9 +251,9 @@ export function SchemaTree() {
       await qc.invalidateQueries({
         queryKey: ['connections', activeConnectionId, 'browse'],
       });
-      toast.success(`Truncated ${table}`);
+      toast.success(t('truncated', { name: table }));
     } catch (err) {
-      toast.error('Truncate failed', {
+      toast.error(t('truncateFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -260,7 +262,7 @@ export function SchemaTree() {
   if (!activeConnectionId) {
     return (
       <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-        Select a connection to browse its schema.
+        {t('noConnection')}
       </div>
     );
   }
@@ -275,7 +277,7 @@ export function SchemaTree() {
           >
             <SelectTrigger className="h-8 flex-1 text-xs">
               <Database className="mr-1 h-3.5 w-3.5" />
-              <SelectValue placeholder="Database" />
+              <SelectValue placeholder={t('databasePlaceholder')} />
             </SelectTrigger>
             <SelectContent>
               {databases.map((db) => (
@@ -292,14 +294,14 @@ export function SchemaTree() {
                   variant="outline"
                   size="icon"
                   className="h-8 w-8 shrink-0"
-                  title="Database actions"
+                  title={t('databaseActions')}
                 >
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setCreateDbOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" /> New database…
+                  <Plus className="mr-2 h-4 w-4" /> {t('newDatabase')}
                 </DropdownMenuItem>
                 {(activeDatabase ?? schema?.database) && (
                   <>
@@ -312,8 +314,10 @@ export function SchemaTree() {
                         )
                       }
                     >
-                      <Trash2 className="mr-2 h-4 w-4" /> Drop “
-                      {activeDatabase ?? schema?.database}”…
+                      <Trash2 className="mr-2 h-4 w-4" />{' '}
+                      {t('dropDatabaseItem', {
+                        name: (activeDatabase ?? schema?.database) as string,
+                      })}
                     </DropdownMenuItem>
                   </>
                 )}
@@ -329,7 +333,7 @@ export function SchemaTree() {
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter tables…"
+            placeholder={t('filterPlaceholder')}
             className="h-8 pl-7 text-xs"
           />
         </div>
@@ -338,7 +342,7 @@ export function SchemaTree() {
             variant="outline"
             size="icon"
             className="h-8 w-8 shrink-0"
-            title="New table"
+            title={t('newTable')}
             onClick={() => setCreateTableOpen(true)}
           >
             <Plus className="h-4 w-4" />
@@ -351,7 +355,7 @@ export function SchemaTree() {
                 variant="outline"
                 size="icon"
                 className="h-8 w-8 shrink-0"
-                title="Backup / restore"
+                title={t('backupRestore')}
               >
                 <DatabaseBackup className="h-4 w-4" />
               </Button>
@@ -360,13 +364,13 @@ export function SchemaTree() {
               {backupFormats.map((fmt) => (
                 <DropdownMenuItem key={fmt} onClick={() => handleBackup(fmt)}>
                   <Download className="mr-2 h-4 w-4" />
-                  Download backup ({fmt.toUpperCase()})
+                  {t('downloadBackup', { format: fmt.toUpperCase() })}
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => fileRef.current?.click()}>
                 <Upload className="mr-2 h-4 w-4" />
-                Restore from file…
+                {t('restoreFromFile')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -388,7 +392,7 @@ export function SchemaTree() {
       <ScrollArea className="min-h-0 flex-1 px-2">
         {isLoading && (
           <div className="flex items-center gap-2 px-2 py-4 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading schema…
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('loadingSchema')}
           </div>
         )}
         {error && (
@@ -445,7 +449,7 @@ export function SchemaTree() {
                               ? 'text-primary-foreground/80'
                               : 'text-muted-foreground hover:text-foreground',
                           )}
-                          aria-label="Table actions"
+                          aria-label={t('tableActions')}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <MoreHorizontal className="h-3.5 w-3.5" />
@@ -466,7 +470,7 @@ export function SchemaTree() {
                             }
                           >
                             <SquareTerminal className="mr-2 h-4 w-4" />
-                            Open SELECT
+                            {t('openSelect')}
                           </DropdownMenuItem>
                         )}
                         {activeConnectionId && (
@@ -483,7 +487,7 @@ export function SchemaTree() {
                             }
                           >
                             <Webhook className="mr-2 h-4 w-4" />
-                            Create bridge
+                            {t('createBridge')}
                           </DropdownMenuItem>
                         )}
                         {backupFormats.length > 0 && (
@@ -491,7 +495,7 @@ export function SchemaTree() {
                             onClick={() => handleBackup('json', table)}
                           >
                             <Archive className="mr-2 h-4 w-4" />
-                            Backup table
+                            {t('backupTable')}
                           </DropdownMenuItem>
                         )}
                         {canDdl && (
@@ -502,7 +506,7 @@ export function SchemaTree() {
                               }
                             >
                               <Eraser className="mr-2 h-4 w-4" />
-                              Truncate…
+                              {t('truncateItem')}
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
@@ -512,7 +516,7 @@ export function SchemaTree() {
                               }
                             >
                               <Trash2 className="mr-2 h-4 w-4" />
-                              Drop…
+                              {t('dropItem')}
                             </DropdownMenuItem>
                           </>
                         )}
@@ -538,7 +542,7 @@ export function SchemaTree() {
 
         {!isLoading && !error && namespaces.length === 0 && (
           <div className="px-2 py-4 text-xs text-muted-foreground">
-            {filter ? 'No matching tables.' : 'No tables yet.'}
+            {filter ? t('noMatchingTables') : t('noTables')}
           </div>
         )}
       </ScrollArea>

@@ -205,6 +205,18 @@ can no longer lose a row to a failed delivery.
   chosen database now goes into the string. (The PostgreSQL change stream
   already did this, without encoding the name; it shares the helper now, and
   honours a TLS setting chosen beside a connection string, which it ignored.)
+- **Half the interface ignored the language setting.** The data sources surface
+  (schema tree, data grid, row editor, query editor, structure view, create
+  table / database), the job view, the whole delivery timeline, the Settings
+  dialog and the confirmation dialog were hard-coded English — about 300 strings
+  — so in Italian or Chinese the app switched language mid-screen. All of it is
+  translated now, with counts as proper plurals ("1 row" / "2 rows") instead of
+  "row(s)". A test holds the three locales to the same keys and placeholders and
+  checks that every key the code asks for exists: a missing one is not a build
+  error in next-intl, it is a raw `bridges.runJob` on somebody's screen.
+- The query editor's own starter text for MongoDB could not be run: it opens
+  with a `//` comment and the query was handed to `JSON.parse` as it was.
+  Whole-line comments are skipped, as the Redis dialect always did with `#`.
 - **Most of the Settings dialog did nothing.** The default poll interval, rows
   per poll and CDC operations, the query row cap and job concurrency were
   stored, shown and reported by the API, and read by nothing — the docs carried
