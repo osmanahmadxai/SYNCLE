@@ -48,6 +48,7 @@ import {
   type VerifyStartDTO,
 } from '@syncle/core';
 import type { BridgeVerification as VerificationRow } from '@prisma/client';
+import { lookupValues } from './lookup-values';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
@@ -98,6 +99,8 @@ interface TargetRun {
   /** destination keys with no source row at first sight */
   extraSuspects: Map<string, { key: unknown[] }>;
 }
+
+export { lookupValues };
 
 @Injectable()
 export class BridgeVerifyService implements OnApplicationBootstrap {
@@ -981,30 +984,6 @@ export function isMarked(value: unknown): boolean {
     value === '0' ||
     value === ''
   );
-}
-
-/**
- * values for an `IN`, each once. a document store matches by TYPE as well as by
- * value, and a key that went through a SQL destination comes back as text: the
- * number it may have been is asked for beside it
- */
-export function lookupValues(
-  values: unknown[],
-  engine?: DatabaseEngine,
-): unknown[] {
-  const out = new Map<string, unknown>();
-  for (const value of values) {
-    out.set(`${typeof value}:${String(value)}`, value);
-    if (
-      engine === 'mongodb' &&
-      typeof value === 'string' &&
-      /^-?\d{1,15}$/.test(value) &&
-      String(Number(value)) === value
-    ) {
-      out.set(`number:${value}`, Number(value));
-    }
-  }
-  return [...out.values()];
 }
 
 /** a value as it can be kept in a report and shown on a page: short, and plain JSON */

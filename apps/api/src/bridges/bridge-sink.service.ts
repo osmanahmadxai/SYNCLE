@@ -10,8 +10,10 @@
  */
 import { Injectable } from '@nestjs/common';
 import {
+  originsOf,
   renderBatch,
   renderRow,
+  withOrigins,
   type CdcOperation,
 } from '@syncle/core';
 import { DeliveryService } from './delivery.service';
@@ -79,7 +81,9 @@ export class BridgeSinkService {
       // of it. under `continue` the usual bisection then sets that row aside
       return { outcome: failedBeforeSending(shaped.errors, ctx.op), warnings: shaped.warnings };
     }
-    rows = shaped.rows;
+    // where a row has been (loop prevention) is carried beside its columns, and
+    // a reshaped row is a new object: carried over
+    rows = shaped.rows === rows ? rows : shaped.rows.map((row, i) => withOrigins(row, originsOf(rows[i] ?? {})));
 
     if (dest.kind === 'database') {
       const outcome = await this.databaseSink.deliver(

@@ -22,7 +22,7 @@
  */
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
-import type { CdcOperation } from '@syncle/core';
+import { originsOf, withOrigins, type CdcOperation } from '@syncle/core';
 import { redisConnectionOptions } from '../../common/runtime-config';
 import { decodeRows, encodeRows } from '../row-codec';
 
@@ -52,7 +52,15 @@ export interface SpoolEntry {
  * blob and a bridge behaved differently than the same bridge with it OFF.
  */
 export function encodeEntry(entry: SpoolEntry): string {
-  return JSON.stringify({ op: entry.op, cursor: entry.cursor, r: encodeRows([entry.row]) });
+  // where the row has been (loop prevention) hangs on the row under a symbol,
+  // which no codec writes: it is put beside the row, and hung back on it below
+  const origins = originsOf(entry.row);
+  return JSON.stringify({
+    op: entry.op,
+    cursor: entry.cursor,
+    r: encodeRows([entry.row]),
+    ...(origins.length > 0 ? { o: origins } : {}),
+  });
 }
 
 /** inverse of {@link encodeEntry}; also reads entries spooled before the codec */
@@ -61,12 +69,13 @@ export function decodeEntry(text: string): SpoolEntry {
     op: SpoolOp;
     cursor: string;
     r?: string;
+    o?: string[];
     row?: Record<string, unknown>;
   };
   if (typeof raw.r === 'string') {
     const [row] = decodeRows(raw.r);
     if (!row) throw new Error('spool entry holds no row');
-    return { op: raw.op, cursor: raw.cursor, row };
+    return { op: raw.op, cursor: raw.cursor, row: withOrigins(row, Array.isArray(raw.o) ? raw.o : []) };
   }
   if (raw.row && typeof raw.row === 'object') {
     return { op: raw.op, cursor: raw.cursor, row: raw.row };

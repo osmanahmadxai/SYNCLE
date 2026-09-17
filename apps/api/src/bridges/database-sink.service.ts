@@ -47,6 +47,7 @@ import {
 } from '@syncle/core';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { ConnectionStoreService } from '../connections/connection-store.service';
+import { EchoGuardService, type WriteMode } from './echo-guard.service';
 import type { DeliveryOutcome } from './bridges.types';
 import type { ResolvedBridge } from './bridges.types';
 
@@ -70,6 +71,7 @@ export class DatabaseSinkService {
   constructor(
     private readonly pool: AdapterPoolService,
     private readonly connections: ConnectionStoreService,
+    private readonly echo: EchoGuardService,
   ) {}
 
   /** drop cached schema/existence state for a bridge (on edit/delete) */
@@ -136,19 +138,37 @@ export class DatabaseSinkService {
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
         if (op === 'truncate') {
-          summaries.push(`${label}: ${await this.truncate(target)}`);
+          // (said first, like a write: see EchoGuardService)
+          const said = await this.echo.announceTruncate(bridge, target, rows[0]);
+          try {
+            summaries.push(`${label}: ${await this.truncate(target)}`);
+          } catch (err) {
+            await this.echo.retract(said);
+            throw err;
+          }
           succeeded.push(key);
           continue;
         }
         const convert = await this.converterFor(bridge, target);
-        const affected = await this.writeRows(
-          target,
-          convert ? rows.map(convert) : rows,
-          op,
-        );
+        const mapped = mapForTarget(target, convert ? rows.map(convert) : rows, op);
+        // a table another live bridge reads: what is about to be written there
+        // is said first, so that bridge knows this instance's writes when they
+        // come back to it (see EchoGuardService). anywhere else this does nothing
+        const heard = await this.echo.announce(bridge, target, announced(target, mapped, op), rows, writeModeOf(target, op));
+        const writing = heard.unchanged.size > 0 ? mapped.filter((_, i) => !heard.unchanged.has(i)) : mapped;
+        let affected = 0;
+        try {
+          if (writing.length > 0) affected = await this.writeRows(target, writing, op);
+        } catch (err) {
+          await this.echo.retract(heard.receipt);
+          throw err;
+        }
+        // nothing changed, so nothing will come back
+        if (affected === 0) await this.echo.retract(heard.receipt);
         succeeded.push(key);
         const did = op !== 'delete' ? 'wrote' : target.onDelete === 'soft' ? 'marked as deleted' : 'deleted';
-        summaries.push(`${label}: ${did} ${affected}`);
+        const same = heard.unchanged.size > 0 ? ` (${heard.unchanged.size} already up to date, not written)` : '';
+        summaries.push(`${label}: ${did} ${affected}${same}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         firstError ??= `${label}: ${message}`;
@@ -193,10 +213,10 @@ export class DatabaseSinkService {
     });
   }
 
-  /** write every row to one target, returning the affected-row count */
+  /** write every row (already mapped to the target's columns) to one target, returning the affected-row count */
   private async writeRows(
     target: DatabaseTarget,
-    rows: Row[],
+    mapped: Row[],
     op: CdcOperation | undefined,
   ): Promise<number> {
     let affected = 0;
@@ -212,13 +232,6 @@ export class DatabaseSinkService {
         // round trips differs.
         const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
         const writeBatch = async (): Promise<void> => {
-          const mapped = rows.map((row) => {
-            const out = mapRow(row, target.mapping);
-            // a row that is written exists at the source: whatever a delete
-            // marked it with before is taken off by the write that brings it back
-            if (soft && op !== 'delete') out[soft.column] = soft.value === 'boolean' ? false : null;
-            return out;
-          });
           const isUpsert = op !== 'delete' && target.writeMode !== 'insert';
           if (isUpsert && target.keyColumns.length === 0) {
             throw new Error(
@@ -735,6 +748,38 @@ export class DatabaseSinkService {
 }
 
 /* ----- helpers ----- */
+
+/** the rows as one target takes them: its column names, and its soft-delete mark taken off */
+function mapForTarget(target: DatabaseTarget, rows: Row[], op: CdcOperation | undefined): Row[] {
+  const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+  return rows.map((row) => {
+    const out = mapRow(row, target.mapping);
+    // a row that is written exists at the source: whatever a delete
+    // marked it with before is taken off by the write that brings it back
+    if (soft && op !== 'delete') out[soft.column] = soft.value === 'boolean' ? false : null;
+    return out;
+  });
+}
+
+function writeModeOf(target: DatabaseTarget, op: CdcOperation | undefined): WriteMode {
+  if (op === 'delete') return target.onDelete === 'soft' ? 'soft-delete' : 'delete';
+  return target.writeMode === 'insert' ? 'insert' : 'upsert';
+}
+
+/**
+ * what a write will look like in the target table's own change log. a delete
+ * goes by its key and nothing else; a soft delete is an UPDATE of the row that
+ * sets the mark (a timestamp mark is "now", which cannot be known beforehand, so
+ * only a boolean mark is part of what is compared)
+ */
+function announced(target: DatabaseTarget, mapped: Row[], op: CdcOperation | undefined): Row[] {
+  if (op !== 'delete') return mapped;
+  const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+  return mapped.map((row) => ({
+    ...pick(row, target.keyColumns),
+    ...(soft?.value === 'boolean' ? { [soft.column]: true } : {}),
+  }));
+}
 
 /**
  * the capped payload shown in the monitor for a set of rows: mapped to the

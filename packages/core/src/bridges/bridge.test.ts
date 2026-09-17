@@ -4,7 +4,10 @@ import {
   destinationLabel,
   destinationNodeKeys,
   mapRow,
+  ORIGINS,
+  originsOf,
   UNCHANGED,
+  withOrigins,
 } from './bridge';
 import type { BridgeDestination } from './bridge-config';
 
@@ -119,5 +122,42 @@ describe('destination display helpers', () => {
       idempotency: false,
     };
     expect(destinationLabel(http)).toBe('POST api.example.com');
+  });
+});
+
+describe('where a row has been (loop prevention)', () => {
+  const row = { id: 1, name: 'Ada' };
+
+  it('rides beside the columns: nothing that writes, prints or maps the row sees it', () => {
+    const marked = withOrigins(row, ['table-a']);
+    expect(originsOf(marked)).toEqual(['table-a']);
+    expect(Object.entries(marked)).toEqual(Object.entries(row)); // same columns, same values
+    expect(Object.keys(marked)).toEqual(['id', 'name']);
+    // a copy of the row keeps it: `{ ...row, $op }` on the way to a sink is still that row
+    expect(originsOf({ ...marked, extra: true })).toEqual(['table-a']);
+    expect(JSON.stringify(marked)).toBe('{"id":1,"name":"Ada"}');
+    // a mapped row is a NEW row, built column by column: whoever maps carries it over
+    expect(originsOf(mapRow(marked, []))).toEqual([]);
+    expect(mapRow(marked, [])).toEqual(row);
+  });
+
+  it('leaves the row it was given alone', () => {
+    const marked = withOrigins(row, ['table-a']);
+    expect(marked).not.toBe(row);
+    expect(originsOf(row)).toEqual([]);
+    const origins = ['table-a'];
+    const kept = withOrigins(row, origins);
+    origins.push('table-b');
+    expect(originsOf(kept)).toEqual(['table-a']);
+  });
+
+  it('a row that has been nowhere is just the row', () => {
+    expect(withOrigins(row, [])).toBe(row);
+    expect(originsOf({})).toEqual([]);
+    expect(originsOf({ [ORIGINS]: 'not a list' } as never)).toEqual([]);
+  });
+
+  it('is one shared symbol, so it survives crossing package copies', () => {
+    expect(ORIGINS).toBe(Symbol.for('syncle.origins'));
   });
 });

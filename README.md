@@ -50,7 +50,9 @@ A **bridge** reads rows from a source database and writes each one to its
 
 - **another database** — the headline feature. Sync Postgres → MongoDB,
   MySQL → SQLite, MongoDB → Redis… mix engines freely. One bridge can fan out to
-  **several databases at once**, and bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C).
+  **several databases at once**, bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C),
+  and two bridges can feed each other (DB&nbsp;A ⇄ DB&nbsp;B): Syncle knows its
+  own writes when they come back, so a change crosses once instead of for ever.
 - **an HTTP endpoint** — POST/PUT/PATCH each row to a URL with a payload you
   design, for the times you're feeding a service instead of a database.
 
@@ -467,6 +469,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
 | `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
 | `SYNCLE_SHARED_SLOT_JOIN_WAIT_MS` | api | Joining a shared PostgreSQL replication slot: how long to wait for transactions that were open when the table was published (default `60000`) |
+| `SYNCLE_ECHO_TTL_SECONDS` | api | Loop prevention (A → B plus B → A): how long a write to a table another bridge reads is remembered, so it is known when it comes back (default `300`; `0` = off) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |

@@ -33,6 +33,7 @@ import {
   NotFoundError,
   columnsRead,
   UNCHANGED,
+  withOrigins,
 } from '@syncle/core';
 import { randomUUID } from 'node:crypto';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
@@ -59,6 +60,7 @@ import { rowMatchesFilters } from './cdc/filter-match';
 import { AlertsService } from '../alerts/alerts.service';
 import { SnapshotCdcProvider } from './cdc/snapshot-provider';
 import { TableReaderService } from './table-reader.service';
+import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService, tracksSchema } from './schema-drift.service';
 import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
 
@@ -263,6 +265,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly reader: TableReaderService,
     private readonly alerts: AlertsService,
     private readonly drift: SchemaDriftService,
+    private readonly echo: EchoGuardService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     // every engine's provider is handed out inside the wrapper that can copy a
@@ -846,6 +849,8 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       route,
     };
     this.streams.set(bridgeId, stream);
+    // a table that is read from now on: what is written to it is remembered from now on
+    this.echo.forget();
     // the SSH connection can drop on its own (a bastion restart, an idle
     // timeout). the provider would then retry a local port nobody listens on,
     // for ever: the stream has to be given a new tunnel
@@ -1179,7 +1184,15 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (op === 'truncate') {
       await this.flush(bridgeId, stream);
       if (this.streams.get(bridgeId) !== stream || stream.halted) return;
-      stream.buffer.push({ change, row: {}, keySig: null });
+      // emptied by another bridge of this instance, mirroring a truncate: not
+      // sent round again (two tables would empty each other for ever)
+      const emptied = await this.echo.recogniseTruncate(bridge);
+      if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+      if (emptied.echo && (await this.echo.route(bridge, emptied)) === 'drop') {
+        this.notePosition(bridgeId, stream, change.cursor);
+        return;
+      }
+      stream.buffer.push({ change, row: withOrigins({}, emptied.origins), keySig: null });
       stream.tailCursor = change.cursor;
       stream.bufferOp = op;
       await this.flush(bridgeId, stream);
@@ -1230,6 +1243,20 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       // would already sit beyond it and those rows would never be read again
       this.notePosition(bridgeId, stream, change.cursor);
       return;
+    }
+
+    // this instance's own write coming back (another bridge writes the table
+    // this one reads): kept from going round again, or — in a chain — sent on
+    // with where it has been. a table nobody writes costs nothing here
+    const verdict = await this.echo.recognise(bridge, { op, row: change.row }, stream.primaryKey);
+    if (verdict.echo) {
+      if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+      if ((await this.echo.route(bridge, verdict)) === 'drop') {
+        // passed like a filtered row: only once everything before it has landed
+        this.notePosition(bridgeId, stream, change.cursor);
+        return;
+      }
+      change = { ...change, row: withOrigins(change.row, verdict.origins) };
     }
 
     const keySig = this.keySignature(stream, change.row);

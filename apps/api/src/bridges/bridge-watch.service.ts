@@ -22,6 +22,7 @@ import {
   rowKey,
   watchQuery,
   watchStrategySchema,
+  withOrigins,
   type BridgeJob,
   type WatchCursor,
   type WatchStrategyConfig,
@@ -31,6 +32,7 @@ import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { DeadLetterService } from './dead-letter.service';
+import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService } from './schema-drift.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
@@ -75,6 +77,7 @@ export class BridgeWatchService implements OnModuleInit {
     private readonly deadLetters: DeadLetterService,
     @InjectQueue(BRIDGE_WATCH_QUEUE) private readonly queue: Queue<BridgeWatchPayload>,
     private readonly drift: SchemaDriftService,
+    private readonly echo: EchoGuardService,
   ) {}
 
   /** the column names of the last row each bridge delivered: when they change, the table has */
@@ -141,6 +144,8 @@ export class BridgeWatchService implements OnModuleInit {
     this.emptyStreak.set(bridgeId, 0);
     this.scheduledEvery.set(bridgeId, fast);
     await this.schedule(bridgeId, fast);
+    // a table that is read from now on: what is written to it is remembered from now on
+    this.echo.forget();
     this.logger.log(`Listening on bridge ${bridgeId} (job ${job.id})`);
     return this.jobs.getJob(bridgeId, job.id);
   }
@@ -282,8 +287,17 @@ export class BridgeWatchService implements OnModuleInit {
         const effPk = pk.length ? pk : page.primaryKey;
         const { newRows, cursor: next } = advanceCursor(strategy, cursor, page.rows, effPk);
 
-        for (const row of newRows) {
+        for (const found of newRows) {
           if (signal.aborted) return;
+          // this instance's own write, seen by the poll (another bridge writes
+          // the table this one watches): not sent round again, or — in a chain
+          // — sent on with where it has been (see EchoGuardService)
+          let row = found;
+          const verdict = await this.echo.recognise(bridge, { op: undefined, row }, effPk);
+          if (verdict.echo) {
+            if ((await this.echo.route(bridge, verdict)) === 'drop') continue;
+            row = withOrigins(row, verdict.origins);
+          }
           // the table has changed under the bridge (see SchemaDriftService):
           // looked into BEFORE this row is written
           const signature = Object.keys(row).sort().join('\u0000');

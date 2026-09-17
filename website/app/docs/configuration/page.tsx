@@ -457,6 +457,22 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_ECHO_TTL_SECONDS</code>
+              </td>
+              <td>
+                <code>300</code>
+              </td>
+              <td>
+                <a href="/docs/bridges#two-way">Loop prevention</a>: how long
+                a write to a table that another bridge reads is remembered, so
+                that bridge knows it when it comes back. It has to outlast how
+                far behind that bridge can fall; a change that comes back later
+                than this is sent on once more and dies out there.{' '}
+                <code>0</code> switches loop prevention off.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
               </td>
               <td>

@@ -49,6 +49,7 @@ export const queryKeys = {
   sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
   schemaDrift: (id: string) => ['bridges', id, 'schemaDrift'] as const,
   bridgeSchedule: (id: string) => ['bridges', id, 'schedule'] as const,
+  bridgeLoops: (id: string) => ['bridges', id, 'loops'] as const,
   verifications: (id: string) => ['bridges', id, 'verifications'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
@@ -583,6 +584,20 @@ export function useBridgeSchedule(bridgeId: string | null, enabled: boolean) {
     queryFn: () => api.bridgeSchedule(bridgeId as string),
     enabled: !!bridgeId && enabled,
     refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * the bridges this one is tied to in a ring, and what was kept from going round
+ * again. (under `bridges`: saving ANY bridge can tie or untie this one)
+ */
+export function useBridgeLoops(bridgeId: string | null) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.bridgeLoops(bridgeId) : ['bridgeLoops', 'none'],
+    queryFn: () => api.bridgeLoops(bridgeId as string),
+    enabled: !!bridgeId,
+    refetchInterval: 30_000,
     retry: false,
   });
 }

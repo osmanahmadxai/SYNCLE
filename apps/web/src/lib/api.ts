@@ -46,6 +46,7 @@ import type {
   WorkspaceInputDTO,
   BridgeSourceHold,
   BridgeSchemaDrift,
+  BridgeLoopStatus,
   BridgeScheduleStatus,
   BridgeVerification,
   BridgeBulkInput,
@@ -420,6 +421,8 @@ export const api = {
     }),
   /** a bridge's schedule: is it firing, when next, what became of the last tick */
   bridgeSchedule: (id: string) => request<BridgeScheduleStatus>(`/bridges/${id}/schedule`),
+  /** is this bridge tied to others that feed it what it feeds them, and how much was held back */
+  bridgeLoops: (id: string) => request<BridgeLoopStatus>(`/bridges/${id}/loops`),
   /** has the source table changed since the bridge was set up? reads, changes nothing */
   schemaDrift: (id: string) => request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift`),
   /** refused (400, reason `schema-drift`) while the bridge still uses a column that is gone */

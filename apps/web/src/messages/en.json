@@ -527,6 +527,11 @@
     "skipped": "The run due {when} was skipped: the one before it was still going.",
     "failed": "The run due {when} could not be started: {error}"
   },
+  "loopNotice": {
+    "tied": "{count, plural, one {Feeds and is fed by {names}.} other {In a ring with {names}.}} What Syncle itself wrote is recognised when it comes back, and not sent round again.",
+    "unguarded": "{count, plural, one {Feeds and is fed by {names}} other {In a ring with {names}}} — and loop prevention is switched off (SYNCLE_ECHO_TTL_SECONDS=0): every change will go round for ever. Switch it back on, or stop one of the bridges.",
+    "heldBack": "{count, plural, one {# change} other {# changes}} held back since the API started."
+  },
   "verify": {
     "title": "Verify",
     "description": "Is the destination the copy of the source this bridge says it is? Every row is read from both ends and compared by what kind of value each column holds. Deliveries that were all green do not answer this: a row edited by hand at the destination, or deleted while the bridge was stopped, is not a failed delivery.",

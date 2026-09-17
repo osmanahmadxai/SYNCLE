@@ -222,6 +222,14 @@ export const runtimeConfig = {
    */
   verifyRecheckMs: nonNegativeInt(env('SYNCLE_VERIFY_RECHECK_MS'), 1500),
   /**
+   * Loop prevention. When a bridge writes to a table that another live bridge
+   * READS, what it wrote is remembered for this long, so that the reading bridge
+   * can tell its own instance's writes coming back from changes somebody made
+   * (A -> B plus B -> A would otherwise send one row back and forth for ever).
+   * It has to outlast the reading bridge's lag. 0 switches the guard off.
+   */
+  echoTtlSeconds: nonNegativeInt(env('SYNCLE_ECHO_TTL_SECONDS'), 300),
+  /**
    * Alerts are throttled per channel, kind of event and bridge: a bridge that
    * fails every thirty seconds sends ONE alert per this many seconds, and the
    * next says how many were held back. 0 sends every one.

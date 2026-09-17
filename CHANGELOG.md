@@ -442,6 +442,42 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Two bridges can feed each other (A → B plus B → A) without sending a row
+  back and forth for ever.** They could be set up, and then never rested: A's
+  change is written to B, B's change log reports it, the other bridge writes it
+  to A, A's log reports it… measured on two PostgreSQL tables, one `INSERT` by
+  a person was delivered about nine times a second in each direction for as long
+  as both bridges ran (an upsert of identical values is still a logged change).
+  - When a bridge writes to a table that another listening bridge reads, what
+    it is about to write is remembered in Syncle's own Redis — per table, per
+    row, in order, said *before* the write so that the change cannot come back
+    first. The bridge that reads that table looks each change up; a match is
+    this instance's own write. Values are compared as what they are, the way
+    Verify compares them, so it works across engines; polling (watch) bridges
+    and mirrored `TRUNCATE`s are covered as well as CDC.
+  - A recognised change carries the tables it has been through, and is only
+    kept from going *back* to one: **A ⇄ B** crosses once, a **chain**
+    A → B → C still carries every row to the end, a **ring** A → B → C → A
+    stops where it began. Through the CDC spool too.
+  - Before writing to such a table the bridge looks at what is there: **a row
+    that is already exactly what it would be set to is not written** (`wrote 0
+    (3 already up to date, not written)`). This is also the safety net — a
+    change whose memory expired (`SYNCLE_ECHO_TTL_SECONDS`, default 300) is
+    sent on once, finds nothing to change, and the loop dies by itself.
+  - Nothing is asked of the source (no replication origins, marker columns or
+    triggers), and a bridge whose destination nobody reads pays nothing: no
+    look before the write, nothing in Redis. What is remembered is encrypted
+    under the master key, used up when the change comes back, and large values
+    are remembered by their SHA-256 only. The look before the write does not
+    go through Redis, so the safety net holds while Redis is away.
+  - A bridge that is tied to another says so on its page, names it, and counts
+    what it held back; `GET /api/bridges/:id/loops` says the same. With the
+    guard switched off (`SYNCLE_ECHO_TTL_SECONDS=0`) the page warns instead.
+  - What it is not: conflict resolution. The same row edited on both sides at
+    the same moment can leave the two sides holding each other's value —
+    nothing loops, and Verify shows it. Columns the database itself changes on
+    every write (a trigger stamping `updated_at`) have to stay out of the
+    mapping. See *Two-way sync, and rings* in the bridges documentation.
 - **The master key can be changed.** It could not: every stored secret is
   under it, and the documentation said never to touch it. Now: put the new key
   in `SYNCLE_MASTER_KEY` and the old one in `SYNCLE_MASTER_KEY_PREVIOUS`, and

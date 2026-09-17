@@ -32,6 +32,7 @@ import {
   type ResolvedBridge,
 } from '../../bridges.types';
 import { SPOOL_KEY_PREFIX } from '../cdc-spool.service';
+import { ECHO_KEY_PREFIX } from '../../echo-keys';
 import type {
   CdcProvider,
   CdcStreamContext,
@@ -106,6 +107,8 @@ export function redisDatabaseId(conn: ConnectionConfig): string {
 
 const OWN_KEY_PREFIXES = [
   SPOOL_KEY_PREFIX,
+  // what the echo guard remembers of writes (loop prevention)
+  ECHO_KEY_PREFIX,
   // BullMQ's default prefix; Syncle sets none of its own
   `bull:${BRIDGE_JOBS_QUEUE}:`,
   `bull:${BRIDGE_WATCH_QUEUE}:`,

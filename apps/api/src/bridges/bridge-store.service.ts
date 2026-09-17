@@ -18,6 +18,7 @@ import {
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
 import type { ResolvedBridge } from './bridges.types';
+import { EchoGuardService } from './echo-guard.service';
 
 const REDACTED = '********';
 
@@ -36,6 +37,7 @@ export class BridgeStoreService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
+    private readonly echo: EchoGuardService,
   ) {}
 
   /* ----- secret split / merge ----- */
@@ -177,6 +179,7 @@ export class BridgeStoreService {
         enabled: input.enabled,
       },
     });
+    this.echo.forget(); // which tables are read and written may have changed
     return this.toBridge(row, false);
   }
 
@@ -207,12 +210,14 @@ export class BridgeStoreService {
         enabled: input.enabled,
       },
     });
+    this.echo.forget(); // which tables are read and written may have changed
     return this.toBridge(row, false);
   }
 
   async remove(id: string): Promise<void> {
     await this.getRow(id);
     await this.prisma.bridge.delete({ where: { id } });
+    this.echo.forget();
   }
 
   /* ----- job snapshot (auth kept encrypted) ----- */

@@ -7,6 +7,7 @@ import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobProcessor } from './bridge-job.processor';
 import { TableReaderService } from './table-reader.service';
 import { BridgeTransferService } from './bridge-transfer.service';
+import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService } from './schema-drift.service';
 import { BridgeScheduleService } from './bridge-schedule.service';
 import { BridgeScheduleProcessor } from './bridge-schedule.processor';
@@ -58,6 +59,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     TableReaderService,
     BridgeTransferService,
     SchemaDriftService,
+    EchoGuardService,
     BridgeScheduleService,
     BridgeScheduleProcessor,
     BridgeVerifyService,

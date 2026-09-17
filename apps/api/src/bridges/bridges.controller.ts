@@ -29,6 +29,7 @@ import {
   type SkipDTO,
   type BridgeBulkDTO,
   type BridgeBulkResult,
+  type BridgeLoopStatus,
   type BridgeScheduleStatus,
   type BridgeSourceHold,
   type BridgeVerification,
@@ -71,6 +72,7 @@ import { BridgeWatchService } from './bridge-watch.service';
 import type { ResolvedBridge } from './bridges.types';
 import { shapeRows } from './row-shaping';
 import { BridgeTransferService } from './bridge-transfer.service';
+import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService } from './schema-drift.service';
 import { BridgeScheduleService, nextRuns } from './bridge-schedule.service';
 import { BridgeVerifyService } from './bridge-verify.service';
@@ -94,6 +96,7 @@ export class BridgesController {
     private readonly retention: RetentionService,
     private readonly transfer: BridgeTransferService,
     private readonly drift: SchemaDriftService,
+    private readonly echo: EchoGuardService,
     private readonly schedule: BridgeScheduleService,
     private readonly verify: BridgeVerifyService,
   ) {}
@@ -287,6 +290,13 @@ export class BridgesController {
   @Get(':id/schedule')
   scheduleStatus(@Param('id') id: string): Promise<BridgeScheduleStatus> {
     return this.schedule.status(id);
+  }
+
+  /* ----- loops: is this bridge tied to others that feed it what it feeds them? ----- */
+
+  @Get(':id/loops')
+  async loops(@Param('id') id: string): Promise<BridgeLoopStatus> {
+    return this.echo.status(await this.store.resolve(id));
   }
 
   /* ----- schema drift: has the source table changed since the bridge was set up? ----- */

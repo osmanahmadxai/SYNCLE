@@ -527,6 +527,11 @@
     "skipped": "L’esecuzione prevista per {when} è stata saltata: quella precedente era ancora in corso.",
     "failed": "Non è stato possibile avviare l’esecuzione prevista per {when}: {error}"
   },
+  "loopNotice": {
+    "tied": "{count, plural, one {Alimenta {names} e ne è alimentato.} other {In un anello con {names}.}} Ciò che Syncle stesso ha scritto viene riconosciuto quando ritorna, e non viene rimandato in giro.",
+    "unguarded": "{count, plural, one {Alimenta {names} e ne è alimentato} other {In un anello con {names}}} — e la prevenzione dei cicli è disattivata (SYNCLE_ECHO_TTL_SECONDS=0): ogni modifica girerà all'infinito. Riattivala, oppure ferma uno dei bridge.",
+    "heldBack": "{count, plural, one {# modifica trattenuta} other {# modifiche trattenute}} dall'avvio dell'API."
+  },
   "verify": {
     "title": "Verifica",
     "description": "La destinazione è davvero la copia dell’origine che questo bridge dichiara? Ogni riga viene letta da entrambi i lati e confrontata in base al tipo di valore di ciascuna colonna. Consegne tutte verdi non rispondono a questa domanda: una riga modificata a mano nella destinazione, o eliminata mentre il bridge era fermo, non è una consegna fallita.",

@@ -1488,6 +1488,104 @@ export default function Page() {
         second bridge watches B and feeds C.
       </p>
 
+      <h3 id="two-way">Two-way sync, and rings</h3>
+      <p>
+        Two live bridges can feed each other — A → B plus B → A — and keep
+        two tables in step in both directions. Left to itself that arrangement
+        never rests: A&apos;s change is written to B, which B&apos;s change
+        log reports, which the other bridge writes to A, which A&apos;s log
+        reports… On PostgreSQL an upsert of identical values is still a logged
+        change, so one <code>INSERT</code> by a person went back and forth
+        about nine times a second for as long as both bridges ran.
+      </p>
+      <p>
+        Syncle stops it by knowing its own writes. When a bridge writes to a
+        table that another <em>listening</em> bridge reads, what it is about
+        to write is remembered — per table, per row, in order — in
+        Syncle&apos;s own Redis. The bridge that reads that table looks every
+        change up there; one that matches is this instance&apos;s own write
+        coming back, and:
+      </p>
+      <ul>
+        <li>
+          <strong>A pair</strong> (A ⇄ B): the change crosses once and is not
+          sent back. Inserts, updates, deletes and mirrored{' '}
+          <code>TRUNCATE</code>s alike.
+        </li>
+        <li>
+          <strong>A chain</strong> (A → B → C) keeps working: a recognised
+          change remembers which tables it has been through, and is only kept
+          from going <em>back</em> to one of them. B&apos;s bridge to C passes
+          on exactly the rows A&apos;s bridge wrote.
+        </li>
+        <li>
+          <strong>A ring</strong> (A → B → C → A) stops where it began,
+          whichever table the change was made in.
+        </li>
+      </ul>
+      <p>
+        It needs nothing from the source — no replication origins, no marker
+        columns, no triggers — and works across engines and for polling
+        (watch) bridges as well as CDC. Values are compared as what they{' '}
+        <em>are</em> (<code>12.50</code>, <code>&apos;12.5&apos;</code> and{' '}
+        <code>12.5</code> are one number), the same way{' '}
+        <a href="#verify">Verify</a> compares them. A bridge that is tied to
+        another says so on its page, names it, and counts the changes it held
+        back.
+      </p>
+      <p>
+        Two more things follow from it. Before writing to such a table the
+        bridge looks at what is there, and{' '}
+        <strong>
+          a row that is already exactly what it would be set to is not
+          written
+        </strong>{' '}
+        (the delivery says{' '}
+        <code>wrote 0 (3 already up to date, not written)</code>). That is
+        also the safety net: a change that is <em>not</em> recognised — the
+        memory of it expired because the reading bridge was further behind
+        than <code>SYNCLE_ECHO_TTL_SECONDS</code> (default 5 minutes) — is
+        sent on, finds the other side already up to date, writes nothing, and
+        the loop dies by itself one hop later. That look does not go through
+        Redis, so it holds while Redis is away too. And none of this costs
+        anything for a bridge whose destination nobody reads: no look before
+        the write, nothing kept in Redis.
+      </p>
+      <p>
+        What is remembered is a row of yours, so it is kept the way your
+        connection passwords are: encrypted under the{' '}
+        <a href="/docs/self-hosting#master-key">master key</a>, used up the
+        moment the change comes back, and gone after{' '}
+        <code>SYNCLE_ECHO_TTL_SECONDS</code> if it never does. Large values (a
+        document, a file in a column) are remembered by their SHA-256 only.
+      </p>
+      <p>What it does not do:</p>
+      <ul>
+        <li>
+          <strong>Resolve conflicts.</strong> If the same row is edited on
+          both sides within the same moment, each edit crosses to the other
+          side and the two tables can end up holding each other&apos;s value.
+          Nothing loops, and nothing is flagged as failed — run{' '}
+          <a href="#verify">Verify</a> on a schedule if that matters, and let
+          one side own each row where you can.
+        </li>
+        <li>
+          <strong>
+            See through columns the database changes on every write.
+          </strong>{' '}
+          A trigger that stamps <code>updated_at = now()</code> on both sides
+          makes every copy differ from what was written, so it is never
+          recognised and each hop changes the row again. Leave such columns
+          out of the mapping (both bridges), or let only the application set
+          them.
+        </li>
+        <li>
+          <strong>Know about writers that are not Syncle.</strong> A loop
+          through a webhook and somebody else&apos;s code (A → HTTP → their
+          service → B → A) is theirs to break.
+        </li>
+      </ul>
+
       <h2 id="workspaces">Workspaces</h2>
       <p>
         Workspaces are the top-level container: every connection and bridge

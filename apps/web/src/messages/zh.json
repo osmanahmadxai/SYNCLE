@@ -527,6 +527,11 @@
     "skipped": "原定于 {when} 的运行已跳过：上一次运行仍在进行。",
     "failed": "原定于 {when} 的运行未能启动：{error}"
   },
+  "loopNotice": {
+    "tied": "{count, plural, other {与 {names} 互相同步。}}Syncle 自己写入的数据再次出现时会被识别，不会再次转发。",
+    "unguarded": "{count, plural, other {与 {names} 互相同步}}，但循环防护已关闭（SYNCLE_ECHO_TTL_SECONDS=0）：每次更改都会无休止地来回传递。请重新开启，或停止其中一个 bridge。",
+    "heldBack": "{count, plural, other {自 API 启动以来已拦截 # 次更改。}}"
+  },
   "verify": {
     "title": "校验",
     "description": "目标真的是此桥接所声称的源的副本吗？两端的每一行都会被读取，并按每列值的类型进行比较。交付全部为绿色并不能回答这个问题：在目标端被手工修改的行，或在桥接停止期间被删除的行，都不算交付失败。",

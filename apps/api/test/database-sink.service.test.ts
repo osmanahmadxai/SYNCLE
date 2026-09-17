@@ -59,10 +59,18 @@ function makeAdapter() {
   return { adapter, calls };
 }
 
+/** no bridge reads what these tests write: the echo guard has nothing to say (it has tests of its own) */
+const NO_LOOPS = {
+  announce: async () => ({ receipt: null, unchanged: new Set<number>() }),
+  announceTruncate: async () => null,
+  retract: async () => undefined,
+};
+
 /** service wired to stub adapters, keyed by connectionId (all Postgres unless told otherwise) */
 function makeService(
   adapters: Record<string, unknown>,
   engines: Record<string, string> = {},
+  echo: unknown = NO_LOOPS,
 ): DatabaseSinkService {
   const pool = {
     withAdapter: async (
@@ -74,7 +82,11 @@ function makeService(
   const connections = {
     resolve: async (id: string) => ({ engine: engines[id] ?? 'postgres' }),
   };
-  return new DatabaseSinkService(pool as never, connections as never);
+  return new DatabaseSinkService(
+    pool as never,
+    connections as never,
+    echo as never,
+  );
 }
 
 function makeBridge(): ResolvedBridge {
@@ -124,6 +136,188 @@ function col(name: string, dataType: string, nullable: boolean): ColumnSchema {
     references: null,
   };
 }
+
+describe('a target that another live bridge reads (see EchoGuardService)', () => {
+  /** an echo guard double: records what it was told, and answers as the test says */
+  function guard(answer: { unchanged?: number[] } = {}) {
+    const told: Array<{ rows: unknown; mode: string }> = [];
+    const retracted: unknown[] = [];
+    const receipt = { entries: [['k', 'v']] };
+    return {
+      told,
+      retracted,
+      receipt,
+      announce: async (
+        _b: unknown,
+        _t: unknown,
+        rows: unknown,
+        _source: unknown,
+        mode: string,
+      ) => {
+        told.push({ rows, mode });
+        return { receipt, unchanged: new Set(answer.unchanged ?? []) };
+      },
+      announceTruncate: async () => receipt,
+      retract: async (r: unknown) => void retracted.push(r),
+    };
+  }
+  const rows = [
+    { id: 1, name: 'a' },
+    { id: 2, name: 'b' },
+    { id: 3, name: 'c' },
+  ];
+
+  it('is told what is about to be written — as the TARGET will hold it — before it is', async () => {
+    const { adapter, calls } = makeAdapter();
+    const echo = guard();
+    const order: string[] = [];
+    const announce = echo.announce;
+    echo.announce = async (...args: Parameters<typeof announce>) => {
+      order.push('announce');
+      return announce(...args);
+    };
+    const upsertRow = adapter.upsertRow;
+    adapter.upsertRow = async (p) => {
+      order.push('write');
+      return upsertRow(p);
+    };
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const target = makeTarget({
+      mapping: [
+        { source: 'id', target: 'id' },
+        { source: 'name', target: 'full_name' },
+      ],
+    });
+    await svc.deliver(makeBridge(), [target], [rows[0]!], undefined);
+    expect(order).toEqual(['announce', 'write']);
+    expect(echo.told).toEqual([
+      { rows: [{ id: 1, full_name: 'a' }], mode: 'upsert' },
+    ]);
+    expect(calls.upsert).toHaveLength(1);
+    expect(echo.retracted).toEqual([]);
+  });
+
+  it('does not write the rows that are already exactly that, and says so', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, {}, guard({ unchanged: [0, 2] }));
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      rows,
+      undefined,
+    );
+    expect(calls.upsert.map((c) => (c.values as { id: number }).id)).toEqual([
+      2,
+    ]);
+    expect(outcome.status).toBe('success');
+    expect(outcome.responseBody).toBe(
+      'users_copy: wrote 1 (2 already up to date, not written)',
+    );
+  });
+
+  it('with nothing left to write it does not go to the database at all — and takes back what it said', async () => {
+    const { adapter, calls } = makeAdapter();
+    const echo = guard({ unchanged: [0, 1, 2] });
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      rows,
+      undefined,
+    );
+    expect(calls.upsert).toEqual([]);
+    expect(outcome.status).toBe('success');
+    expect(outcome.responseBody).toBe(
+      'users_copy: wrote 0 (3 already up to date, not written)',
+    );
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('a write that FAILS is taken back: no change will come, and the memory of one would be mistaken for somebody’s edit', async () => {
+    const { adapter } = makeAdapter();
+    adapter.upsertRow = async () => {
+      throw new Error('disk full');
+    };
+    const echo = guard();
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [rows[0]!],
+      undefined,
+    );
+    expect(outcome.status).toBe('failed');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('so is one that changed nothing', async () => {
+    const { adapter } = makeAdapter();
+    adapter.deleteRow = async () => ({ affectedRows: 0 });
+    const echo = guard();
+    const svc = makeService({ dst: adapter }, {}, echo);
+    await svc.deliver(makeBridge(), [makeTarget()], [rows[0]!], 'delete');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('a delete is announced by its KEY; a soft delete as the UPDATE the table will log', async () => {
+    const hard = guard();
+    await makeService({ dst: makeAdapter().adapter }, {}, hard).deliver(
+      makeBridge(),
+      [makeTarget()],
+      [rows[0]!],
+      'delete',
+    );
+    expect(hard.told).toEqual([{ rows: [{ id: 1 }], mode: 'delete' }]);
+
+    const soft = guard();
+    const { adapter } = makeAdapter();
+    (adapter as unknown as { updateRow: unknown }).updateRow = async () => ({
+      affectedRows: 1,
+    });
+    await makeService({ dst: adapter }, {}, soft).deliver(
+      makeBridge(),
+      [
+        makeTarget({
+          onDelete: 'soft',
+          softDelete: { column: 'is_deleted', value: 'boolean' },
+        }),
+      ],
+      [rows[0]!],
+      'delete',
+    );
+    expect(soft.told).toEqual([
+      { rows: [{ id: 1, is_deleted: true }], mode: 'soft-delete' },
+    ]);
+  });
+
+  it('an append-only target is announced as inserts: there is no key to look by', async () => {
+    const echo = guard();
+    await makeService({ dst: makeAdapter().adapter }, {}, echo).deliver(
+      makeBridge(),
+      [makeTarget({ writeMode: 'insert', keyColumns: [] })],
+      [rows[0]!],
+      undefined,
+    );
+    expect(echo.told[0]!.mode).toBe('insert');
+  });
+
+  it('a TRUNCATE that fails is taken back too', async () => {
+    const { adapter } = makeAdapter();
+    (adapter as unknown as { truncateTable: unknown }).truncateTable =
+      async () => {
+        throw new Error('permission denied');
+      };
+    const echo = guard();
+    const outcome = await makeService({ dst: adapter }, {}, echo).deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{}],
+      'truncate',
+    );
+    expect(outcome.status).toBe('failed');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+});
 
 describe('DatabaseSinkService.deliver', () => {
   it('routes a delete op to deleteRow keyed by the target key columns', async () => {

@@ -79,6 +79,30 @@ type Row = Record<string, unknown>;
 export const UNCHANGED = Symbol.for('syncle.unchanged');
 
 /**
+ * where a row has ALREADY been, when it is one that a bridge wrote and another
+ * bridge is now reading back (see the API's EchoGuardService): the tables the
+ * change has passed through. carried on the row under a symbol, so that it goes
+ * wherever the row goes — a copy of the row (`{ ...row }`) keeps it — and is
+ * never data: `Object.keys`, `Object.entries`, `JSON.stringify`, every mapping
+ * and every driver ignore it, so it cannot reach a destination or a payload.
+ * what builds a NEW row column by column (a mapping, a codec) drops it, and
+ * carries it over by hand where it matters.
+ */
+export const ORIGINS = Symbol.for('syncle.origins');
+
+/** the tables this row has been through already; empty for a change somebody made */
+export function originsOf(row: Row): string[] {
+  const value = (row as Record<symbol, unknown>)[ORIGINS];
+  return Array.isArray(value) ? (value as string[]) : [];
+}
+
+/** the same row, remembering where it has been */
+export function withOrigins<T extends Row>(row: T, origins: readonly string[]): T {
+  if (origins.length === 0) return row;
+  return Object.assign({}, row, { [ORIGINS]: [...origins] }) as T;
+}
+
+/**
  * project a source row onto the target's column names. an empty mapping means
  * "identity" (keep every column with its original name). `undefined` values are
  * normalized to `null` so drivers bind them as SQL NULL rather than erroring;

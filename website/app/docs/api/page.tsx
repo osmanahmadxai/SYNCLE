@@ -1138,6 +1138,23 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>GET /api/bridges/:id/loops</code>
+              </td>
+              <td>
+                Is this bridge tied to others in a{' '}
+                <a href="/docs/bridges#two-way">ring</a> —{' '}
+                <code>{'{ guard, fedBy: [{ bridgeId, name }], feeds: [...], heldBack }'}</code>
+                . <code>fedBy</code> are the bridges that write the table this
+                one reads, <code>feeds</code> the enabled watch and CDC bridges
+                that read a table it writes (both not empty = a ring);{' '}
+                <code>heldBack</code> counts the changes it
+                recognised as Syncle&apos;s own and did not send round again,
+                since the API started. <code>guard: false</code> means loop
+                prevention is switched off
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>GET /api/bridges/:id/schema-drift</code>
               </td>
               <td>

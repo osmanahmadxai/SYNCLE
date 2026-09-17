@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { JobDetail, JobStatusBadge } from './job-detail';
 import { JobStrip } from './job-strip';
 import { SchemaDriftNotice } from './schema-drift-notice';
+import { LoopNotice } from './loop-notice';
 import { ScheduleNotice } from './schedule-notice';
 import { VerifyDialog } from './verify-dialog';
 import { WorkspaceMap } from './workspace-map';
@@ -317,6 +318,9 @@ function BridgePanel({
 
       {/* a replay that runs by itself: when next, and whether the last tick started one */}
       <ScheduleNotice bridgeId={bridgeId} enabled={!isWatch} />
+
+      {/* tied to another bridge in a ring (A -> B plus B -> A); silent otherwise */}
+      <LoopNotice bridgeId={bridgeId} />
 
       {/* the source table is not the one this bridge was built on; silent otherwise */}
       <SchemaDriftNotice
