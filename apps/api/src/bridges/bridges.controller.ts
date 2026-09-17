@@ -27,6 +27,8 @@ import {
   type BridgeJob,
   type StartJobDTO,
   type SkipDTO,
+  type BridgeBulkDTO,
+  type BridgeBulkResult,
   type BridgeScheduleStatus,
   type BridgeSourceHold,
   type BridgeVerification,
@@ -42,6 +44,7 @@ import {
   type DeadLetterRetryResult,
   BadRequestError,
   cdcReadinessSchema,
+  bridgeBulkSchema,
   bridgeDraftPreviewSchema,
   bridgeImportSchema,
   bridgeInputSchema,
@@ -173,7 +176,20 @@ export class BridgesController {
         now.kind !== 'table' ||
         now.connectionId !== was.connectionId ||
         (now.database ?? '') !== (was.database ?? '');
+      // from a slot of its own to the shared one, or back: what it had stays
+      // behind otherwise, pinning WAL for a reader that will never come. a place
+      // in one slot means nothing in another, so the bridge follows from now
+      // (or copies again, if that is how it starts) — and says so
+      const otherSlot = !moved && before.trigger.kind === 'cdc' && bridge.trigger.kind === 'cdc' && before.trigger.slot !== bridge.trigger.slot;
       if (moved) await this.cdc.abandon(id, beforeResolved);
+      else if (otherSlot) {
+        await this.cdc.abandon(id, beforeResolved, {
+          gapNotice:
+            `Switched to ${bridge.trigger.kind === 'cdc' && bridge.trigger.slot === 'shared' ? 'the shared replication slot' : 'a replication slot of its own'} on ${new Date().toISOString()}. ` +
+            'A place in one slot means nothing in another: changes made at the source between the last delivery and the next start are NOT captured. ' +
+            'Verify the bridge and reconcile it to bring the destination up to date.',
+        });
+      }
     }
 
     // a new line, a new zone, switched off, no longer a replay at all: Redis is told
@@ -312,6 +328,26 @@ export class BridgesController {
   @Post('import')
   importBridges(@Body(new ZodValidationPipe(bridgeImportSchema)) dto: BridgeImportDTO): Promise<BridgeImportResult> {
     return this.transfer.import(dto);
+  }
+
+  /**
+   * one bridge per table, for many tables at once (a whole schema, say). each is
+   * made the way any bridge is made; a table none can be made for is said, with
+   * the reason, and does not stop the others
+   */
+  @Post('bulk')
+  async bulk(@Body(new ZodValidationPipe(bridgeBulkSchema)) dto: BridgeBulkDTO): Promise<BridgeBulkResult> {
+    const plan = await this.transfer.planBulk(dto);
+    const result: BridgeBulkResult = { created: [], skipped: plan.skipped };
+    for (const { table, input } of plan.inputs) {
+      try {
+        const bridge = await this.create(input);
+        result.created.push({ id: bridge.id, name: bridge.name, table });
+      } catch (err) {
+        result.skipped.push({ table, reason: (err as Error).message });
+      }
+    }
+    return result;
   }
 
   @Post(':id/clone')

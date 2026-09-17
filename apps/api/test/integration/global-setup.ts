@@ -120,7 +120,7 @@ async function resetLeftovers(): Promise<void> {
   await meta.connect();
   try {
     await meta.query(
-      `TRUNCATE bridge_deliveries, bridge_dead_letters, bridge_jobs, bridge_verifications, bridges, connections, source_cleanups, alert_channels, api_keys`,
+      `TRUNCATE bridge_deliveries, bridge_dead_letters, bridge_jobs, bridge_verifications, cdc_shared_members, bridges, connections, source_cleanups, alert_channels, api_keys`,
     );
   } finally {
     await meta.end().catch(() => undefined);
@@ -137,16 +137,16 @@ async function resetLeftovers(): Promise<void> {
   try {
     await source.query(
       `select pg_terminate_backend(active_pid) from pg_replication_slots
-       where active and (slot_name like 'syncle_slot_%' or slot_name like 'it_fill_%')`,
+       where active and (slot_name like 'syncle_slot_%' or slot_name like 'syncle_shared_%' or slot_name like 'it_fill_%')`,
     );
     const slots = await source.query(
       `select slot_name from pg_replication_slots
-       where slot_name like 'syncle_slot_%' or slot_name like 'it_fill_%'`,
+       where slot_name like 'syncle_slot_%' or slot_name like 'syncle_shared_%' or slot_name like 'it_fill_%'`,
     );
     for (const row of slots.rows as Array<{ slot_name: string }>) {
       await source.query('select pg_drop_replication_slot($1)', [row.slot_name]).catch(() => undefined);
     }
-    const pubs = await source.query(`select pubname from pg_publication where pubname like 'syncle_pub_%'`);
+    const pubs = await source.query(`select pubname from pg_publication where pubname like 'syncle_pub_%' or pubname like 'syncle_sp_%'`);
     for (const row of pubs.rows as Array<{ pubname: string }>) {
       await source.query(`drop publication if exists "${row.pubname}"`).catch(() => undefined);
     }

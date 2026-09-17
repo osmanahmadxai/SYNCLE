@@ -45,6 +45,7 @@ export function TriggerSection({
     | 'watchStartFrom'
     | 'cdcOps'
     | 'cdcStartFrom'
+    | 'cdcSlot'
     | 'readiness'
     | 'checkingCdc'
   >;
@@ -68,6 +69,7 @@ export function TriggerSection({
     watchStartFrom,
     cdcOps,
     cdcStartFrom,
+    cdcSlot,
     readiness,
     checkingCdc,
   } = draft;
@@ -84,6 +86,7 @@ export function TriggerSection({
           schema: draft.schema || undefined,
           table: draft.table,
           bridgeId: bridgeId || undefined,
+          slot: sourceEngine === 'postgres' ? cdcSlot : undefined,
         }),
       });
     } catch (err) {
@@ -217,6 +220,28 @@ export function TriggerSection({
                   : t('cdcFromNowHint')}
               </p>
             </div>
+
+            {/* PostgreSQL only: a slot of its own, or the one all shared bridges of this connection read through */}
+            {sourceEngine === 'postgres' && (
+              <div className="grid gap-1.5">
+                <Label className="text-xs">{t('cdcSlot')}</Label>
+                <Select
+                  value={cdcSlot}
+                  onValueChange={(v) => dispatch({ type: 'setCdcSlot', slot: v as 'own' | 'shared' })}
+                >
+                  <SelectTrigger className="h-8" aria-label={t('cdcSlot')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="own">{t('cdcSlotOwn')}</SelectItem>
+                    <SelectItem value="shared">{t('cdcSlotShared')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-[11px]">
+                  {cdcSlot === 'shared' ? t('cdcSlotSharedHint') : t('cdcSlotOwnHint')}
+                </p>
+              </div>
+            )}
 
             {/* readiness / setup */}
             <div className="flex items-center justify-between">

@@ -197,6 +197,13 @@ export const runtimeConfig = {
    */
   snapshotHoldMax: Math.max(1, nonNegativeInt(env('SYNCLE_SNAPSHOT_HOLD_MAX'), 100_000)),
   /**
+   * A bridge joining a SHARED PostgreSQL replication slot waits for the
+   * transactions that were open when its table was published to end (what they
+   * changed before that moment is in no stream). This is how long it waits
+   * before it gives up and says which transaction it was waiting for.
+   */
+  sharedSlotJoinWaitMs: nonNegativeInt(env('SYNCLE_SHARED_SLOT_JOIN_WAIT_MS'), 60_000),
+  /**
    * Verifying a bridge that is delivering: a row that looks wrong is looked at
    * again this many milliseconds later, from both ends, before it counts — a
    * change that was only in flight is not a difference.

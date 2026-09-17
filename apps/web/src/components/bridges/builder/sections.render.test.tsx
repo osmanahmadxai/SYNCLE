@@ -22,6 +22,7 @@ import {
   TEXT_OPS,
 } from './transform-options';
 import { TransformsSection } from './transforms-section';
+import { TriggerSection } from './trigger-section';
 
 const LOCALES = ['en', 'it', 'zh'] as const;
 const messagesOf = (locale: string) =>
@@ -107,6 +108,38 @@ describe.each(LOCALES)('the builder sections in %s', (locale) => {
     string,
     Record<string, string>
   >;
+
+  it('the replication slot choice is offered for a PostgreSQL source, and for no other', () => {
+    const m = messagesOf(locale) as unknown as {
+      bridgeBuilder: Record<string, string>;
+    };
+    const draft = {
+      ...initialDraft(),
+      syncMode: 'live' as const,
+      triggerKind: 'cdc' as const,
+      connectionId: 'c1',
+      table: 'users',
+    };
+    const section = (sourceEngine: string, cdcSlot: 'own' | 'shared') => (
+      <TriggerSection
+        draft={{ ...draft, cdcSlot }}
+        dispatch={() => undefined}
+        columns={[]}
+        sourceEngine={sourceEngine}
+      />
+    );
+    const own = render(locale, section('postgres', 'own'));
+    expect(own).toContain(inHtml(m.bridgeBuilder.cdcSlot!));
+    expect(own).toContain(inHtml(m.bridgeBuilder.cdcSlotOwnHint!));
+    expect(render(locale, section('postgres', 'shared'))).toContain(
+      inHtml(m.bridgeBuilder.cdcSlotSharedHint!),
+    );
+    for (const engine of ['mysql', 'mongodb', 'redis']) {
+      expect(render(locale, section(engine, 'shared'))).not.toContain(
+        inHtml(m.bridgeBuilder.cdcSlot!),
+      );
+    }
+  });
 
   it('filters: empty, then one row per operator, then what the editor cannot show', () => {
     const empty = render(

@@ -161,6 +161,7 @@ describe('which bridges fire', () => {
       kind: 'cdc' as const,
       operations: ['insert' as const],
       startFrom: 'now' as const,
+      slot: 'own' as const,
     };
     expect(withScheduleOff(cdc)).toEqual({ trigger: cdc, wasOn: false });
   });

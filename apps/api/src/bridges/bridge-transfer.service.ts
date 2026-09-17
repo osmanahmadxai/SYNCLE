@@ -15,6 +15,8 @@ import {
   DEFAULT_WORKSPACE_ID,
   bridgeInputSchema,
   type Bridge,
+  type BridgeBulkDTO,
+  type BridgeBulkResult,
   type BridgeDestination,
   type BridgeExportDocument,
   type BridgeImportDTO,
@@ -23,6 +25,8 @@ import {
   type UnresolvedConnection,
 } from '@syncle/core';
 import { PrismaService } from '../common/prisma.service';
+import { AdapterPoolService } from '../connections/adapter-pool.service';
+import { ConnectionStoreService } from '../connections/connection-store.service';
 import { resolveVersion } from '../common/version';
 import { BridgeStoreService } from './bridge-store.service';
 
@@ -105,7 +109,107 @@ export class BridgeTransferService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly store: BridgeStoreService,
+    private readonly pool: AdapterPoolService,
+    private readonly connections: ConnectionStoreService,
   ) {}
+
+  /**
+   * one bridge per table: what each of them would be, and the tables none can be
+   * made for. nothing is created here — the caller creates them the way any
+   * bridge is created, so that none of what a create does is skipped
+   */
+  async planBulk(
+    dto: BridgeBulkDTO,
+  ): Promise<{
+    inputs: Array<{ table: string; input: BridgeInputDTO }>;
+    skipped: BridgeBulkResult['skipped'];
+  }> {
+    const workspaceId = dto.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const sourceEngine = (await this.connections.get(dto.source.connectionId))
+      .engine;
+    await this.connections.get(dto.destination.connectionId); // 404s here, not at the twentieth table
+    const taken = new Set(
+      (
+        await this.prisma.bridge.findMany({
+          where: { workspaceId },
+          select: { name: true },
+        })
+      ).map((b) => b.name),
+    );
+    const inputs: Array<{ table: string; input: BridgeInputDTO }> = [];
+    const skipped: BridgeBulkResult['skipped'] = [];
+
+    for (const table of [...new Set(dto.source.tables)]) {
+      let primaryKey: string[];
+      try {
+        const probe = await this.pool.withAdapter(
+          dto.source.connectionId,
+          dto.source.database,
+          (a) =>
+            a.browse({ schema: dto.source.schema, table, limit: 1, offset: 0 }),
+        );
+        primaryKey = probe.primaryKey;
+      } catch (err) {
+        skipped.push({
+          table,
+          reason: `It could not be read: ${(err as Error).message}`,
+        });
+        continue;
+      }
+      if (primaryKey.length === 0) {
+        skipped.push({
+          table,
+          reason:
+            'It has no primary key, so a row at the destination could not be found again to update or delete it. Make a bridge for it by hand and choose its key columns (or insert-only).',
+        });
+        continue;
+      }
+      const destTable = `${dto.destination.tablePrefix}${table}`;
+      let name = `${table} → ${destTable}`;
+      for (let n = 2; taken.has(name); n++)
+        name = `${table} → ${destTable} (${n})`;
+      taken.add(name);
+      inputs.push({
+        table,
+        input: bridgeInputSchema.parse({
+          name,
+          workspaceId,
+          source: {
+            kind: 'table',
+            connectionId: dto.source.connectionId,
+            database: dto.source.database,
+            schema: dto.source.schema,
+            table,
+          },
+          destination: {
+            kind: 'database',
+            targets: [
+              {
+                connectionId: dto.destination.connectionId,
+                database: dto.destination.database,
+                schema: dto.destination.schema,
+                table: destTable,
+                writeMode: 'upsert',
+                keyColumns: primaryKey,
+                createMissingTable: true,
+              },
+            ],
+          },
+          transform: { template: '{{$row}}' },
+          ...(dto.delivery ? { delivery: dto.delivery } : {}),
+          trigger:
+            dto.trigger.kind === 'cdc'
+              ? // only PostgreSQL has slots to share
+                {
+                  ...dto.trigger,
+                  slot: sourceEngine === 'postgres' ? dto.trigger.slot : 'own',
+                }
+              : dto.trigger,
+        }),
+      });
+    }
+    return { inputs, skipped };
+  }
 
   private toInput(bridge: Bridge): BridgeInputDTO {
     // through the schema: what is exported is exactly what an import accepts

@@ -84,6 +84,7 @@ export function loadBridge(h: Bridge): BuilderDraft {
     d.triggerKind = 'cdc';
     d.cdcOps = new Set(h.trigger.operations);
     d.cdcStartFrom = h.trigger.startFrom ?? 'now';
+    d.cdcSlot = h.trigger.slot ?? 'own';
   } else {
     d.syncMode = 'oneTime';
     d.triggerKind = 'replay';
@@ -153,6 +154,8 @@ export interface BuildInputContext {
    * sample row: a filter typed as "42" on a numeric column is sent as 42
    */
   columnTypes?: Record<string, string>;
+  /** the source connection's engine: some settings only mean something on one */
+  sourceEngine?: string;
 }
 
 /** the value of a filter as the API should get it: a number or a boolean where the column is one */
@@ -314,7 +317,13 @@ export function buildInput(
     },
     trigger:
       draft.triggerKind === 'cdc'
-        ? { kind: 'cdc', operations: [...draft.cdcOps], startFrom: draft.cdcStartFrom }
+        ? {
+            kind: 'cdc',
+            operations: [...draft.cdcOps],
+            startFrom: draft.cdcStartFrom,
+            // only PostgreSQL has slots: elsewhere the setting would be a lie about what is there
+            slot: ctx.sourceEngine === 'postgres' ? draft.cdcSlot : 'own',
+          }
         : draft.triggerKind === 'watch'
           ? {
               kind: 'watch',

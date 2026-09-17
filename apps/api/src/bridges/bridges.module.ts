@@ -27,6 +27,7 @@ import { JobRegistryService } from './job-registry.service';
 import { BRIDGE_JOBS_QUEUE, BRIDGE_SCHEDULE_QUEUE, BRIDGE_VERIFY_QUEUE, BRIDGE_WATCH_QUEUE } from './bridges.types';
 import { CDC_PROVIDERS, type CdcProvider } from './cdc/cdc-provider';
 import { PostgresCdcProvider } from './cdc/providers/postgres-cdc.provider';
+import { PgSharedSlotService } from './cdc/providers/postgres-shared-slot';
 import { MysqlCdcProvider } from './cdc/providers/mysql-cdc.provider';
 import { MongodbCdcProvider } from './cdc/providers/mongodb-cdc.provider';
 import { RedisCdcProvider } from './cdc/providers/redis-cdc.provider';
@@ -65,6 +66,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     CdcSpoolService,
     DeadLetterService,
     // CDC providers (one per engine) plus the aggregate the orchestrator injects
+    PgSharedSlotService,
     PostgresCdcProvider,
     MysqlCdcProvider,
     MongodbCdcProvider,

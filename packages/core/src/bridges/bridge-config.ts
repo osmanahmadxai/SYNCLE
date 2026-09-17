@@ -296,6 +296,21 @@ export const bridgeTriggerSchema = z.discriminatedUnion('kind', [
      * (its first start, or a start over); a bridge that has one resumes from it.
      */
     startFrom: z.enum(['now', 'beginning']).default('now'),
+    /**
+     * PostgreSQL only: what the bridge reads the change log THROUGH.
+     *
+     * `own`    a replication slot of its own. simple, independent — and one slot
+     *          and one connection per bridge: a server allows ten of each by
+     *          default, and every slot pins WAL by itself.
+     * `shared` one slot, one connection and one decoding of the WAL for every
+     *          shared bridge on the same connection and database, however many
+     *          tables that is. the members advance together: the slot is only
+     *          confirmed up to the SLOWEST of them, so one that is left stopped
+     *          holds WAL for all (the source guard says so, and can let it go).
+     *
+     * ignored by every other engine, where nothing is held per bridge.
+     */
+    slot: z.enum(['own', 'shared']).default('own'),
   }),
 ]);
 
@@ -371,6 +386,12 @@ export const cdcReadinessSchema = z.object({
    * another, so "no free slot" must not fail its own readiness check
    */
   bridgeId: z.string().optional(),
+  /**
+   * PostgreSQL: is this a bridge that will read through the slot it shares with
+   * the others on its connection? such a bridge needs a free slot and a free
+   * sender only if it is the FIRST of them
+   */
+  slot: z.enum(['own', 'shared']).optional(),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -438,6 +459,61 @@ export interface BridgeImportResult {
   created: Array<{ id: string; name: string }>;
   /** what whoever imported has to do before the bridges are what they were */
   warnings: string[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Many tables at once                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * one bridge per table, for many tables at once: each table is copied as it is
+ * (no column mapping) into a table of the same name at the destination, keyed
+ * by its primary key. what it makes are ordinary bridges — every one of them
+ * can be opened, filtered, transformed and verified like any other afterwards.
+ * (on PostgreSQL, with `slot: 'shared'`, all of them read through one slot.)
+ */
+export const bridgeBulkSchema = z.object({
+  workspaceId: z.string().optional(),
+  source: z.object({
+    connectionId: z.string().min(1),
+    database: z.string().optional(),
+    schema: z.string().optional(),
+    tables: z.array(z.string().min(1)).min(1).max(200),
+  }),
+  destination: z.object({
+    connectionId: z.string().min(1),
+    database: z.string().optional(),
+    schema: z.string().optional(),
+    /** put in front of every destination table's name: `raw_` makes `orders` into `raw_orders` */
+    tablePrefix: z
+      .string()
+      .max(40)
+      .regex(/^[A-Za-z0-9_]*$/, 'Letters, digits and underscores only')
+      .default(''),
+  }),
+  /**
+   * how every one of them runs. polling is left out on purpose: it follows a
+   * column, and no one column is in every table
+   */
+  trigger: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('replay') }),
+    z.object({
+      kind: z.literal('cdc'),
+      operations: z.array(cdcOperationSchema).min(1).default(['insert', 'update', 'delete']),
+      startFrom: z.enum(['now', 'beginning']).default('beginning'),
+      slot: z.enum(['own', 'shared']).default('shared'),
+    }),
+  ]),
+  delivery: bridgeDeliverySchema.optional(),
+});
+export type BridgeBulkDTO = z.infer<typeof bridgeBulkSchema>;
+/** the same as a client sends it: what has a default may be left out */
+export type BridgeBulkInput = z.input<typeof bridgeBulkSchema>;
+
+export interface BridgeBulkResult {
+  created: Array<{ id: string; name: string; table: string }>;
+  /** tables no bridge was made for, and why (no primary key to find a row by, …) */
+  skipped: Array<{ table: string; reason: string }>;
 }
 
 /** body of `POST /bridges/:id/watch/start`; every field optional, as is the body */

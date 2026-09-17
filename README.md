@@ -134,6 +134,11 @@ The rest is the same whichever destination and trigger you pick:
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
+- **Thirty tables, one replication slot.** On PostgreSQL, bridges can share a
+  slot: one connection and one decoding of the WAL for every table of a source,
+  confirmed only as far as the slowest bridge has got, each bridge still its own
+  — filters, transforms, dead letters, verification. *Bridge many tables* makes
+  one per table in a step.
 - **Prove the copy is the copy.** Verify reads both ends and compares them row
   by row — by what kind of value each column holds, so `'1.50'` and `1.5` are the
   same number and `007` and `7` are not the same key — and reports what is
@@ -454,6 +459,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_METRICS_TOKEN` | api | Enables `GET /api/metrics` (Prometheus) for `Authorization: Bearer <token>`; unset = the endpoint does not exist |
 | `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
 | `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
+| `SYNCLE_SHARED_SLOT_JOIN_WAIT_MS` | api | Joining a shared PostgreSQL replication slot: how long to wait for transactions that were open when the table was published (default `60000`) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |

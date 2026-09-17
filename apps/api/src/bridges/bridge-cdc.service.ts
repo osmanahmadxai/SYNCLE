@@ -402,6 +402,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         schema: bridge.source.schema,
         table: bridge.source.table,
         bridgeId,
+        slot: bridge.trigger.kind === 'cdc' ? bridge.trigger.slot : undefined,
       },
       conn,
     );
@@ -529,13 +530,21 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
    * look there again. this used to be skipped entirely: every such edit left a
    * replication slot behind, pinning WAL with no bridge pointing at it.
    */
-  async abandon(bridgeId: string, before: ResolvedBridge): Promise<void> {
+  async abandon(bridgeId: string, before: ResolvedBridge, opts: { gapNotice?: string } = {}): Promise<void> {
     await this.teardown(bridgeId);
     await this.releaseSource(bridgeId, before);
     // rows spooled from the OLD source but not yet delivered belong to a
     // configuration that no longer exists; the new one must not inherit them
     await this.dropSpool(bridgeId);
     // the saved position belonged to what was just released
+    const latest = await this.prisma.bridgeJob.findFirst({ where: { bridgeId }, orderBy: { startedAt: 'desc' } }).catch(() => null);
+    // the SAME table goes on being read, from a new place: what changed at the
+    // source between the last delivery and that place is not captured, and the
+    // timeline is where that is said (a moved source has no such gap to speak of)
+    if (latest && opts.gapNotice && readCursor(latest.cursorJson)) {
+      await this.jobs.recordNotice(latest.id, latest.cursorOffset, opts.gapNotice).catch(() => undefined);
+      await this.prisma.bridgeJob.update({ where: { id: latest.id }, data: { cursorOffset: latest.cursorOffset + 1 } }).catch(() => undefined);
+    }
     await this.prisma.bridgeJob
       .updateMany({ where: { bridgeId }, data: { cursorJson: null } })
       .catch(() => undefined);

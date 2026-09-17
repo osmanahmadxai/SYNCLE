@@ -12,6 +12,14 @@ import { UNCHANGED } from '@syncle/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgresCdcProvider } from './postgres-cdc.provider';
 
+/** these bridges have a slot of their own: the shared-slot service is only ever told they are not members */
+const NOT_SHARED = {
+  isMember: async () => false,
+  leave: async () => undefined,
+  join: async () => undefined,
+  position: async () => null,
+} as never;
+
 type Listener = (...args: unknown[]) => unknown;
 
 // vi.mock is hoisted above the imports, so everything its factory touches has
@@ -91,7 +99,7 @@ async function start(
   opts: { operations?: string[]; fromCursor?: string | null } = {},
 ) {
   // no pool: the slot's own position cannot be looked up, which is best-effort
-  const provider = new PostgresCdcProvider({} as never);
+  const provider = new PostgresCdcProvider({} as never, NOT_SHARED);
   const handle = await provider.startStream({
     bridgeId: 'b1',
     bridge: bridgeWith(opts.operations ?? ['insert', 'update']),

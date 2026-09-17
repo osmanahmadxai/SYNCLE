@@ -10,6 +10,14 @@
 import { describe, expect, it } from 'vitest';
 import { PostgresCdcProvider } from './postgres-cdc.provider';
 
+/** these bridges have a slot of their own: the shared-slot service is only ever told they are not members */
+const NOT_SHARED = {
+  isMember: async () => false,
+  leave: async () => undefined,
+  join: async () => undefined,
+  position: async () => null,
+} as never;
+
 interface Catalog {
   /** pg_class.relreplident: d = default (primary key), f = full, i = index, n = nothing */
   kind?: 'd' | 'f' | 'i' | 'n';
@@ -55,7 +63,10 @@ function providerFor(catalog: Catalog) {
       fn: (a: unknown) => unknown,
     ) => fn(adapter),
   };
-  return { provider: new PostgresCdcProvider(pool as never), statements };
+  return {
+    provider: new PostgresCdcProvider(pool as never, NOT_SHARED),
+    statements,
+  };
 }
 
 const bridge = (

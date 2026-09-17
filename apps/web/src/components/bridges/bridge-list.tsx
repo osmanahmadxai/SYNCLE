@@ -3,6 +3,7 @@
 import { Plus, Radio, Zap, Network, Workflow, AlertTriangle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { ImportBridgesButton } from './import-bridges';
+import { BulkBridgesButton } from './bulk-bridges';
 import { destinationLabel, type Bridge } from '@syncle/core';
 import { useBridges, useBridgeStatuses } from '@/lib/queries';
 import { useStudio } from '@/lib/store';
@@ -69,6 +70,7 @@ export function BridgeList() {
           {t('map')}
         </button>
         <div className="flex items-center">
+          <BulkBridgesButton />
           <ImportBridgesButton />
           <Button
             size="sm"

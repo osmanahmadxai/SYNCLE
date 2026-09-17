@@ -741,6 +741,25 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>POST /api/bridges/bulk</code>
+              </td>
+              <td>
+                One bridge per table, for many tables at once. Body{' '}
+                <code>
+                  {'{ source: { connectionId, database?, schema?, tables: [...] }, destination: { connectionId, database?, schema?, tablePrefix? }, trigger: { kind: "cdc", startFrom?, slot? } | { kind: "replay" }, delivery? }'}
+                </code>
+                . Each table is copied as it is into <code>tablePrefix + table</code>,
+                keyed by its primary key; on PostgreSQL the bridges{' '}
+                <a href="/docs/cdc#shared-slot">share one replication slot</a>{' '}
+                unless <code>{'slot: "own"'}</code>. Answers{' '}
+                <code>{'{ created: [{ id, name, table }], skipped: [{ table, reason }] }'}</code>{' '}
+                — a table with no primary key, or one that cannot be read, is
+                skipped with the reason and does not stop the others. Nothing
+                is started
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>POST /api/bridges/:id/clone</code>
               </td>
               <td>

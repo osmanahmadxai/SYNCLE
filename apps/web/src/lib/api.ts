@@ -47,6 +47,8 @@ import type {
   BridgeSchemaDrift,
   BridgeScheduleStatus,
   BridgeVerification,
+  BridgeBulkInput,
+  BridgeBulkResult,
 } from '@syncle/core';
 
 /**
@@ -155,6 +157,9 @@ export const api = {
   importBridges: (input: BridgeImportDTO) =>
     request<BridgeImportResult>('/bridges/import', { method: 'POST', ...jsonBody(input) }),
   cloneBridge: (id: string) => request<Bridge>(`/bridges/${id}/clone`, { method: 'POST' }),
+  /** one bridge per table, for many tables at once; tables none could be made for come back with the reason */
+  bulkBridges: (input: BridgeBulkInput) =>
+    request<BridgeBulkResult>('/bridges/bulk', { method: 'POST', ...jsonBody(input) }),
 
   /* ----- alert channels ----- */
   listAlertChannels: () => request<AlertChannel[]>('/alerts/channels'),

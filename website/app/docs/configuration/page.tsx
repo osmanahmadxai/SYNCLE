@@ -420,6 +420,21 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_SHARED_SLOT_JOIN_WAIT_MS</code>
+              </td>
+              <td>
+                <code>60000</code>
+              </td>
+              <td>
+                A bridge joining a{' '}
+                <a href="/docs/cdc#shared-slot">shared replication slot</a>{' '}
+                waits for the transactions that were open when its table was
+                published to end. After this long it gives up and names the
+                transaction it was waiting for.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
               </td>
               <td>

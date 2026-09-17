@@ -20,6 +20,7 @@ import type {
   LoginDTO,
   SetupDTO,
   WorkspaceInputDTO,
+  BridgeBulkInput,
 } from '@syncle/core';
 import { api } from './api';
 import { useStudio } from './store';
@@ -162,6 +163,15 @@ export function useImportBridges() {
   return useMutation({
     mutationFn: (input: BridgeImportDTO) => api.importBridges(input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
+  });
+}
+
+export function useBulkBridges() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BridgeBulkInput) => api.bulkBridges(input),
+    // some may have been made even when others were not
+    onSettled: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
   });
 }
 

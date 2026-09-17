@@ -140,6 +140,27 @@ model Bridge {
   @@map("bridges")
 }
 
+// the bridges that read a PostgreSQL source through ONE shared replication slot
+// (trigger.slot = 'shared'). the slot may only be confirmed up to the slowest
+// member — including members that are not running right now — so each member's
+// own confirmed position has to outlive the process
+model CdcSharedMember {
+  bridgeId     String   @id @map("bridge_id")
+  // which slot: a digest of the source connection and database
+  slotKey      String   @map("slot_key")
+  schemaName   String   @map("schema_name")
+  tableName    String   @map("table_name")
+  // the operations this member publishes, as the publication's suffix ("iud", "i", …)
+  ops          String
+  // the WAL position (H/L) up to which this member has everything durably
+  confirmedLsn String   @map("confirmed_lsn")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([slotKey])
+  @@map("cdc_shared_members")
+}
+
 // one look at whether a bridge's destination IS the copy of its source — and,
 // in reconcile mode, the repair of what was not. counts and a few examples are
 // kept; the rows themselves are not (a verification of a large table is large)

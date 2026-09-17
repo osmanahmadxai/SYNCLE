@@ -243,6 +243,8 @@ export function BridgeBuilder() {
     error: string | null;
   }>({ open: false, loading: false, preview: null, error: null });
 
+  const sourceEngine = connections?.find((c) => c.id === connectionId)?.engine;
+
   async function handleSave() {
     try {
       const input = buildInput(draft, {
@@ -250,6 +252,7 @@ export function BridgeBuilder() {
         singlePk,
         fallbackName: t('defaultName', { table }),
         columnTypes,
+        sourceEngine,
       });
       if (editing) {
         await update.mutateAsync({ id: editing, input });
@@ -276,6 +279,7 @@ export function BridgeBuilder() {
         singlePk,
         fallbackName: t('defaultName', { table }),
         columnTypes,
+        sourceEngine,
       });
       const preview = await api.previewDraft(input);
       setDryRun({ open: true, loading: false, preview, error: null });
@@ -391,9 +395,7 @@ export function BridgeBuilder() {
                 draft={draft}
                 dispatch={dispatch}
                 columns={columns}
-                sourceEngine={
-                  connections?.find((c) => c.id === connectionId)?.engine
-                }
+                sourceEngine={sourceEngine}
                 bridgeId={editing}
               />
               {/* a one-time bridge can run by itself, on a cron line */}

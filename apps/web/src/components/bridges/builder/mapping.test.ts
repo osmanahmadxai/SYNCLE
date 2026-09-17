@@ -180,7 +180,7 @@ describe('loadBridge', () => {
 
   it('hydrates a cdc trigger with its operations', () => {
     const d = loadBridge(
-      httpBridge({ trigger: { kind: 'cdc', operations: ['insert', 'delete'], startFrom: 'now' } }),
+      httpBridge({ trigger: { kind: 'cdc', operations: ['insert', 'delete'], startFrom: 'now', slot: 'own' } }),
     );
     expect(d.syncMode).toBe('live');
     expect(d.triggerKind).toBe('cdc');
@@ -190,10 +190,10 @@ describe('loadBridge', () => {
 
   it('keeps "copy what is there first" through a load and a save — and a bridge saved before it existed follows from now', () => {
     const copying = loadBridge(
-      httpBridge({ trigger: { kind: 'cdc', operations: ['insert'], startFrom: 'beginning' } }),
+      httpBridge({ trigger: { kind: 'cdc', operations: ['insert'], startFrom: 'beginning', slot: 'own' } }),
     );
     expect(copying.cdcStartFrom).toBe('beginning');
-    expect(buildInput(copying, ctx()).trigger).toEqual({ kind: 'cdc', operations: ['insert'], startFrom: 'beginning' });
+    expect(buildInput(copying, ctx()).trigger).toEqual({ kind: 'cdc', operations: ['insert'], startFrom: 'beginning', slot: 'own' });
 
     // stored before the option existed: no `startFrom` at all
     const older = loadBridge(httpBridge({ trigger: { kind: 'cdc', operations: ['insert'] } as never }));
@@ -213,7 +213,7 @@ describe('loadBridge', () => {
   it('keeps the opt-in truncate operation through a load and a save', () => {
     const d = loadBridge(
       httpBridge({
-        trigger: { kind: 'cdc', operations: ['insert', 'truncate'], startFrom: 'now' },
+        trigger: { kind: 'cdc', operations: ['insert', 'truncate'], startFrom: 'now', slot: 'own' },
       }),
     );
     expect(d.cdcOps.has('truncate')).toBe(true);
@@ -221,6 +221,7 @@ describe('loadBridge', () => {
       kind: 'cdc',
       operations: ['insert', 'truncate'],
       startFrom: 'now',
+      slot: 'own',
     });
   });
 
@@ -604,7 +605,31 @@ describe('buildInput', () => {
       kind: 'cdc',
       operations: ['update', 'delete'],
       startFrom: 'now',
+      slot: 'own',
     });
+  });
+
+  it('a shared replication slot is a PostgreSQL setting: kept through an edit there, and never sent for another engine', () => {
+    const d = readyDraft();
+    d.syncMode = 'live';
+    d.triggerKind = 'cdc';
+    expect(initialDraft().cdcSlot).toBe('own');
+    const shared = builderReducer(d, { type: 'setCdcSlot', slot: 'shared' });
+    expect(buildInput(shared, ctx({ sourceEngine: 'postgres' })).trigger).toMatchObject({ kind: 'cdc', slot: 'shared' });
+    // the draft still remembers it, and what is saved does not claim it
+    expect(buildInput(shared, ctx({ sourceEngine: 'mysql' })).trigger).toMatchObject({ slot: 'own' });
+    expect(buildInput(shared, ctx()).trigger).toMatchObject({ slot: 'own' });
+
+    const loaded = loadBridge(httpBridge({ trigger: { kind: 'cdc', operations: ['insert'], startFrom: 'now', slot: 'shared' } }));
+    expect(loaded.cdcSlot).toBe('shared');
+    expect(buildInput(loaded, ctx({ sourceEngine: 'postgres' })).trigger).toMatchObject({ slot: 'shared' });
+    // saved before there was a choice: a slot of its own, as it has
+    expect(loadBridge(httpBridge({ trigger: { kind: 'cdc', operations: ['insert'], startFrom: 'now' } as never })).cdcSlot).toBe('own');
+  });
+
+  it('choosing another slot asks the server again: what it said was about the other one', () => {
+    const d = { ...readyDraft(), readiness: { ready: true } as never };
+    expect(builderReducer(d, { type: 'setCdcSlot', slot: 'shared' }).readiness).toBeNull();
   });
 
   it('round-trips a loaded bridge back into an equivalent save payload', () => {

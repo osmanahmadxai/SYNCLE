@@ -164,6 +164,11 @@ export interface BuilderDraft {
    */
   cdcStartFrom: 'now' | 'beginning';
   /**
+   * PostgreSQL only: a replication slot of the bridge's own, or the one every
+   * shared bridge on the same connection and database reads through
+   */
+  cdcSlot: 'own' | 'shared';
+  /**
    * a one-time bridge that runs by itself: a cron line, the zone it is meant
    * in, and whether it is on. null = only when somebody presses Run
    */
@@ -243,6 +248,7 @@ export function initialDraft(
     pollSeconds: Math.max(1, Math.round(defaults.pollIntervalMs / 1000)),
     watchStartFrom: 'now',
     cdcStartFrom: 'now',
+    cdcSlot: 'own',
     schedule: null,
     maxPerPoll: defaults.maxPerPoll,
     snapshotMaxTracked: 50_000,
@@ -299,6 +305,7 @@ export type BuilderAction =
   | { type: 'setPollSeconds'; seconds: number }
   | { type: 'setWatchStartFrom'; startFrom: 'now' | 'beginning' }
   | { type: 'setCdcStartFrom'; startFrom: 'now' | 'beginning' }
+  | { type: 'setCdcSlot'; slot: 'own' | 'shared' }
   | { type: 'toggleCdcOp'; op: CdcOp }
   | { type: 'setReadiness'; readiness: CdcReadiness | null }
   | { type: 'setCheckingCdc'; checking: boolean }
@@ -428,6 +435,9 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, watchStartFrom: action.startFrom };
     case 'setCdcStartFrom':
       return { ...d, cdcStartFrom: action.startFrom };
+    case 'setCdcSlot':
+      // what the server was asked about is no longer what will be set up
+      return { ...d, cdcSlot: action.slot, readiness: null };
     case 'setSchedule':
       return { ...d, schedule: action.schedule };
     case 'patchSchedule':

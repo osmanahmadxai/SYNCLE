@@ -406,6 +406,29 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Many tables, one PostgreSQL replication slot.** A CDC bridge can read
+  through a slot it shares with every other shared bridge on the same
+  connection and database (`trigger.slot: "shared"`; *Replication slot* in the
+  builder) instead of costing the source a slot, a WAL sender and a decoding of
+  its own — a server allows ten of each by default.
+  - The slot is confirmed only as far as the slowest member has got, stopped
+    members included (their positions are kept in the metadata store), so a
+    member that comes back misses nothing; the others drop what is sent again.
+  - A member joins behind a barrier: the join waits for the transactions that
+    were open when its table was published, so that nothing falls between its
+    copy and its stream (`SYNCLE_SHARED_SLOT_JOIN_WAIT_MS`).
+  - One publication per set of operations, all made before the slot: an
+    insert-only bridge never makes PostgreSQL refuse UPDATEs on a table because
+    another bridge publishes updates, and no publication is ever younger than a
+    change the slot still has to decode.
+  - Source hold, alerts and the WAL guard work per member; the last member to
+    go takes the slot with it; switching an existing bridge releases what it
+    had and says on its timeline what that means.
+- **Bridge many tables at once.** *Bridge many tables* in the bridge list
+  (`POST /api/bridges/bulk`): one ordinary bridge per ticked table, copied as
+  it is into a same-named (optionally prefixed) table, keyed by its primary
+  key. Tables that cannot have one say why. Nothing is started for you.
+
 - **Verify and reconcile.** Is the destination the copy of the source? Every
   delivery can be green and the answer still be no: a row edited by hand at the
   destination, a delete made while the bridge was stopped, a restored backup.

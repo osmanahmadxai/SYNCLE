@@ -266,6 +266,76 @@ export default function Page() {
         none left.
       </p>
 
+      <h4 id="shared-slot">Many tables, one slot</h4>
+      <p>
+        Thirty tables as thirty bridges are thirty slots, thirty WAL senders
+        and thirty decodings of the same WAL — on a server that allows ten of
+        each by default. A bridge whose <em>Replication slot</em> is set to{' '}
+        <em>Shared</em> (<code>{'trigger.slot: "shared"'}</code>) reads instead
+        through one slot per source connection and database, which every shared
+        bridge there uses: one connection, one decoding, each change handed to
+        the bridges whose table it belongs to. They stay ordinary bridges —
+        their own filters, transforms, targets, dead letters, schedule of
+        verifications — and <em>Bridge many tables</em> in the bridge list
+        (<code>POST /api/bridges/bulk</code>) makes one per table in a single
+        step.
+      </p>
+      <ul>
+        <li>
+          <strong>The slot is confirmed as far as the slowest member has got</strong>{' '}
+          — also a member that is stopped. That is what lets a member that
+          comes back find everything it missed; it is also why a member left
+          stopped holds WAL for all of them. Each member&apos;s page shows what{' '}
+          <em>it</em> still has to read, the alert and the{' '}
+          <code>SYNCLE_SLOT_MAX_BYTES</code> guard work per member (the guard
+          gives up that member&apos;s place, not the slot), and when a member
+          starts or resumes the stream restarts from the slowest position: the
+          others are sent what they have had again, and drop it.
+        </li>
+        <li>
+          <strong>A member joins behind a barrier.</strong> Adding a table to a
+          slot that already exists has no consistent starting point of its
+          own: a transaction that changed the table before it was published and
+          commits afterwards would be neither in the copy nor in the stream. So
+          the join waits for the transactions that were open at that moment to
+          end (<code>SYNCLE_SHARED_SLOT_JOIN_WAIT_MS</code>, default 60 s) and
+          only then takes its position. A transaction that never ends fails
+          the start with its pid, user and application name instead.
+        </li>
+        <li>
+          <strong>One member&apos;s operations are never imposed on another&apos;s table.</strong>{' '}
+          A publication that publishes updates makes PostgreSQL refuse{' '}
+          <code>UPDATE</code>s on a table without a replica identity, whoever
+          reads them. The shared slot has one publication per set of
+          operations (<code>syncle_sp_…_i</code>, <code>…_iud</code>, …), all
+          created before the slot, and a table is only ever in the ones its own
+          bridges ask for. Do not drop them: PostgreSQL fails the whole stream
+          for a publication that is missing <em>as of the change it is
+          decoding</em>, which is also why they are never created later.
+        </li>
+        <li>
+          <strong>Members advance together.</strong> The stream waits for each
+          delivery, so a member with a slow destination slows the others; with{' '}
+          <code>SYNCLE_CDC_SPOOL=on</code> reading and delivering are decoupled.
+          A member that fails stops by itself; the rest carry on.
+        </li>
+        <li>
+          <strong>Changing the setting on an existing bridge</strong> releases
+          what it had at once, and the bridge follows from its new place (or
+          copies again, if that is how it starts): a position in one slot means
+          nothing in another. The timeline says so, and{' '}
+          <a href="/docs/bridges#verify">reconcile</a> closes the gap.
+        </li>
+      </ul>
+      <p>
+        The last member to be deleted takes the slot and its publications with
+        it. To look from the server&apos;s side:{' '}
+        <code>
+          SELECT slot_name, active, confirmed_flush_lsn FROM
+          pg_replication_slots WHERE slot_name LIKE &apos;syncle_shared_%&apos;;
+        </code>
+      </p>
+
       <h4 id="position-lost">When a bridge&apos;s place in the log is gone</h4>
       <p>
         A bridge resumes from a position in the source&apos;s change log, and
