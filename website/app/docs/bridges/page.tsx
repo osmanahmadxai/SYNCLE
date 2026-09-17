@@ -150,10 +150,13 @@ export default function Page() {
               </td>
               <td>new rows, plus updates when the column is bumped</td>
               <td>
-                polls <code>{'col >= cursor'}</code> with boundary-key dedupe,
-                and re-scans a <code>lookbackMs</code> window (default 3000
-                ms) behind the cursor so late-committing transactions are not
-                lost
+                polls <code>{'col >= cursor'}</code> and re-scans a{' '}
+                <code>lookbackMs</code> window (default 3000 ms) behind the
+                cursor so late-committing transactions are not lost. What it
+                has already sent is remembered by key <em>and</em> timestamp,
+                so re-reading the window sends nothing twice — and the same
+                row with a later timestamp is a change, however soon after the
+                last one
               </td>
             </tr>
             <tr>

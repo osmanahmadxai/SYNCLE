@@ -391,6 +391,18 @@ can no longer lose a row to a failed delivery.
   unchanged forgets a column the bridge still uses. The same goes for a column
   an HTTP payload pins or names in its template, a filter, a sort, a transform
   or a watch column. See *Added* for the setting that governs it.
+- **A polling bridge on an `updated_at` column lost updates.** The `timestamp`
+  strategy re-reads the rows at its cursor's boundary on every poll, and knew
+  which of them it had already sent by their primary key alone. When one of
+  those rows — the most recently changed rows of the table — was changed
+  *again*, the poll that fetched it took it for a duplicate and then moved the
+  cursor past it: the update was never delivered, no error, nothing to retry.
+  An order marked `paid` and then `shipped` stayed `paid` at the destination.
+  With the default 3-second lookback the same happened to any row changed twice
+  within the window, and on a table where the same few rows keep changing it was
+  most updates. Rows are now remembered by key *and* the timestamp they carried;
+  cursors saved by earlier versions are still read, without re-sending anything.
+  (`increment` and `snapshot` are insert-only by design, as documented.)
 
 ### Added
 

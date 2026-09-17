@@ -17,6 +17,7 @@ import {
   BadRequestError,
   ConflictError,
   advanceCursor,
+  emittedKey,
   emptyCursor,
   rowKey,
   watchQuery,
@@ -548,7 +549,8 @@ export class BridgeWatchService implements OnModuleInit {
             offset,
           }),
         );
-        boundaryKeys.push(...at.rows.map((r) => rowKey(r, pk.length ? pk : at.primaryKey)));
+        // (with the timestamp each row carries NOW: the same row with a later one is a change)
+        boundaryKeys.push(...at.rows.map((r) => emittedKey(r, pk.length ? pk : at.primaryKey, strategy.column)));
         if (at.rows.length < 1000) break;
       }
       return {
