@@ -439,6 +439,11 @@ can no longer lose a row to a failed delivery.
   transaction, not while the client still holds data it has not handed over —
   which is what PostgreSQL's own subscribers do. Members of a shared slot move
   the same way; one that is stopped still holds it.
+- **Every save of a bridge put a 404 in the browser's console.** The plan of a
+  bridge that has not run yet (its draft job) was deleted and made again under
+  a new id on each save, and the page that had just saved it asked once more
+  for the deliveries of the run it knew. The draft is now refreshed in place;
+  leftover duplicates become one.
 - **A bridge from Redis to Redis turned every hash, list, set and sorted set
   into the text `[object Object]`** (or a comma-joined string): the destination
   only ever did `SET key String(value)`. A row read from Redis says what kind of

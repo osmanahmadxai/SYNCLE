@@ -433,15 +433,35 @@ export class BridgeJobService implements OnModuleInit {
     });
     if (active) return null;
 
-    const { count } = await this.prisma.bridgeJob.deleteMany({
+    const drafts = await this.prisma.bridgeJob.findMany({
       where: { bridgeId, status: 'draft' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
     });
     // on update we only refresh a draft that already existed, never add a fresh
     // draft to a bridge that has already been run
-    if (opts.onlyExisting && count === 0) return null;
+    if (opts.onlyExisting && drafts.length === 0) return null;
 
     const snapshotJson = await this.store.snapshotJson(bridgeId);
     const total = await this.computeTotal(snapshotJson, bridgeId).catch(() => null);
+    // the draft is refreshed IN PLACE. it used to be deleted and made again
+    // under a new id, and the page that was open on the bridge — which had just
+    // saved it — asked once more for the deliveries of the run that was gone:
+    // a 404 in the browser's console on every save
+    const [keep, ...extra] = drafts;
+    if (extra.length > 0) {
+      await this.prisma.bridgeJob.deleteMany({ where: { id: { in: extra.map((d) => d.id) } } });
+    }
+    if (keep) {
+      // (`updateMany` on the status too: a draft that was STARTED in the
+      // meantime is a run now, and is not turned back into a plan)
+      const { count } = await this.prisma.bridgeJob.updateMany({
+        where: { id: keep.id, status: 'draft' },
+        data: { configSnapshotJson: snapshotJson, totalCount: total, startedAt: new Date() },
+      });
+      if (count === 0) return null;
+      return this.toJob(await this.getJobRow(keep.id));
+    }
     const row = await this.prisma.bridgeJob.create({
       data: {
         id: randomUUID(),
