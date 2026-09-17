@@ -268,6 +268,13 @@ can no longer lose a row to a failed delivery.
   not report a truncate as a change, asking for it is refused at start.
 - The CDC readiness check shows which columns the table identifies rows by, and
   warns about tables that can only report inserts.
+- **A running instance can say which version it is**: `GET /api/version`, and
+  the bottom of the Settings dialog. The release build bakes the tag into the
+  image (`SYNCLE_VERSION`), and a source checkout reads its package.json — which
+  had said 1.0.0 (0.1.0 for the API) through 1.1, 1.2 and 1.3. Every package now
+  carries the release version, and a test fails when they disagree or fall
+  behind the changelog. `SECURITY.md` no longer describes the project as
+  pre-1.0.
 - **Source hold**: what a CDC bridge is keeping on its source, in the job view
   and at `GET /api/bridges/:id/source-hold` — for PostgreSQL the WAL pinned by
   its slot, the server's limit, and whether the slot is healthy, at risk or

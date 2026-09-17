@@ -13,6 +13,7 @@ import {
   useAuthStatus,
   useChangePassword,
   useSettings,
+  useVersion,
   useUpdateSettings,
 } from '@/lib/queries';
 import { Button } from '@/components/ui/button';
@@ -55,6 +56,7 @@ export function SettingsDialog({
 }) {
   const { data: status } = useAuthStatus();
   const { data: settings } = useSettings();
+  const { data: version } = useVersion();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,6 +98,15 @@ export function SettingsDialog({
             </div>
           )}
         </Tabs>
+
+        {/* the first thing a bug report gets asked, and nothing could answer it */}
+        {version && (
+          <p className="text-muted-foreground border-t pt-2 text-[11px]">
+            Syncle {version.version}
+            <span className="mx-1.5 opacity-40">·</span>
+            Node {version.node}
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );

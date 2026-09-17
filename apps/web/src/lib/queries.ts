@@ -24,6 +24,7 @@ import { useStudio } from './store';
 export const queryKeys = {
   authStatus: ['auth', 'status'] as const,
   settings: ['settings'] as const,
+  version: ['version'] as const,
   drivers: ['drivers'] as const,
   workspaces: ['workspaces'] as const,
   connections: ['connections'] as const,
@@ -96,6 +97,16 @@ export function useSettings() {
   return useQuery({
     queryKey: queryKeys.settings,
     queryFn: () => api.getSettings(),
+  });
+}
+
+/** the running API's version. it cannot change without a restart */
+export function useVersion() {
+  return useQuery({
+    queryKey: queryKeys.version,
+    queryFn: () => api.getVersion(),
+    staleTime: Infinity,
+    retry: false,
   });
 }
 

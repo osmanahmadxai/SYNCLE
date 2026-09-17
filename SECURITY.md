@@ -2,8 +2,11 @@
 
 ## Supported versions
 
-Syncle is pre-1.0 and moves fast; security fixes land on `main` and the
-latest release only.
+Security fixes land on `main` and in the latest release only; there are no
+maintenance branches for older versions. To see which version you are running,
+open Settings (the version is at the bottom of the dialog) or call
+`GET /api/version`; `syncle update` moves a Docker install to the latest
+release.
 
 | Version | Supported |
 | ------- | --------- |

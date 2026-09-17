@@ -25,6 +25,7 @@ const NOT_PASSED_THROUGH = new Set([
   'SYNCLE_MASTER_KEY', // passed through, under its own comment
   'WEB_PORT', // only used to print a localhost URL in development
   'SYNCLE_HOOK_CONCURRENCY', // the pre-rename name of SYNCLE_JOB_CONCURRENCY
+  'SYNCLE_VERSION', // baked into the image by its build; not something to set
 ]);
 
 function sourceFiles(dir: string): string[] {

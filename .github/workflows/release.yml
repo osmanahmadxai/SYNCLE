@@ -71,6 +71,9 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          # so a running container can say which release it is
+          build-args: |
+            SYNCLE_VERSION=${{ github.ref_name }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}

@@ -69,6 +69,11 @@ RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api \
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
+# what this image is. passed by the release workflow (the tag it was built
+# from); a local build leaves it empty and the API falls back to its
+# package.json. see apps/api/src/common/version.ts
+ARG SYNCLE_VERSION=
+ENV SYNCLE_VERSION=$SYNCLE_VERSION
 WORKDIR /app
 
 # openssl for Prisma's engines; nothing else from the build toolchain.

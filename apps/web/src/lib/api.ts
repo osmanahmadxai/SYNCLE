@@ -119,6 +119,11 @@ export const api = {
 
   /* ----- app settings ----- */
   getSettings: () => request<AppSettings>('/settings'),
+  /** which release the API is; `source` says whether the image or the package said so */
+  getVersion: () =>
+    request<{ version: string; source: 'build' | 'package'; node: string }>(
+      '/version',
+    ),
   updateSettings: (input: AppSettingsDTO) =>
     request<AppSettings>('/settings', { method: 'PUT', ...jsonBody(input) }),
 

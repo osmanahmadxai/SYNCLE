@@ -150,6 +150,16 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         Everything else answers 401.
       </Note>
       <p>
+        <code>GET /api/version</code> says which release is running —{' '}
+        <code>{'{ version, source, node }'}</code>, where <code>source</code>{' '}
+        is <code>build</code> when the container image carried the version of
+        the release tag it was built from, and <code>package</code> for a
+        source checkout. It is behind the login on purpose: the public health
+        probe says nothing beyond &quot;up&quot;, and a version number is what
+        someone scanning for a known flaw wants to read without asking. The
+        same line is at the bottom of the Settings dialog.
+      </p>
+      <p>
         Repeated failed logins lock the account out per IP and username and
         answer 429 with code <code>RATE_LIMITED</code>; setup attempts are
         limited per IP. Changing the password invalidates every outstanding
