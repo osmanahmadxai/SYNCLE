@@ -173,3 +173,29 @@ export function sameValue(a: unknown, b: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * has the replication client handed over everything it has received?
+ *
+ * with flow control on, the client QUEUES data messages and works through them
+ * one at a time — but emits a keepalive the moment it arrives, also while data
+ * that arrived before it is still waiting in that queue. a keepalive's position
+ * may only be treated as "everything before this has been seen" when the queue
+ * is empty and nothing is being handled.
+ *
+ * these are the client's internals (pg-logical-replication 2.5). if a later
+ * version names them differently this answers "no", which is always safe: the
+ * keepalive is then answered the way it used to be, and a test says so.
+ */
+export function clientIsDrained(service: unknown): boolean {
+  const s = service as {
+    _messageQueue?: unknown;
+    _processing?: unknown;
+  } | null;
+  return (
+    !!s &&
+    Array.isArray(s._messageQueue) &&
+    s._messageQueue.length === 0 &&
+    s._processing === false
+  );
+}

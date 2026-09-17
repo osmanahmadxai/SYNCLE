@@ -66,6 +66,7 @@ import {
   type CdcStreamHandle,
 } from '../cdc-provider';
 import {
+  clientIsDrained,
   lsnAfter,
   lsnForClient,
   normalizeLsn,
@@ -85,6 +86,8 @@ interface Member {
   handlers: CdcStreamContext['handlers'];
   /** the highest cursor handed to this member: anything at or before it has been had */
   highest: string | null;
+  /** the highest cursor the member has confirmed back as durable. caught up with `highest` = nothing of its is in flight */
+  acked: string | null;
   /** the WAL position up to which this member has everything durably (H/L) */
   confirmed: string;
   persistedAt: number;
@@ -219,6 +222,7 @@ class SharedStream {
 
   async ack(member: Member, cursor: string): Promise<void> {
     // a position INSIDE a transaction confirms nothing (see the provider's own `ack`)
+    if (!member.acked || lsnAfter(cursor, member.acked)) member.acked = cursor;
     const confirmed = parsePgCursor(cursor)?.ack;
     if (!confirmed) return;
     member.confirmed = lsnMax(member.confirmed, confirmed);
@@ -292,7 +296,9 @@ class SharedStream {
       }
     };
 
+    let handling = 0;
     service.on('data', (lsn: string, msg: PgMessage) => {
+      handling++;
       const work = (async () => {
         if (generation !== this.generation) return; // a reader that has been replaced
         this.attempt = 0;
@@ -403,15 +409,43 @@ class SharedStream {
             : (m.handlers.onSkip?.(cursor) ?? Promise.resolve()),
         );
       })();
-      this.inflight = work.catch(() => undefined);
+      this.inflight = work.catch(() => undefined).finally(() => handling--);
       return work;
     });
 
-    // an idle stream is answered with what may be confirmed, or the server's timeout ends it
+    // an idle stream is answered with what may be confirmed, or the server's
+    // timeout ends it. and when a running member has NOTHING in flight, the
+    // position the keepalive reports is what it has got to: PostgreSQL 15+ does
+    // not send transactions that touch nothing published, so members on quiet
+    // tables would otherwise hold the slot — and every byte of WAL the rest of
+    // the database writes — where their last change left it (see the provider's
+    // own keepalive for why that position is safe to confirm)
     service.on(
       'heartbeat',
-      (_lsn: string, _ts: number, shouldRespond: boolean) => {
-        if (shouldRespond && generation === this.generation) this.confirm();
+      (lsn: string, _ts: number, shouldRespond: boolean) => {
+        if (generation !== this.generation) return;
+        let moved = false;
+        if (handling === 0 && txn === null && clientIsDrained(service)) {
+          const reported = normalizeLsn(lsn);
+          for (const member of this.members.values()) {
+            // (one that joined after this reader began has not been read for yet)
+            if (member.since > generation) continue;
+            const idle =
+              member.highest === null ||
+              (member.acked !== null &&
+                !lsnAfter(member.highest, member.acked));
+            if (
+              !idle ||
+              !parsePgCursor(reported) ||
+              lsnMax(member.confirmed, reported) === member.confirmed
+            )
+              continue;
+            member.confirmed = reported;
+            moved = true;
+            void this.owner.persist(member, false);
+          }
+        }
+        if (shouldRespond || moved) this.confirm();
       },
     );
     service.on('error', (err: Error) => {
@@ -840,6 +874,8 @@ export class PgSharedSlotService {
         handlers,
         // what it has had: its saved cursor, or — never having read — everything before it joined
         highest: ctx.fromCursor ?? row.confirmedLsn,
+        // …all of which is durable: that is what a saved cursor is
+        acked: ctx.fromCursor ?? row.confirmedLsn,
         confirmed: row.confirmedLsn,
         persistedAt: 0,
         since: 0,

@@ -31,10 +31,16 @@ const fake = vi.hoisted(() => {
     client: null as null | {
       listeners(event: string): Listener[];
       emit(event: string, ...args: unknown[]): void;
+      _messageQueue?: unknown[];
+      _processing?: boolean;
     },
   };
   class FakeService {
     private readonly handlers = new Map<string, Listener[]>();
+    // the real client's flow-control internals: data it has received and not
+    // yet handed over. a keepalive is only believed when there is none
+    _messageQueue: unknown[] = [];
+    _processing = false;
     constructor() {
       state.client = this;
     }
@@ -249,15 +255,17 @@ describe('postgres stream acknowledgements', () => {
     await handle.stop();
   });
 
-  it('resumes answering from the saved cursor', async () => {
+  it('resumes answering from the saved cursor while the client still has data to hand over', async () => {
     const handle = await start({}, { fromCursor: '0/38#c:0/40' });
+    fake.state.client!._messageQueue = [{ lsn: '0/58' }];
     fake.state.client!.emit('heartbeat', '0/60', Date.now(), true);
     expect(acknowledged).toEqual(['0/3F']);
     await handle.stop();
   });
 
-  it('a cursor saved mid-transaction has nothing to answer with', async () => {
+  it('a cursor saved mid-transaction has nothing to answer with while data is waiting', async () => {
     const handle = await start({}, { fromCursor: '0/38#0/20.0' });
+    fake.state.client!._messageQueue = [{ lsn: '0/58' }];
     fake.state.client!.emit('heartbeat', '0/60', Date.now(), true);
     expect(acknowledged).toEqual([]);
     await handle.stop();
@@ -269,6 +277,106 @@ describe('postgres stream acknowledgements', () => {
     // holding WAL a little longer is recoverable; confirming too far is not
     expect(acknowledged).toEqual([]);
     await handle.stop();
+  });
+});
+
+describe('a quiet table in a busy database', () => {
+  // PostgreSQL 15+ does not send transactions that touch nothing published. a
+  // bridge on a quiet table is sent keepalives and nothing else; answering them
+  // with its last delivery, it never let the slot move, and the server kept all
+  // the WAL the rest of the database wrote for as long as the bridge ran
+  const beat = (lsn: string, shouldRespond = true) =>
+    fake.state.client!.emit('heartbeat', lsn, Date.now(), shouldRespond);
+
+  it('with nothing in flight, a keepalive is answered with the position IT reports', async () => {
+    const handle = await start({ onSkip: async () => undefined });
+    beat('0/60');
+    expect(acknowledged).toEqual(['0/5F']);
+    beat('0/9000');
+    expect(acknowledged).toEqual(['0/5F', '0/8FFF']);
+    // …also when the server did not ask: it is what lets it discard WAL
+    beat('0/A000', false);
+    expect(acknowledged.at(-1)).toBe('0/9FFF');
+    await handle.stop();
+  });
+
+  it('a change that has been handed over and not confirmed back holds the position where it was', async () => {
+    const handle = await start({
+      onChange: async () => undefined,
+      onSkip: async () => undefined,
+    });
+    await emit('0/10', begin('0/48'));
+    await emit('0/20', { tag: 'insert', relation, new: { id: 1 } });
+    beat('0/60'); // in the middle of a transaction
+    expect(acknowledged).toEqual([]);
+    await emit('0/50', commit('0/48', '0/50'));
+    beat('0/60'); // decoded to its end, and not yet durable downstream
+    expect(acknowledged).toEqual([]);
+
+    await handle.ack!('0/48#0/20.0'); // the row is durable; the end of its transaction is not confirmed yet
+    beat('0/60');
+    expect(acknowledged).toEqual([]);
+
+    await handle.ack!('0/48#c:0/50');
+    expect(acknowledged).toEqual(['0/4F']);
+    beat('0/60'); // now everything handed over has come back
+    expect(acknowledged).toEqual(['0/4F', '0/5F']);
+    await handle.stop();
+  });
+
+  it('data the client has received and not yet handed over counts as in flight', async () => {
+    const handle = await start({});
+    fake.state.client!._messageQueue = [{ lsn: '0/58' }];
+    beat('0/60');
+    expect(acknowledged).toEqual([]);
+    fake.state.client!._messageQueue = [];
+    fake.state.client!._processing = true;
+    beat('0/60');
+    expect(acknowledged).toEqual([]);
+    fake.state.client!._processing = false;
+    beat('0/60');
+    expect(acknowledged).toEqual(['0/5F']);
+    await handle.stop();
+  });
+
+  it('a confirmation that arrives late never moves the position BACK', async () => {
+    const handle = await start({ onSkip: async () => undefined });
+    await emit('0/50', commit('0/48', '0/50'));
+    await handle.ack!('0/48#c:0/50');
+    beat('0/9000');
+    expect(acknowledged).toEqual(['0/4F', '0/8FFF']);
+    await handle.ack!('0/48#c:0/50'); // told again
+    beat('0/9000');
+    expect(acknowledged).toEqual(['0/4F', '0/8FFF', '0/8FFF']);
+    await handle.stop();
+  });
+
+  it('a client whose internals cannot be read is never believed to be idle: the old, safe answer', async () => {
+    const handle = await start({}, { fromCursor: '0/38#c:0/40' });
+    delete fake.state.client!._messageQueue;
+    beat('0/9000');
+    expect(acknowledged).toEqual(['0/3F']);
+    await handle.stop();
+  });
+
+  it('the installed client HAS the internals this relies on', async () => {
+    const real = await vi.importActual<{
+      LogicalReplicationService: new (
+        c: unknown,
+        o: unknown,
+      ) => Record<string, unknown>;
+    }>('pg-logical-replication');
+    const service = new real.LogicalReplicationService(
+      {},
+      {
+        acknowledge: { auto: false, timeoutSeconds: 0 },
+        flowControl: { enabled: true },
+      },
+    );
+    // renamed in an upgrade? then keepalives are answered the old way again, and a
+    // quiet table pins WAL again: this is where that is found out
+    expect(Array.isArray(service._messageQueue)).toBe(true);
+    expect(service._processing).toBe(false);
   });
 });
 

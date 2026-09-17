@@ -23,7 +23,7 @@ import {
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { nodeTlsOptions, withDatabase } from '@syncle/core/adapters';
 import { AdapterPoolService } from '../../../connections/adapter-pool.service';
-import { lsnAfter, lsnForClient, normalizeLsn, parsePgCursor, present, sameValue, withUnchanged } from './postgres-lsn';
+import { clientIsDrained, lsnAfter, lsnForClient, normalizeLsn, parsePgCursor, present, sameValue, withUnchanged } from './postgres-lsn';
 import { PgSharedSlotService } from './postgres-shared-slot';
 import type { ResolvedBridge } from '../../bridges.types';
 import {
@@ -47,6 +47,18 @@ export {
   withUnchanged,
   type PgPosition,
 } from './postgres-lsn';
+
+/** one decoded pgoutput message, as far as it is looked at */
+interface PgMessage {
+  tag: string;
+  commitLsn?: string;
+  commitEndLsn?: string;
+  relation?: { name: string; schema: string; keyColumns?: string[] };
+  relations?: Array<{ name: string; schema: string } | undefined>;
+  new?: Record<string, unknown>;
+  old?: Record<string, unknown> | null;
+  key?: Record<string, unknown> | null;
+}
 
 /** what identifies a row in the table's change messages */
 export interface ReplicaIdentity {
@@ -607,6 +619,12 @@ export class PostgresCdcProvider implements CdcProvider {
     // change position handed out with how many changes have shared it. every
     // change's cursor is derived from these
     let txn: { commit: string; lsn: string; shared: number } | null = null;
+    // what has been handed to the orchestrator, and what it has confirmed back:
+    // when the second has caught up with the first (and no transaction is being
+    // decoded), NOTHING of this bridge's is in flight — see the keepalive below
+    let handed: string | null = null;
+    let confirmedCursor: string | null = ctx.fromCursor;
+    let handling = 0;
     // surface each distinct failure ONCE (a slot already in use, bad auth, …)
     // instead of spamming onError on every backoff retry
     let lastReported: string | null = null;
@@ -638,27 +656,17 @@ export class PostgresCdcProvider implements CdcProvider {
       // position past its own transaction's undelivered rows: a failed delivery
       // or a crash then had nothing left to re-read. the orchestrator is told
       // instead, and confirms the position once everything before it is durable
-      const skip = (lsn: string): Promise<void> =>
-        handlers.onSkip ? handlers.onSkip(lsn) : Promise.resolve();
+      const skip = (lsn: string): Promise<void> => {
+        if (!handlers.onSkip) return Promise.resolve();
+        handed = lsn;
+        return handlers.onSkip(lsn);
+      };
+      const hand = (c: CdcChange): Promise<void> => {
+        handed = c.cursor;
+        return handlers.onChange(c);
+      };
 
-      service.on(
-        'data',
-        async (
-          lsn: string,
-          msg: {
-            tag: string;
-            commitLsn?: string;
-            commitEndLsn?: string;
-            relation?: { name: string; schema: string; keyColumns?: string[] };
-            relations?: Array<{ name: string; schema: string } | undefined>;
-            new?: Record<string, unknown>;
-            old?: Record<string, unknown> | null;
-            key?: Record<string, unknown> | null;
-          },
-        ) => {
-          // data is flowing, so the subscription is healthy: reset the backoff
-          attempt = 0;
-          lastReported = null;
+      const decode = async (lsn: string, msg: PgMessage): Promise<void> => {
 
           if (msg.tag === 'begin') {
             txn = msg.commitLsn ? { commit: normalizeLsn(msg.commitLsn), lsn: '', shared: 0 } : null;
@@ -688,16 +696,18 @@ export class PostgresCdcProvider implements CdcProvider {
             );
             if (!ours) return void (await skip(at()));
             if (ops.has('truncate')) {
-              await handlers.onChange({ op: 'truncate', row: {}, cursor: at() });
+              await hand({ op: 'truncate', row: {}, cursor: at() });
             } else if (handlers.onNotice) {
               // emptying someone's destination is not something to do on a
               // default. but a destination that has silently stopped matching
               // its source is not acceptable either: say so, on the timeline
+              const noticed = at();
+              handed = noticed;
               await handlers.onNotice(
                 `${schema}.${src.table} was TRUNCATEd at the source. That was not applied to the destination, ` +
                   'which still holds the rows: this bridge does not capture truncates. ' +
                   'Add "truncate" to its operations to mirror them.',
-                at(),
+                noticed,
               );
             } else {
               await skip(at());
@@ -719,7 +729,7 @@ export class PostgresCdcProvider implements CdcProvider {
             return;
           }
           if (msg.tag === 'delete') {
-            await handlers.onChange({ op: 'delete', row: present(msg.old ?? msg.key ?? {}), cursor: at() });
+            await hand({ op: 'delete', row: present(msg.old ?? msg.key ?? {}), cursor: at() });
             return;
           }
 
@@ -735,7 +745,7 @@ export class PostgresCdcProvider implements CdcProvider {
               !!before &&
               identityColumns.some((c) => before[c] !== undefined && !sameValue(before[c], msg.new?.[c]));
             if (moved) {
-              await handlers.onChange({ op: 'delete', row: present(before), cursor: at() });
+              await hand({ op: 'delete', row: present(before), cursor: at() });
               keyChanged = true;
             }
           }
@@ -746,16 +756,53 @@ export class PostgresCdcProvider implements CdcProvider {
             cursor: at(),
             ...(keyChanged ? { keyChanged } : {}),
           };
-          await handlers.onChange(change);
+          await hand(change);
+      };
+
+      service.on(
+        'data',
+        async (lsn: string, msg: PgMessage) => {
+          // data is flowing, so the subscription is healthy: reset the backoff
+          attempt = 0;
+          lastReported = null;
+          handling++;
+          try {
+            await decode(lsn, msg);
+          } finally {
+            handling--;
+          }
         },
       );
 
       // with the ack timer off, keepalive replies are our only standby-status
       // traffic. reply with the last PERSISTED position (the server ignores
       // stale ones) or wal_sender_timeout would kill an idle stream
-      service.on('heartbeat', (_lsn: string, _ts: number, shouldRespond: boolean) => {
+      //
+      // …and when NOTHING of this bridge's is in flight, with the position the
+      // keepalive itself reports: how far the server has decoded. PostgreSQL 15+
+      // no longer sends transactions that touch nothing published, so a bridge
+      // on a quiet table in a busy database is sent nothing but keepalives —
+      // and, answering them with its last delivery, never let the slot move:
+      // the server kept every byte of WAL the REST of the database wrote, for as
+      // long as the bridge ran (measured: 20 MB behind after 40 transactions on
+      // another table). everything that commits before that position has been
+      // sent by the time the keepalive is, so with nothing received and not yet
+      // confirmed, the position is safe to confirm — which is what PostgreSQL's
+      // own subscribers answer. a transaction still open then commits AFTER it,
+      // and is sent whole
+      service.on('heartbeat', (lsn: string, _ts: number, shouldRespond: boolean) => {
+        const idle =
+          handling === 0 &&
+          txn === null &&
+          clientIsDrained(service) &&
+          (handed === null || (confirmedCursor !== null && !lsnAfter(handed, confirmedCursor)));
+        if (idle) {
+          const reported = normalizeLsn(lsn);
+          if (parsePgCursor(reported) && (!ackedLsn || lsnAfter(reported, ackedLsn))) ackedLsn = reported;
+        }
         const at = ackedLsn && lsnForClient(ackedLsn);
-        if (shouldRespond && at) void service.acknowledge(at).catch(() => undefined);
+        // (an idle position is worth telling the server unasked: it is what lets it discard WAL)
+        if ((shouldRespond || idle) && at) void service.acknowledge(at).catch(() => undefined);
       });
 
       service.on('error', (err: Error) => report(err));
@@ -794,9 +841,12 @@ export class PostgresCdcProvider implements CdcProvider {
         // be told "everything up to here is safe" at a transaction's end. after
         // a restart it re-sends the unfinished transaction whole, and the
         // watermark drops the changes already delivered
+        if (!confirmedCursor || lsnAfter(cursor, confirmedCursor)) confirmedCursor = cursor;
         const confirm = parsePgCursor(cursor)?.ack;
         const at = confirm && lsnForClient(confirm);
         if (!confirm || !at) return;
+        // (a keepalive may have carried the position further than a transaction's end already)
+        if (ackedLsn && !lsnAfter(confirm, ackedLsn)) return;
         ackedLsn = confirm;
         await current?.acknowledge(at).catch(() => undefined);
       },

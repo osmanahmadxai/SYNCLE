@@ -403,6 +403,19 @@ can no longer lose a row to a failed delivery.
   most updates. Rows are now remembered by key *and* the timestamp they carried;
   cursors saved by earlier versions are still read, without re-sending anything.
   (`increment` and `snapshot` are insert-only by design, as documented.)
+- **A running PostgreSQL bridge on a quiet table made its source keep the whole
+  database's WAL.** PostgreSQL 15 and later do not send a subscriber the
+  transactions that touch nothing it publishes — only keepalives. Syncle
+  answered those with the position of its last delivery, so on a table that
+  rarely changes the slot never moved, and the server kept every byte the
+  *other* tables wrote: healthy bridge, nothing to read, disk filling (or, with
+  `max_slot_wal_keep_size`, the slot invalidated and the bridge's place lost).
+  Measured: forty transactions on another table, slot 20 MB behind, for good.
+  A keepalive is now answered with the position the server reports whenever
+  nothing the bridge has received is still undelivered — not in the middle of a
+  transaction, not while the client still holds data it has not handed over —
+  which is what PostgreSQL's own subscribers do. Members of a shared slot move
+  the same way; one that is stopped still holds it.
 
 ### Added
 

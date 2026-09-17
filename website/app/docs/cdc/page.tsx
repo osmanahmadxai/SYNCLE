@@ -266,6 +266,18 @@ export default function Page() {
         none left.
       </p>
 
+      <p>
+        A bridge that is running and has caught up holds next to nothing, also
+        when its own table is quiet and the rest of the database is not:
+        PostgreSQL 15 and later send a subscriber nothing for transactions that
+        touch no published table, only keepalives, and Syncle answers those
+        with the position the server reports whenever nothing it has received
+        is still undelivered — as PostgreSQL&apos;s own subscribers do. (Versions
+        up to 1.3 answered with their last delivery, and a bridge on a quiet
+        table made the server keep all the WAL the other tables wrote for as
+        long as it ran.)
+      </p>
+
       <h4 id="shared-slot">Many tables, one slot</h4>
       <p>
         Thirty tables as thirty bridges are thirty slots, thirty WAL senders
