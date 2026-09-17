@@ -6,9 +6,72 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Redis bridges got a great deal faster, in both directions.
+Redis bridges got a great deal faster, in both directions — and a live bridge
+can no longer lose a row to a failed delivery.
+
+### Fixed
+
+- **A failed delivery on a live bridge could lose rows for good.** Three
+  separate ways, all closed. The rule now holds everywhere: a row that has been
+  read is in the destination, in the bridge's dead-letter queue, or still ahead
+  of the cursor — never in none of them.
+  - With `onError: continue` — what the builder always sent for a watch or CDC
+    bridge — a failed batch was recorded and stepped over: the cursor was saved
+    and the source acknowledged past it. On a change stream that is permanent.
+    The only copy left was the delivery's captured payload, which is cut at
+    16 KB and which the retry path refuses once cut.
+  - **PostgreSQL CDC confirmed positions it had not delivered.** Every `BEGIN`
+    and `COMMIT` was acknowledged to the server the moment it arrived, on the
+    reasoning that everything before it had been processed. Since changes
+    became batched in 1.3.0 that is not true: the rows ahead of a `COMMIT` are
+    normally still in memory when it arrives, so the replication slot was moved
+    past its own transaction's unwritten rows. A delivery that then failed, or a
+    crash, had nothing left to re-read. Skipped positions now travel with the
+    batch and are confirmed only once it has landed. The same applied to rows
+    dropped by a bridge's source filters.
+  - With `onError: abort`, the bridge stopped at the failed batch — but a batch
+    already queued behind it could still be delivered in the instant before the
+    stream shut down, and its checkpoint carried the cursor past the failure.
+- A delete reaching a target with no key columns (an `insert`-mode, append-only
+  target) failed the whole delivery: there was nothing to delete by, and the
+  empty `WHERE` was rejected by every engine. Such a target now simply does not
+  apply deletes; keyed targets on the same bridge are unaffected.
+- Documentation no longer says a CDC bridge always delivers one row per
+  delivery. That stopped being true for database destinations in 1.3.0.
+
+### Added
+
+- A **dead-letter queue** for watch and CDC bridges. Under `onError: continue`
+  the rows that could not be delivered are written, complete, to the queue
+  *before* the cursor moves, then retried when you ask — from the job view, or
+  `POST /api/bridges/:id/dead-letters/retry`.
+  - One bad row no longer takes its batch with it. A database batch is one
+    transaction, so a single row the destination refuses fails all of them; the
+    batch is now split until each failure is pinned to a row, the healthy rows
+    are delivered, and only the rows at fault are queued. Finding one among a
+    hundred thousand takes a few dozen attempts.
+  - Retrying is safe while the bridge is still running, because a retry does
+    not replay the recording. For a database destination it re-reads the row
+    from the source and writes what is there now — the current row, a delete if
+    it is gone, nothing if it has left the bridge's filters — so an old payload
+    can never overwrite a newer version delivered in the meantime.
+  - `continue` is for bad rows, not a broken destination. A bridge still stops,
+    without moving its cursor, when a failure is not confined to a few rows,
+    when several batches in a row deliver nothing
+    (`SYNCLE_MAX_CONSECUTIVE_FAILURES`, 5), or when the queue is full
+    (`SYNCLE_DEAD_LETTER_MAX_ROWS`, 10,000).
+- The builder offers **On failure** for watch and CDC bridges, where it was
+  previously hidden and fixed to `continue`.
 
 ### Changed
+
+- **`onError` defaults to `abort`** for a bridge created through the API without
+  one. Bridges that already exist keep the value they were saved with, and the
+  web app's builder still pre-selects `continue` — which, with the queue, no
+  longer loses anything.
+- A live bridge stopped by a failure now says what failed, not only that
+  something did, and reuses the failed delivery when it is started again
+  instead of leaving a permanently red cell beside a fresh green one.
 
 - **Writing into Redis** no longer costs a round trip per row. The adapter
   issued one `SET` per row with no pipelining, so a batch of a thousand rows

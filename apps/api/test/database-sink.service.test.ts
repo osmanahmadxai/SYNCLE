@@ -138,6 +138,31 @@ describe('DatabaseSinkService.deliver', () => {
     expect(calls.insert).toHaveLength(0);
   });
 
+  it('does not attempt a delete on a target that has no key columns', async () => {
+    // an append-only (`insert`) target has nothing to delete BY. attempting it
+    // builds an empty WHERE, which every engine rejects — so each delete at the
+    // source failed the whole delivery, and under `abort` stopped the bridge
+    const log = makeAdapter();
+    const copy = makeAdapter();
+    const svc = makeService({ log: log.adapter, copy: copy.adapter });
+
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [
+        makeTarget({ connectionId: 'log', table: 'users_log', writeMode: 'insert', keyColumns: [] }),
+        makeTarget({ connectionId: 'copy' }),
+      ],
+      [{ id: 7, name: 'gone' }],
+      'delete',
+    );
+
+    expect(outcome.status).toBe('success');
+    expect(log.calls.delete).toEqual([]);
+    expect(log.calls.insert).toEqual([]); // and it is NOT appended as if it were a row
+    expect(copy.calls.delete).toHaveLength(1); // the keyed target still deletes
+    expect(outcome.responseBody).toMatch(/users_log: delete not applied/);
+  });
+
   it('fails an upsert with no key columns instead of writing', async () => {
     const { adapter, calls } = makeAdapter();
     const svc = makeService({ dst: adapter });

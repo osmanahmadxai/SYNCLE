@@ -37,7 +37,10 @@ import { runtimeConfig } from '../common/runtime-config';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeSinkService } from './bridge-sink.service';
-import type { ResolvedBridge } from './bridges.types';
+import type { DeliveryOutcome, ResolvedBridge } from './bridges.types';
+import { previewBody } from './database-sink.service';
+import { DeadLetterService, type NewDeadLetter } from './dead-letter.service';
+import { isolateFailures } from './cdc/isolate-failures';
 import {
   CDC_PROVIDERS,
   backoffMs,
@@ -70,8 +73,19 @@ interface Stream {
   bufferOp: CdcOperation | null;
   /** key signatures already in the buffer, so one batch never repeats a key */
   bufferKeys: Set<string>;
+  /**
+   * the furthest position the pending batch covers. normally its last row's,
+   * but it runs ahead of that whenever the stream passes something that is not
+   * delivered — a transaction marker, a filtered-out row. such a position may
+   * only be confirmed to the source IN ORDER, once every row ahead of it has
+   * landed, so it is not checkpointed on sight: it rides the batch, and the
+   * batch's single checkpoint (taken after a successful delivery) covers it.
+   */
+  tailCursor: string | null;
   /** linger timer, so a partial batch still leaves promptly */
   timer: ReturnType<typeof setTimeout> | null;
+  /** what the running timer is waiting to flush (see `scheduleFlush`) */
+  timerFor: 'rows' | 'position' | null;
   /** rows per delivery for this bridge */
   maxBatch: number;
   /** rows the byte budget allows, from the first row of the current batch */
@@ -86,6 +100,16 @@ interface Stream {
   consumerStop: boolean;
   /** the running consumer, awaited on teardown so it exits cleanly */
   consumer: Promise<void> | null;
+  /**
+   * set the instant a failure stops the bridge. the actual teardown runs a tick
+   * later (it has to happen outside the change chain), and in that gap a flush
+   * already waiting on `inflight` would wake up first, deliver the NEXT batch
+   * and checkpoint past the one that just failed. everything that delivers or
+   * advances checks this flag, so nothing moves once it is set.
+   */
+  halted: boolean;
+  /** batches in a row that delivered nothing, to spot a dead destination */
+  consecutiveFailures: number;
 }
 
 /** one change held in the pending batch */
@@ -95,6 +119,23 @@ interface Buffered {
   /** identity of the row within this batch, or null when there is no key */
   keySig: string | null;
 }
+
+type Row = Record<string, unknown>;
+
+/** dead-letter entries are chunked so no single stored row is enormous */
+const DEAD_LETTER_CHUNK = 500;
+/** poison-row isolation limits (see isolate-failures.ts) */
+const ISOLATION = { maxAttempts: 128, maxPoisoned: 100, failuresBeforeSystemic: 14 } as const;
+/** attempts at the metadata-store writes that follow a delivery */
+const SETTLE_ATTEMPTS = 3;
+/**
+ * how long a batch holding only a position (nothing to deliver) may wait. a
+ * busy database emits a BEGIN/COMMIT pair per transaction even when none touch
+ * the bridge's table; checkpointing each one would be a metadata-store write
+ * per transaction on the source. once a second keeps the slot moving at a
+ * negligible cost.
+ */
+const POSITION_LINGER_MS = 1_000;
 
 /** read the persisted resume cursor from a job's cursorJson (legacy `lsn` ok) */
 function readCursor(cursorJson: string | null): string | null {
@@ -121,6 +162,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly sink: BridgeSinkService,
     private readonly jobs: BridgeJobService,
     private readonly spool: CdcSpoolService,
+    private readonly deadLetters: DeadLetterService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     for (const p of providers) this.providers.set(p.engine, p);
@@ -261,9 +303,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     await stream.consumer?.catch(() => undefined);
     // a delivery may still be writing; let it finish so its checkpoint lands
     await stream.inflight?.catch(() => undefined);
-    // buffered-but-undelivered changes were never acked, so they would replay
-    // on resume anyway; flushing here just avoids the needless repeat
-    await this.flush(bridgeId, stream).catch(() => undefined);
+    // whatever is still buffered is simply dropped. it was never checkpointed
+    // or acked, so the source hands it over again on the next start — and a
+    // stream that is no longer registered must not deliver anything
     await stream.handle.stop().catch(() => undefined);
   }
 
@@ -293,7 +335,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       buffer: [],
       bufferOp: null,
       bufferKeys: new Set(),
+      tailCursor: null,
       timer: null,
+      timerFor: null,
       // a database destination may batch freely: writes are idempotent upserts
       // keyed by column, so N-at-once is indistinguishable from N one-at-a-time.
       // an HTTP destination must keep delivery.batchSize, because there the
@@ -308,6 +352,8 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       spooled: runtimeConfig.cdcSpool,
       consumerStop: false,
       consumer: null,
+      halted: false,
+      consecutiveFailures: 0,
     };
     this.streams.set(bridgeId, stream);
 
@@ -320,6 +366,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         fromCursor: startCursor,
         handlers: {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
+          onSkip: (cursor) => this.handleSkip(bridgeId, cursor),
           onError: (err) => this.logger.warn(`CDC stream error for ${bridgeId}: ${err.message}`),
         },
       });
@@ -374,6 +421,27 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     return stream.pending;
   }
 
+  /** a position passed without delivering anything; ordered like any change */
+  private handleSkip(bridgeId: string, cursor: string): Promise<void> {
+    const stream = this.streams.get(bridgeId);
+    if (!stream) return Promise.resolve();
+    stream.pending = stream.pending
+      .then(() => this.notePosition(bridgeId, stream, cursor))
+      .catch((err) => {
+        this.logger.error(`CDC skip chain broke for ${bridgeId}: ${(err as Error).message}`);
+      });
+    return stream.pending;
+  }
+
+  /** extend the pending batch's reach to `cursor` without adding a row */
+  private notePosition(bridgeId: string, stream: Stream, cursor: string): void {
+    if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+    // replays after a reconnect re-send positions we are already past
+    if (!stream.provider.cursorAfter(cursor, stream.tailCursor ?? stream.watermark)) return;
+    stream.tailCursor = cursor;
+    this.scheduleFlush(bridgeId, stream);
+  }
+
   /** identity of a row within a batch, or null when the source has no key */
   private keySignature(stream: Stream, row: Record<string, unknown>): string | null {
     if (!stream.primaryKey?.length) return null;
@@ -396,6 +464,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     // the stream may have been stopped/replaced while queued behind the chain
     if (this.streams.get(bridgeId) !== stream || bridge.source.kind !== 'table') return;
+    // a failure has stopped this bridge: take nothing more. whatever arrives
+    // now is un-acked, so the source replays it on the next start
+    if (stream.halted) return;
     // strict exactly-once: never re-process a position we've already done
     // (durable engines replay from the last acked cursor after a reconnect)
     if (!stream.provider.cursorAfter(change.cursor, stream.watermark)) return;
@@ -413,21 +484,11 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         passMissingColumns: op === 'delete',
       })
     ) {
-      // anything already buffered is ORDERED BEFORE this change, so it has to
-      // be delivered first — otherwise advancing the cursor past it would drop
-      // those rows on a crash
-      await this.flush(bridgeId, stream);
-      if (this.streams.get(bridgeId) !== stream) return;
-      stream.watermark = change.cursor;
-      try {
-        await this.prisma.bridgeJob.update({
-          where: { id: stream.jobId },
-          data: { cursorJson: JSON.stringify({ cursor: change.cursor }) },
-        });
-        await stream.handle.ack?.(change.cursor);
-      } catch {
-        /* a replay after a restart just re-evaluates the filter and skips again */
-      }
+      // its cursor may only be passed once everything ORDERED BEFORE it has
+      // landed. checkpointing it right here would race the batch still being
+      // written: if that batch then failed (or the process died), the cursor
+      // would already sit beyond it and those rows would never be read again
+      this.notePosition(bridgeId, stream, change.cursor);
       return;
     }
 
@@ -460,6 +521,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     }
 
     stream.buffer.push({ change, row: change.row, keySig });
+    stream.tailCursor = change.cursor;
     stream.bufferOp = op;
     if (keySig !== null) stream.bufferKeys.add(keySig);
 
@@ -473,11 +535,26 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     this.scheduleFlush(bridgeId, stream);
   }
 
-  /** flush a partial batch after a short linger, so a quiet stream is not stuck */
+  /**
+   * flush a partial batch after a short linger, so a quiet stream is not stuck.
+   * a batch holding rows leaves after the linger; one holding only a position
+   * can wait {@link POSITION_LINGER_MS} — and is cut short the moment a row
+   * joins it, so a row never inherits the longer wait.
+   */
   private scheduleFlush(bridgeId: string, stream: Stream): void {
-    if (stream.timer) return;
+    const want = stream.buffer.length > 0 ? 'rows' : 'position';
+    if (stream.timer) {
+      if (stream.timerFor === want || stream.timerFor === 'rows') return;
+      clearTimeout(stream.timer); // a row arrived behind a bare position
+    }
+    const delay =
+      want === 'rows'
+        ? Math.max(0, runtimeConfig.cdcLingerMs)
+        : Math.max(POSITION_LINGER_MS, runtimeConfig.cdcLingerMs);
+    stream.timerFor = want;
     const timer = setTimeout(() => {
       stream.timer = null;
+      stream.timerFor = null;
       if (this.streams.get(bridgeId) !== stream) return;
       // queued on the same chain, so a timed flush can never interleave with
       // a change being accepted
@@ -486,7 +563,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         .catch((err) => {
           this.logger.error(`CDC timed flush failed for ${bridgeId}: ${(err as Error).message}`);
         });
-    }, Math.max(0, runtimeConfig.cdcLingerMs));
+    }, delay);
     // a pending linger must not hold the process open
     timer.unref?.();
     stream.timer = timer;
@@ -505,8 +582,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (stream.timer) {
       clearTimeout(stream.timer);
       stream.timer = null;
+      stream.timerFor = null;
     }
-    if (stream.buffer.length === 0) return;
+    if (stream.tailCursor === null || stream.halted) return;
 
     // At most ONE delivery in flight. Waiting for the previous one here does
     // two things: batches reach the destination in the order they were read,
@@ -515,10 +593,14 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     // the next batch now overlaps with writing this one.
     if (stream.inflight) await stream.inflight.catch(() => undefined);
     if (this.streams.get(bridgeId) !== stream) return;
-    if (stream.buffer.length === 0) return;
+    // the delivery we just waited for may have failed and stopped the bridge.
+    // delivering the next batch now would checkpoint PAST the failed one
+    if (stream.halted || stream.tailCursor === null) return;
 
     const items = stream.buffer;
     const op = stream.bufferOp ?? undefined;
+    const reach = stream.tailCursor;
+    stream.tailCursor = null;
     stream.buffer = [];
     stream.bufferKeys = new Set();
     stream.bufferOp = null;
@@ -526,7 +608,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
 
     // deliberately not awaited: the caller returns to reading, and the next
     // flush awaits this through `inflight`
-    stream.inflight = this.deliverBatch(bridgeId, stream, items, op);
+    stream.inflight = this.deliverBatch(bridgeId, stream, items, op, reach);
   }
 
   /** write one batch, record it, checkpoint the source */
@@ -535,108 +617,366 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     stream: Stream,
     items: Buffered[],
     op: CdcOperation | undefined,
+    /** how far the batch reaches: its last row, or a skipped position beyond it */
+    lastCursor: string,
   ): Promise<void> {
-    const lastCursor = items[items.length - 1]!.change.cursor;
+    if (stream.halted) return;
     const bridge = stream.bridge;
     if (bridge.source.kind !== 'table') return;
-
-    const rows = items.map((i) => i.row);
 
     if (stream.spooled) {
       await this.spoolBatch(bridgeId, stream, items, lastCursor);
       return;
     }
 
+    if (items.length === 0) {
+      // nothing to deliver, only a position to move past
+      await this.settle(bridgeId, stream, () => this.checkpoint(stream, stream.seq, lastCursor));
+      return;
+    }
+
+    const rows = items.map((i) => i.row);
     const seq = stream.seq;
-    const now = new Date().toISOString();
-    const pk = stream.primaryKey;
-    // one entry per row, matching rowCount — the same shape the batched replay
-    // path records
-    const rowKeys = pk?.length
-      ? items.map((i) => (pk.length === 1 ? i.row[pk[0]!] : pk.map((c) => i.row[c])))
-      : null;
     // key on the batch's last cursor (stable per batch) so an at-least-once
     // re-delivery after a reconnect carries the SAME Idempotency-Key
     const idem =
       bridge.destination.kind === 'http' && bridge.destination.idempotency
         ? `${stream.jobId}:${lastCursor}`
         : undefined;
-    const signal = new AbortController().signal;
 
+    // the operation drives both the {{$op}} token (HTTP) and insert/upsert vs
+    // delete routing (database destinations)
+    const outcome = await this.attempt(stream, rows, op, seq, undefined, idem);
+
+    await this.settle(bridgeId, stream, async () => {
+      if (outcome.status === 'success') {
+        await this.record(stream, seq, rows, outcome);
+        stream.consecutiveFailures = 0;
+        await this.checkpoint(stream, seq + 1, lastCursor);
+        return;
+      }
+      const nextSeq = await this.handleFailedBatch(bridgeId, stream, {
+        rows,
+        op,
+        seq,
+        cursor: lastCursor,
+        outcome,
+      });
+      // null = the bridge was stopped. the cursor stays where it is, so the
+      // next start reads this batch again
+      if (nextSeq !== null) await this.checkpoint(stream, nextSeq, lastCursor);
+    });
+  }
+
+  /* ----- delivery building blocks (shared by the direct and spooled paths) ----- */
+
+  /** one delivery attempt. the sink reports failures as outcomes; a throw is folded into one */
+  private async attempt(
+    stream: Stream,
+    rows: Row[],
+    op: CdcOperation | undefined,
+    seq: number,
+    skipTargets?: readonly string[],
+    idempotencyKey?: string,
+  ): Promise<DeliveryOutcome> {
+    const bridge = stream.bridge;
+    const started = performance.now();
     try {
-      // the operation drives both the {{$op}} token (HTTP) and insert/upsert vs
-      // delete routing (database destinations)
       const { outcome } = await this.sink.deliver(
         bridge,
         rows,
-        { table: bridge.source.table, now, startIndex: seq, op },
-        signal,
-        idem,
+        {
+          table: bridge.source.kind === 'table' ? bridge.source.table : '(query)',
+          now: new Date().toISOString(),
+          startIndex: seq,
+          op,
+          ...(skipTargets?.length ? { skipTargets: [...skipTargets] } : {}),
+        },
+        new AbortController().signal,
+        idempotencyKey,
       );
-
-      await this.jobs.recordDelivery(
-        stream.jobId,
-        { sequence: seq, rowIndex: seq, rowCount: rows.length, rowKeys },
-        outcome,
-      );
-      if (outcome.status === 'failed' && bridge.delivery.onError === 'abort') {
-        // stop-on-error: pause the job and stop the stream WITHOUT advancing
-        // the watermark or acking, so this batch replays on the next start.
-        // teardown happens outside the change chain — the provider's stop()
-        // may wait for in-flight handlers (i.e. this very call)
-        this.logger.warn(`CDC ${bridgeId}: pausing after a failed delivery (onError=abort)`);
-        await this.jobs.finalize(
-          stream.jobId,
-          'paused',
-          'Paused after a failed delivery (onError=abort).',
-        );
-        setImmediate(() => void this.teardown(bridgeId).catch(() => undefined));
-        return;
-      }
-      stream.seq = seq + 1;
-      stream.watermark = lastCursor;
-      await this.prisma.bridgeJob.update({
-        where: { id: stream.jobId },
-        data: { cursorOffset: stream.seq, cursorJson: JSON.stringify({ cursor: lastCursor }) },
-      });
-      // the checkpoint is durable, so the provider may now advance its
-      // server-side ack point (the Postgres slot's confirmed LSN). a missed
-      // ack only widens the replay window the watermark dedupe absorbs
-      try {
-        await stream.handle.ack?.(lastCursor);
-      } catch {
-        /* best-effort by contract */
-      }
+      return outcome;
     } catch (err) {
-      // a transient pipeline error (Prisma/pool hiccup) must leave a trace: the
-      // batch becomes a FAILED delivery row, visible in the timeline + retryable
-      const message = err instanceof Error ? err.message : String(err);
+      return {
+        status: 'failed',
+        httpStatus: null,
+        attempts: 1,
+        error: err instanceof Error ? err.message : String(err),
+        requestBody: null,
+        responseBody: null,
+        durationMs: Math.round(performance.now() - started),
+        op: op ?? null,
+      };
+    }
+  }
+
+  /** primary-key value(s) per row, matching the shape the replay path records */
+  private rowKeys(stream: Stream, rows: Row[]): unknown[] | null {
+    const pk = stream.primaryKey;
+    if (!pk?.length) return null;
+    return rows.map((r) => (pk.length === 1 ? r[pk[0]!] : pk.map((c) => r[c])));
+  }
+
+  private record(
+    stream: Stream,
+    sequence: number,
+    rows: Row[],
+    outcome: DeliveryOutcome,
+  ): Promise<void> {
+    return this.jobs.recordDelivery(
+      stream.jobId,
+      { sequence, rowIndex: sequence, rowCount: rows.length, rowKeys: this.rowKeys(stream, rows) },
+      outcome,
+    );
+  }
+
+  /**
+   * make progress durable, then let the source forget it — in that order. the
+   * provider's ack point (the Postgres slot's confirmed LSN) may only move once
+   * the cursor is stored; a missed ack merely widens the replay window the
+   * watermark dedupe absorbs.
+   */
+  private async checkpoint(stream: Stream, nextSeq: number, cursor: string): Promise<void> {
+    if (stream.halted) return;
+    await this.prisma.bridgeJob.update({
+      where: { id: stream.jobId },
+      data: { cursorOffset: nextSeq, cursorJson: JSON.stringify({ cursor }) },
+    });
+    stream.seq = nextSeq;
+    stream.watermark = cursor;
+    try {
+      await stream.handle.ack?.(cursor);
+    } catch {
+      /* best-effort by contract */
+    }
+  }
+
+  /**
+   * run the metadata-store writes that follow a delivery (record, park,
+   * checkpoint). every one of them is idempotent, so a blip in the store is
+   * retried. if the store stays down the bridge stops WITHOUT advancing:
+   * moving on from a write that may not have been recorded is how rows vanish,
+   * and the source still holds everything after the last ack.
+   */
+  private async settle(
+    bridgeId: string,
+    stream: Stream,
+    work: () => Promise<void>,
+  ): Promise<void> {
+    let lastError = '';
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
+      if (stream.halted) return;
       try {
-        await this.jobs.recordDelivery(
-          stream.jobId,
-          { sequence: seq, rowIndex: seq, rowCount: rows.length, rowKeys },
-          {
-            status: 'failed',
-            httpStatus: null,
-            attempts: 1,
-            error: message,
-            requestBody: null,
-            responseBody: null,
-            durationMs: 0,
-          },
+        await work();
+        return;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `CDC ${bridgeId}: could not record progress (attempt ${attempt + 1}/${SETTLE_ATTEMPTS}): ${lastError}`,
         );
-        stream.seq = seq + 1;
-        stream.watermark = lastCursor;
-        this.logger.warn(`CDC delivery for ${bridgeId} failed and was recorded: ${message}`);
-      } catch {
-        // can't even record the failure: stop instead of silently acking away
-        this.logger.error(
-          `CDC pipeline for ${bridgeId} is failing and the failure could not be recorded — stopping the stream: ${message}`,
-        );
-        await this.teardown(bridgeId).catch(() => undefined);
-        await this.jobs.finalize(stream.jobId, 'failed', message).catch(() => undefined);
+        if (attempt < SETTLE_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, backoffMs(attempt)));
+        }
       }
     }
+    await this.halt(
+      bridgeId,
+      stream,
+      'failed',
+      `Stopped without advancing, so nothing is skipped: progress could not be saved (${lastError}). Start the bridge again once the metadata store is reachable.`,
+    );
+  }
+
+  /**
+   * stop the bridge because of a failure. `halted` is set synchronously so the
+   * change chain cannot deliver or checkpoint anything more; the teardown
+   * itself has to happen outside that chain, because the provider's stop() may
+   * wait for in-flight handlers — i.e. for this very call.
+   */
+  private async halt(
+    bridgeId: string,
+    stream: Stream,
+    status: 'paused' | 'failed',
+    message: string,
+  ): Promise<void> {
+    if (stream.halted) return;
+    stream.halted = true;
+    this.logger.warn(`CDC ${bridgeId}: ${message}`);
+    await this.jobs.finalize(stream.jobId, status, message).catch(() => undefined);
+    setImmediate(() => void this.teardown(bridgeId).catch(() => undefined));
+  }
+
+  /**
+   * a batch failed. decide what happens to it, and return the sequence the
+   * stream continues from — or null when the bridge was stopped instead.
+   *
+   * `abort`: stop, without moving. the batch is retried on the next start.
+   *
+   * `continue`: the bridge moves on, but never past rows that exist nowhere
+   * else. the rows actually at fault are isolated from the healthy ones in
+   * their batch and parked, in full, in the dead-letter queue FIRST. three
+   * things turn a `continue` into a stop, because carrying on would only pour
+   * the change stream into the metadata store: the failure is not confined to
+   * a few rows, several batches in a row delivered nothing, or the queue is
+   * full. in each case the cursor stays put and nothing is lost.
+   */
+  private async handleFailedBatch(
+    bridgeId: string,
+    stream: Stream,
+    batch: {
+      rows: Row[];
+      op: CdcOperation | undefined;
+      seq: number;
+      cursor: string;
+      outcome: DeliveryOutcome;
+    },
+  ): Promise<number | null> {
+    const { rows, op, seq, cursor, outcome } = batch;
+    const bridge = stream.bridge;
+    const dest = bridge.destination;
+    const reason = outcome.error ?? 'delivery failed';
+
+    const stop = async (message: string): Promise<null> => {
+      // recorded at `seq`, which is not consumed: the retried batch lands in
+      // the same cell and turns it green
+      await this.record(stream, seq, rows, outcome);
+      await this.halt(bridgeId, stream, 'paused', message);
+      return null;
+    };
+
+    if (bridge.delivery.onError === 'abort') {
+      return stop(`Paused after a failed delivery (onError=abort): ${reason}`);
+    }
+
+    // ---- which rows are actually at fault?
+    let delivered: Row[] = [];
+    let attempts = outcome.attempts;
+    let failed: { rows: Row[]; error: string; succeededTargets: string[] }[];
+
+    // isolation re-delivers the healthy rows in smaller groups. that is only
+    // safe to repeat where writes are idempotent: an append-only (`insert`)
+    // target would hold those rows twice if the bridge then stopped and the
+    // batch replayed. HTTP is excluded too — there the batch IS the payload
+    const canIsolate =
+      dest.kind === 'database' &&
+      rows.length > 1 &&
+      dest.targets.every((t) => t.writeMode !== 'insert');
+
+    if (canIsolate) {
+      const found = await isolateFailures(
+        rows,
+        async (part, skip) => {
+          const o = await this.attempt(stream, part, op, seq, [...skip]);
+          return {
+            ok: o.status === 'success',
+            error: o.error,
+            succeededTargets: o.succeededTargets ?? [],
+          };
+        },
+        { ...ISOLATION, batchError: reason, alreadySucceeded: outcome.succeededTargets ?? [] },
+      );
+      attempts += found.attempts;
+      if (found.systemic) {
+        return stop(
+          `Stopped without advancing: this is not a few bad rows — ${found.reason}. Fix the destination and start the bridge again; the batch will be retried.`,
+        );
+      }
+      delivered = found.delivered;
+      failed = found.poisoned.map((p) => ({
+        rows: [p.row],
+        error: p.error,
+        succeededTargets: p.succeededTargets,
+      }));
+    } else {
+      failed = [];
+      for (let i = 0; i < rows.length; i += DEAD_LETTER_CHUNK) {
+        failed.push({
+          rows: rows.slice(i, i + DEAD_LETTER_CHUNK),
+          error: reason,
+          succeededTargets: outcome.succeededTargets ?? [],
+        });
+      }
+    }
+
+    if (failed.length === 0) {
+      // the batch failed as a whole but every row then went through on its
+      // own: a transient failure, and nothing is left over
+      stream.consecutiveFailures = 0;
+      await this.record(stream, seq, rows, this.recovered(stream, rows, attempts, op));
+      return seq + 1;
+    }
+
+    // ---- is carrying on actually safe?
+    stream.consecutiveFailures = delivered.length > 0 ? 0 : stream.consecutiveFailures + 1;
+    if (stream.consecutiveFailures >= runtimeConfig.maxConsecutiveFailures) {
+      return stop(
+        `Stopped without advancing: ${stream.consecutiveFailures} batches in a row delivered nothing, which points at the destination rather than the rows. Last error: ${reason}`,
+      );
+    }
+    const failedRows = failed.reduce((n, f) => n + f.rows.length, 0);
+    const held = await this.deadLetters.pendingRows(bridgeId);
+    if (held + failedRows > runtimeConfig.deadLetterMaxRows) {
+      return stop(
+        `Stopped without advancing: the dead-letter queue is full (${held} rows waiting, limit ${runtimeConfig.deadLetterMaxRows}). Retry or discard them, then start the bridge again. Last error: ${reason}`,
+      );
+    }
+
+    // ---- park first, record second, and only then (in the caller) advance.
+    // delivered rows take `seq`; the rows set aside take the next cell, so the
+    // timeline and the counters say exactly what happened to each
+    const failedSeq = delivered.length > 0 ? seq + 1 : seq;
+    const entries: NewDeadLetter[] = failed.map((f) => ({
+      bridgeId,
+      jobId: stream.jobId,
+      sequence: failedSeq,
+      op: op ?? null,
+      rows: f.rows,
+      cursor,
+      error: f.error,
+      succeededTargets: f.succeededTargets,
+    }));
+    await this.deadLetters.park(entries, { replaceFrom: seq });
+
+    if (delivered.length > 0) {
+      await this.record(stream, seq, delivered, this.recovered(stream, delivered, attempts, op));
+    }
+    const allFailed = failed.flatMap((f) => f.rows);
+    await this.record(stream, failedSeq, allFailed, {
+      ...outcome,
+      attempts,
+      error: `${failed[0]!.error} — ${failedRows} row${failedRows === 1 ? '' : 's'} moved to the dead-letter queue`,
+      ...(dest.kind === 'database' ? previewBody(allFailed, dest.targets) : {}),
+      op: op ?? null,
+      // the queue tracks which targets each row still needs
+      succeededTargets: null,
+    });
+    this.logger.warn(
+      `CDC ${bridgeId}: ${failedRows} row(s) moved to the dead-letter queue, ${delivered.length} delivered: ${failed[0]!.error}`,
+    );
+    return failedSeq + 1;
+  }
+
+  /** the success record for rows that landed during (or because of) isolation */
+  private recovered(
+    stream: Stream,
+    rows: Row[],
+    attempts: number,
+    op: CdcOperation | undefined,
+  ): DeliveryOutcome {
+    const dest = stream.bridge.destination;
+    return {
+      status: 'success',
+      httpStatus: null,
+      attempts,
+      error: null,
+      ...(dest.kind === 'database'
+        ? previewBody(rows, dest.targets)
+        : { requestBody: null, bodyTruncated: false }),
+      responseBody: `wrote ${rows.length} after the batch was split to isolate failing rows`,
+      durationMs: 0,
+      op: op ?? null,
+      succeededTargets: null,
+    };
   }
 
   /**
@@ -667,7 +1007,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       if (depth < runtimeConfig.cdcSpoolMax) break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    if (this.streams.get(bridgeId) !== stream) return;
+    if (this.streams.get(bridgeId) !== stream || stream.halted) return;
 
     const entries = items.map((i) => ({
       op: i.change.op,
@@ -679,7 +1019,9 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     // append must never checkpoint. retry briefly, then stop the stream: the
     // source still holds everything after the last ack, so a restart replays
     // it and nothing is lost
-    let appended = false;
+    // a batch of nothing but filtered-out changes has no rows to spool, only a
+    // position to move past
+    let appended = entries.length === 0;
     for (let attempt = 0; attempt < 3 && !appended; attempt++) {
       try {
         await this.spool.append(bridgeId, entries);
@@ -687,14 +1029,12 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       } catch (err) {
         if (attempt === 2) {
           const message = (err as Error).message;
-          this.logger.error(
-            `CDC ${bridgeId}: could not write to the spool, stopping without ` +
-              `advancing the cursor so nothing is lost: ${message}`,
+          await this.halt(
+            bridgeId,
+            stream,
+            'failed',
+            `Spool unavailable, stopped without advancing the cursor so nothing is lost: ${message}`,
           );
-          await this.jobs
-            .finalize(stream.jobId, 'failed', `Spool unavailable: ${message}`)
-            .catch(() => undefined);
-          setImmediate(() => void this.teardown(bridgeId).catch(() => undefined));
           return;
         }
         await new Promise((r) => setTimeout(r, backoffMs(attempt)));
@@ -755,7 +1095,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
    */
   private startConsumer(bridgeId: string, stream: Stream): void {
     stream.consumer = (async () => {
-      while (!stream.consumerStop) {
+      while (!stream.consumerStop && !stream.halted) {
         let items: SpooledItem[];
         try {
           items = await this.spool.read(bridgeId, stream.maxBatch);
@@ -774,7 +1114,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         }
 
         for (const run of this.deliverableRuns(items, stream.primaryKey)) {
-          if (stream.consumerStop) return;
+          if (stream.consumerStop || stream.halted) return;
           const aborted = await this.deliverSpooled(bridgeId, stream, run);
           if (aborted) return;
         }
@@ -786,7 +1126,13 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** deliver one run, record it, and trim it from the spool. true = stop */
+  /**
+   * deliver one run, record it, and trim it from the spool. true = stop.
+   *
+   * the spool is this path's cursor: a run is trimmed only once it has been
+   * delivered — or its failed rows parked in the dead-letter queue — so a stop
+   * leaves it in place and the next start delivers it again.
+   */
   private async deliverSpooled(
     bridgeId: string,
     stream: Stream,
@@ -798,59 +1144,43 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     const rows = run.map((i) => i.entry.row);
     const op = run[0]!.entry.op;
     const lastId = run[run.length - 1]!.id;
+    const lastCursor = run[run.length - 1]!.entry.cursor;
     const seq = stream.seq;
-    const pk = stream.primaryKey;
-    const rowKeys = pk?.length
-      ? run.map((i) => (pk.length === 1 ? i.entry.row[pk[0]!] : pk.map((c) => i.entry.row[c])))
-      : null;
     const idem =
       bridge.destination.kind === 'http' && bridge.destination.idempotency
-        ? `${stream.jobId}:${run[run.length - 1]!.entry.cursor}`
+        ? `${stream.jobId}:${lastCursor}`
         : undefined;
 
-    try {
-      const { outcome } = await this.sink.deliver(
-        bridge,
-        rows,
-        {
-          table: bridge.source.table,
-          now: new Date().toISOString(),
-          startIndex: seq,
-          op,
-        },
-        new AbortController().signal,
-        idem,
-      );
-      await this.jobs.recordDelivery(
-        stream.jobId,
-        { sequence: seq, rowIndex: seq, rowCount: rows.length, rowKeys },
-        outcome,
-      );
-      if (outcome.status === 'failed' && bridge.delivery.onError === 'abort') {
-        this.logger.warn(`CDC ${bridgeId}: pausing after a failed delivery (onError=abort)`);
-        await this.jobs
-          .finalize(stream.jobId, 'paused', 'Paused after a failed delivery (onError=abort).')
-          .catch(() => undefined);
-        // leave the run in the spool so a restart retries it
-        setImmediate(() => void this.teardown(bridgeId).catch(() => undefined));
-        return true;
-      }
-      stream.seq = seq + 1;
-      // delivered: the spool may forget it. the head advances, so reads stay
-      // cheap however many millions have passed through
+    const outcome = await this.attempt(stream, rows, op, seq, undefined, idem);
+
+    const advance = async (nextSeq: number): Promise<void> => {
+      // delivered (or safely parked): the spool may forget it. the head
+      // advances, so reads stay cheap however many millions have passed through
       await this.spool.trimThrough(bridgeId, lastId);
-      await this.prisma.bridgeJob
-        .update({ where: { id: stream.jobId }, data: { cursorOffset: stream.seq } })
-        .catch(() => undefined);
-      return false;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`CDC ${bridgeId}: spooled delivery failed: ${message}`);
-      // do NOT trim: the entries stay so the next pass retries them. back off
-      // so a persistently broken destination does not spin
-      await new Promise((r) => setTimeout(r, 1_000));
-      return false;
-    }
+      await this.prisma.bridgeJob.update({
+        where: { id: stream.jobId },
+        data: { cursorOffset: nextSeq },
+      });
+      stream.seq = nextSeq;
+    };
+
+    await this.settle(bridgeId, stream, async () => {
+      if (outcome.status === 'success') {
+        await this.record(stream, seq, rows, outcome);
+        stream.consecutiveFailures = 0;
+        await advance(seq + 1);
+        return;
+      }
+      const nextSeq = await this.handleFailedBatch(bridgeId, stream, {
+        rows,
+        op,
+        seq,
+        cursor: lastCursor,
+        outcome,
+      });
+      if (nextSeq !== null) await advance(nextSeq);
+    });
+    return stream.halted;
   }
 
   /* ----- boot recovery ----- */

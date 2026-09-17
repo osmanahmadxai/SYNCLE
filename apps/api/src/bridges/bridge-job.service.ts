@@ -117,8 +117,12 @@ export class BridgeJobService implements OnModuleInit {
     const job = await this.getJobRow(jobId);
     await this.markRunning(jobId);
     const bridge = await this.store.resolve(job.bridgeId);
+    // deliveries whose rows sit in the dead-letter queue are retried THERE, by
+    // re-reading the source. re-sending their captured payload from here would
+    // write a possibly outdated row over a newer one the stream has delivered
+    // since (and the capture may be cut at the storage cap anyway)
     const failed = await this.prisma.bridgeDelivery.findMany({
-      where: { jobId, status: 'failed' },
+      where: await this.resendableWhere(jobId),
       orderBy: { sequence: 'asc' },
       take: 2000,
     });
@@ -246,6 +250,27 @@ export class BridgeJobService implements OnModuleInit {
       }
       await this.finalize(jobId, 'failed', err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /** failed deliveries a captured-payload resend may touch (not owned by the dead-letter queue) */
+  async resendableFailures(jobId: string): Promise<number> {
+    return this.prisma.bridgeDelivery.count({ where: await this.resendableWhere(jobId) });
+  }
+
+  /** a job's failed deliveries, minus the ones whose rows the dead-letter queue holds */
+  private async resendableWhere(
+    jobId: string,
+  ): Promise<{ jobId: string; status: 'failed'; sequence?: { notIn: number[] } }> {
+    const parked = await this.prisma.bridgeDeadLetter.findMany({
+      where: { jobId },
+      select: { sequence: true },
+      distinct: ['sequence'],
+    });
+    return {
+      jobId,
+      status: 'failed',
+      ...(parked.length ? { sequence: { notIn: parked.map((d) => d.sequence) } } : {}),
+    };
   }
 
   /* ----- prepare (queue without sending) ----- */

@@ -11,6 +11,7 @@ import {
 } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { DeadLetterPanel } from './dead-letter-panel';
 import { DeliveryMonitor } from './delivery-log';
 
 const STATUS_STYLES: Record<BridgeJobStatus, string> = {
@@ -280,6 +281,9 @@ export function JobDetail({
           {job.error}
         </p>
       )}
+
+      {/* rows a live bridge set aside instead of losing; hidden while empty */}
+      {isLive && <DeadLetterPanel bridgeId={bridgeId} live={isActive} />}
 
       <div className="min-h-0 flex-1 border-t">
         <DeliveryMonitor

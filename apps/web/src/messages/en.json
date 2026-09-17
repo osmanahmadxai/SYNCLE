@@ -246,6 +246,29 @@
     "bridgeUpdated": "Bridge updated",
     "bridgeCreated": "Bridge created",
     "saveFailed": "Could not save bridge",
-    "defaultName": "{table} → bridge"
+    "defaultName": "{table} → bridge",
+    "setAsideContinue": "Set failed rows aside & keep syncing",
+    "stopBridge": "Stop the bridge",
+    "onFailureContinueHint": "Rows that fail are kept in the bridge's dead-letter queue, in full, and can be retried once the cause is fixed. The bridge still stops if the destination itself is unavailable.",
+    "onFailureStopHint": "The bridge stops at the first failure without moving past it. Start it again and the same rows are retried; nothing is skipped."
+  },
+  "deadLetters": {
+    "waiting": "{count, plural, one {# row waiting in the dead-letter queue} other {# rows waiting in the dead-letter queue}}",
+    "explainer": "Could not be delivered, so they were set aside instead of lost.",
+    "retryAll": "Retry all",
+    "discardAll": "Discard all",
+    "retry": "Retry",
+    "forceRetry": "Write recorded row",
+    "discard": "Discard",
+    "entryMeta": "{rows, plural, one {# row} other {# rows}} · delivery #{sequence} · {attempts, plural, =0 {not retried yet} one {# retry} other {# retries}}",
+    "moreNotShown": "{count, plural, one {# more entry not shown} other {# more entries not shown}}",
+    "retryResolved": "{count, plural, one {# entry delivered} other {# entries delivered}}",
+    "retryStillFailing": "{count, plural, one {# entry is still failing} other {# entries are still failing}}",
+    "retryNeedsForce": "{count, plural, one {# entry needs a decision: its source row is gone} other {# entries need a decision: their source rows are gone}}",
+    "couldNotRetry": "Could not retry",
+    "discardTitle": "Discard these rows?",
+    "discardDescription": "{count, plural, one {# entry will never be delivered. The row stays on record, but this cannot be undone.} other {# entries will never be delivered. The rows stay on record, but this cannot be undone.}}",
+    "discarded": "{count, plural, one {# entry discarded} other {# entries discarded}}",
+    "couldNotDiscard": "Could not discard"
   }
 }

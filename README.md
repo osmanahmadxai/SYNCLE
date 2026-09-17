@@ -111,12 +111,19 @@ The rest is the same whichever destination and trigger you pick:
   Structured substitution only — no string injection, no code execution.
 - **Sync reliably.** Retries with backoff, rate limiting, optional batching, and
   exactly-once delivery so a change is applied once and only once downstream.
+- **Never lose a row to a failure.** A row that has been read is always in one
+  of three places: the destination, the bridge's dead-letter queue, or still
+  ahead of the cursor. A bridge either stops *at* a failure (`abort`), or sets
+  the rows that failed aside — in full — and carries on (`continue`). One bad
+  row is isolated from the rest of its batch, and a retry re-reads it from the
+  source, so it can never overwrite a newer version that arrived since.
 - **Watch it happen.** A live timeline colours every delivery green (synced) ·
   red (failed) · amber (skipped) · slate (queued). Click any cell for the exact
   row written, the result, timing, and any error.
 - **Stay in control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
-  place — failed cells flip green.
+  place — failed cells flip green. On a live bridge, retrying works without
+  stopping it.
 
 ### See it happen
 
@@ -404,6 +411,8 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_CDC_LINGER_MS`   | api   | How long a partial CDC batch waits before it is sent (default `50`) |
 | `SYNCLE_CDC_SPOOL`       | api   | `on` to spool changes through Redis before writing (default off) |
 | `SYNCLE_CDC_SPOOL_MAX`   | api   | Unwritten changes held in the spool before the reader is throttled (default `50000`) |
+| `SYNCLE_DEAD_LETTER_MAX_ROWS` | api | Undelivered rows one bridge may hold in its dead-letter queue before it stops instead (default `10000`) |
+| `SYNCLE_MAX_CONSECUTIVE_FAILURES` | api | Batches in a row that may deliver nothing before a `continue` bridge stops (default `5`) |
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under

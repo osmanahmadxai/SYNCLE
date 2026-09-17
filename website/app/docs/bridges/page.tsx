@@ -29,10 +29,13 @@ export default function Page() {
         Every trigger funnels rows through the same delivery pipeline, so the
         timeline, retry controls and idempotency behave the same whether a row
         came from a one-shot replay, a poll, or a change event. Two knobs are
-        narrower than that: batching applies to replay jobs only — watch and
-        CDC always deliver one row per delivery — and the{' '}
-        <code>minDelayMs</code> rate limit paces replay and watch deliveries
-        but not CDC.
+        narrower than that. The bridge&apos;s <code>batchSize</code> shapes
+        replay jobs and the requests a CDC bridge sends to an HTTP
+        destination; a watch bridge always delivers one row per delivery, and
+        a CDC bridge writing to a <em>database</em> groups changes on its own
+        (see <a href="/docs/configuration">SYNCLE_CDC_BATCH_SIZE</a>), which
+        idempotent upserts make invisible. And the <code>minDelayMs</code>{' '}
+        rate limit paces replay and watch deliveries but not CDC.
       </p>
 
       <h2 id="trigger-modes">The three trigger modes</h2>
@@ -360,7 +363,11 @@ export default function Page() {
               </td>
               <td>1–1000</td>
               <td>1</td>
-              <td>rows per delivery on replay jobs; watch and CDC always deliver one row</td>
+              <td>
+                rows per delivery on replay jobs, and per request for a CDC
+                bridge with an HTTP destination; watch delivers one row at a
+                time
+              </td>
             </tr>
             <tr>
               <td>
@@ -413,16 +420,161 @@ export default function Page() {
                 <code>continue</code> | <code>abort</code>
               </td>
               <td>
-                <code>continue</code>
+                <code>abort</code>
               </td>
               <td>
-                whether a failed delivery is logged and skipped past, or
-                aborts the whole job
+                what a failed delivery does — stop without moving past it, or
+                set the failed rows aside and carry on. See{' '}
+                <a href="#when-a-delivery-fails">When a delivery fails</a>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <h2 id="when-a-delivery-fails">When a delivery fails</h2>
+      <p>
+        One rule sits under everything here: a row Syncle has read is always
+        in one of three places — the destination, the bridge&apos;s{' '}
+        <strong>dead-letter queue</strong>, or still ahead of the
+        bridge&apos;s cursor, where it will be read again. It is never in
+        none of them. That matters most on a CDC bridge, because a change
+        stream is read once: when Syncle confirms a position, the source is
+        free to discard everything before it, and a row that was stepped over
+        cannot be fetched a second time.
+      </p>
+      <p>
+        <code>onError</code> picks between the two ways of honouring that
+        rule.
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <code>onError</code>
+              </th>
+              <th>On a failed delivery</th>
+              <th>Choose it when</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>abort</code>
+                <br />
+                the default when a bridge is created through the API without
+                saying
+              </td>
+              <td>
+                the bridge stops <em>at</em> the failure, cursor untouched. A
+                live bridge pauses and a replay job fails, each with the
+                reason. Start it again and the same rows are retried into the
+                same timeline cell.
+              </td>
+              <td>
+                the destination must never run ahead of a row it is missing,
+                and someone will notice a stopped bridge
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>continue</code>
+              </td>
+              <td>
+                the bridge keeps going. On a live bridge the rows that failed
+                are first written, complete, to the dead-letter queue — only
+                then does the cursor move.
+              </td>
+              <td>
+                one bad row should not hold up every row behind it. This is
+                what the web app&apos;s builder pre-selects; the choice is on
+                the form either way
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="dead-letter-queue">The dead-letter queue</h3>
+      <p>
+        A database batch is a single transaction, so one row the destination
+        refuses — a value a constraint rejects, a type it cannot hold — fails
+        every row that shared its batch. Under <code>continue</code> Syncle
+        does not set the whole batch aside: it splits it and re-delivers the
+        halves, again and again, until each failure is pinned to a single
+        row. The healthy rows land; only the rows actually at fault are
+        queued. (Finding one bad row among a hundred thousand costs a few
+        dozen attempts, not a hundred thousand.) An HTTP destination is not
+        split — there the batch <em>is</em> the payload the receiver sees —
+        so the failed request is queued whole, and the same goes for a target
+        in <code>insert</code> mode, where re-delivering rows would append
+        them twice.
+      </p>
+      <p>
+        An entry holds the source row exactly as it was read: never
+        truncated, with bytes, timestamps and 64-bit integers preserved.
+        Retrying it is safe while the bridge is still streaming, because a
+        retry does not replay the recording. For a database destination fed
+        from a table with a primary key, Syncle looks the row up at the
+        source again and writes what is there <em>now</em>: the current row
+        if it exists, a delete if it is gone, nothing if it has since left
+        the bridge&apos;s filters. Replaying an hours-old payload could
+        overwrite a newer version the stream has delivered in the meantime;
+        re-reading cannot. The recording itself is sent only where that is
+        the right thing — to HTTP destinations, to append-only{' '}
+        <code>insert</code> targets, and for sources with no primary key to
+        look a row up by.
+      </p>
+      <p>
+        One case cannot be settled automatically: the source row is gone, and
+        the bridge does not propagate deletes (a watch bridge, or a CDC
+        bridge with deletes switched off). The recording might be the newest
+        version of that row or an outdated one, and nothing can tell which,
+        so the entry waits. Retry it with <code>force</code> to write the
+        recording anyway, or discard it.
+      </p>
+      <p>
+        When every row from a failed delivery has been delivered, its
+        timeline cell turns green and the job&apos;s counters follow.
+        Discarded rows leave the cell red — they never arrived.
+      </p>
+
+      <h3 id="when-continue-stops">When continue stops anyway</h3>
+      <p>
+        <code>continue</code> is for bad rows, not for a broken destination.
+        If the target is unreachable or its table is gone, <em>every</em> row
+        fails, and carrying on would simply pour the change stream into the
+        queue. So a <code>continue</code> bridge still stops — cursor
+        untouched, nothing lost, the reason on the job — when:
+      </p>
+      <ul>
+        <li>
+          splitting a failed batch shows the failure is not confined to a few
+          rows (nothing at all succeeds, or more than 100 rows of one batch
+          are bad);
+        </li>
+        <li>
+          several batches in a row deliver nothing (
+          <code>SYNCLE_MAX_CONSECUTIVE_FAILURES</code>, default 5);
+        </li>
+        <li>
+          the queue is full (<code>SYNCLE_DEAD_LETTER_MAX_ROWS</code>, default
+          10,000 waiting rows per bridge);
+        </li>
+        <li>the failed rows could not be written to the queue.</li>
+      </ul>
+      <p>
+        Fix the destination, start the bridge again, and retry whatever was
+        queued before it stopped.
+      </p>
+      <Note>
+        <p>
+          A replay job does not use the queue. Its source is a table that is
+          still there, so its failed rows are re-read from it:{' '}
+          <em>Retry failed</em> re-streams exactly those rows.
+        </p>
+      </Note>
 
       <h2 id="job-lifecycle">Job lifecycle and control</h2>
       <p>A job moves through these statuses:</p>
@@ -480,7 +632,11 @@ export default function Page() {
               <td>
                 <code>paused</code>
               </td>
-              <td>stopped by you — resumable in place, as the same job</td>
+              <td>
+                stopped — by you, or by a failure on a live bridge (the reason
+                is on the job). Resumable in place, as the same job, from the
+                same cursor
+              </td>
             </tr>
             <tr>
               <td>
@@ -501,7 +657,9 @@ export default function Page() {
         interrupted one, skip queued deliveries by range or selection, or
         retry only the failed rows — the retry re-queues the same job and
         re-sends just its failed delivery cells, which flip to success in
-        place. All of these are also plain endpoints,
+        place. On a live bridge the failed rows are in its dead-letter queue,
+        and <em>Retry failed</em> retries that instead, without stopping the
+        bridge. All of these are also plain endpoints,
         documented on the <a href="/docs/api">HTTP API page</a>; reading the
         delivery timeline is covered in the{' '}
         <a href="/docs/quickstart">quickstart</a>.

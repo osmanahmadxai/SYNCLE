@@ -133,8 +133,18 @@ export const bridgeDeliverySchema = z.object({
   timeoutMs: z.coerce.number().int().min(100).max(120_000).default(15_000),
   /** rows fetched per page from a table source */
   pageSize: z.coerce.number().int().min(1).max(1000).default(200),
-  /** whether a failed delivery aborts the job, or is logged and skipped */
-  onError: z.enum(['continue', 'abort']).default('continue'),
+  /**
+   * what a failed delivery does to the bridge.
+   *
+   * `abort` (default) stops at the failure WITHOUT moving past it, so nothing
+   * is skipped: fix the cause, start again, and the same rows are retried.
+   *
+   * `continue` keeps going. on a live bridge (CDC / watch) the rows that failed
+   * are first set aside, in full, in the bridge's dead-letter queue — only then
+   * does the cursor move on — so they can be retried once the cause is fixed
+   * instead of being lost when the source's change log advances.
+   */
+  onError: z.enum(['continue', 'abort']).default('abort'),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -225,6 +235,23 @@ export const skipSchema = z.object({
   sequences: z.array(z.coerce.number().int().min(0)).min(1).max(10_000),
 });
 
+/** which dead letters an action applies to; omitted ids = every pending one */
+const deadLetterIdsSchema = z.array(z.string().min(1)).min(1).max(500).optional();
+
+export const deadLetterRetrySchema = z.object({
+  ids: deadLetterIdsSchema,
+  /**
+   * apply the recorded row even where Syncle could not confirm it is still the
+   * newest version (the source row is gone and the bridge does not propagate
+   * deletes). off by default: never overwrite on a guess.
+   */
+  force: z.boolean().default(false),
+});
+
+export const deadLetterDiscardSchema = z.object({
+  ids: deadLetterIdsSchema,
+});
+
 /** check whether a connection+table can do event-based (CDC) delivery */
 export const cdcReadinessSchema = z.object({
   connectionId: z.string().min(1),
@@ -266,6 +293,57 @@ export interface CdcReadiness {
 export type BridgePreviewDTO = z.infer<typeof bridgePreviewSchema>;
 export type StartJobDTO = z.infer<typeof startJobSchema>;
 export type SkipDTO = z.infer<typeof skipSchema>;
+export type DeadLetterRetryDTO = z.infer<typeof deadLetterRetrySchema>;
+export type DeadLetterDiscardDTO = z.infer<typeof deadLetterDiscardSchema>;
+
+export type DeadLetterStatus = 'pending' | 'resolved' | 'discarded';
+
+/**
+ * rows a live bridge could not deliver, kept in full so they can be retried.
+ * one entry is one failed unit: a single row for a database destination (bad
+ * rows are isolated from the rest of their batch), a whole request for HTTP.
+ */
+export interface BridgeDeadLetter {
+  id: string;
+  bridgeId: string;
+  jobId: string;
+  /** the failed delivery (timeline cell) these rows belong to */
+  sequence: number;
+  /** the change operation, or null for rows found by a polling bridge */
+  op: CdcOperation | null;
+  rowCount: number;
+  /** the source rows exactly as they were read — never truncated */
+  rows: Record<string, unknown>[];
+  error: string | null;
+  /** retry attempts made so far */
+  attempts: number;
+  /**
+   * a plain retry left this entry alone: the source row is gone and the bridge
+   * does not propagate deletes, so only a forced retry (write the recorded row
+   * anyway) or a discard can settle it
+   */
+  needsForce: boolean;
+  status: DeadLetterStatus;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface DeadLetterPage {
+  items: BridgeDeadLetter[];
+  /** pending entries / rows across the whole bridge, not just this page */
+  pendingEntries: number;
+  pendingRows: number;
+}
+
+/** what a retry did, entry by entry */
+export interface DeadLetterRetryResult {
+  /** delivered (or confirmed no longer needed) and closed */
+  resolved: number;
+  /** tried again and still failing; the entry keeps its new error */
+  stillFailing: number;
+  /** left untouched because applying them needs `force` */
+  needsForce: number;
+}
 
 export type BridgeJobStatus =
   | 'draft' // prepared & queued in the UI, not sending yet

@@ -37,6 +37,7 @@ export const queryKeys = {
   bridge: (id: string) => ['bridges', id] as const,
   bridgeJobs: (id: string) => ['bridges', id, 'jobs'] as const,
   bridgeJob: (id: string, jobId: string) => ['bridges', id, 'jobs', jobId] as const,
+  deadLetters: (id: string) => ['bridges', id, 'deadLetters'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -361,8 +362,48 @@ export function useRetryFailed(bridgeId: string) {
       qc.invalidateQueries({
         queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId),
       });
+      // on a live bridge this retries the dead-letter queue
+      qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
       qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
+  });
+}
+
+/**
+ * rows the bridge set aside instead of losing. polled while the bridge is live
+ * (new ones can arrive at any moment), otherwise fetched once.
+ */
+export function useDeadLetters(bridgeId: string | null, live: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.deadLetters(bridgeId) : ['deadLetters', 'none'],
+    queryFn: () => api.listDeadLetters(bridgeId as string, { status: 'pending', limit: 100 }),
+    enabled: !!bridgeId,
+    refetchInterval: live ? 5000 : false,
+  });
+}
+
+/** a retry can turn failed deliveries green, so the job + timeline refresh too */
+function invalidateAfterDeadLetterChange(qc: QueryClient, bridgeId: string) {
+  qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
+  qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+  qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
+}
+
+export function useRetryDeadLetters(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { ids?: string[]; force?: boolean }) =>
+      api.retryDeadLetters(bridgeId, body),
+    // a partial result is still progress: refresh whether it resolved or not
+    onSettled: () => invalidateAfterDeadLetterChange(qc, bridgeId),
+  });
+}
+
+export function useDiscardDeadLetters(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { ids?: string[] }) => api.discardDeadLetters(bridgeId, body),
+    onSettled: () => invalidateAfterDeadLetterChange(qc, bridgeId),
   });
 }
 

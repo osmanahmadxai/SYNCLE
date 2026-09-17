@@ -153,6 +153,96 @@ export default function Page() {
         lower the batch size, in the bridge&apos;s delivery settings.
       </p>
 
+      <h2 id="bridge-paused-itself">A live bridge paused itself</h2>
+      <p>
+        A watch or CDC bridge that stops on its own always leaves the reason
+        on the job, and always stops <em>without</em> moving its cursor — so
+        nothing was skipped, and starting it again picks up the same rows.
+        What the message says tells you what to fix first:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>The job says</th>
+              <th>What happened</th>
+              <th>What to do</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Paused after a failed delivery (onError=abort)</td>
+              <td>
+                the bridge is set to stop at the first failure, and it did
+              </td>
+              <td>
+                fix what the error names, then start the bridge. If a single
+                bad row should not stop everything, switch On failure to
+                setting failed rows aside
+              </td>
+            </tr>
+            <tr>
+              <td>this is not a few bad rows</td>
+              <td>
+                a batch failed, and splitting it found nothing that would go
+                through — the destination is rejecting everything
+              </td>
+              <td>
+                check the destination is reachable, the table exists, and its
+                columns still match the source
+              </td>
+            </tr>
+            <tr>
+              <td>N batches in a row delivered nothing</td>
+              <td>the same, seen across several small batches</td>
+              <td>
+                as above. Rows from the earlier batches are in the dead-letter
+                queue — retry them after starting the bridge
+              </td>
+            </tr>
+            <tr>
+              <td>the dead-letter queue is full</td>
+              <td>
+                failed rows reached{' '}
+                <code>SYNCLE_DEAD_LETTER_MAX_ROWS</code>
+              </td>
+              <td>
+                retry or discard the queue, then start the bridge. A queue
+                that keeps filling means the cause was never fixed
+              </td>
+            </tr>
+            <tr>
+              <td>progress could not be saved</td>
+              <td>
+                Syncle&apos;s own database was unreachable. The job is marked{' '}
+                <code>failed</code> rather than paused
+              </td>
+              <td>
+                bring the metadata store back, then start the bridge
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="dead-letters-stuck">Rows will not leave the dead-letter queue</h2>
+      <p>
+        A retry that still fails keeps the entry and replaces its error with
+        the new one, so the entry always shows the <em>latest</em> reason.
+        Usually the destination still refuses the row — fix the constraint,
+        type or mapping it names and retry again.
+      </p>
+      <p>
+        An entry that a retry leaves untouched, offering{' '}
+        <em>Write recorded row</em>, is a different case: its source row no
+        longer exists and the bridge does not propagate deletes, so Syncle
+        cannot tell whether the row it recorded is still the newest version.
+        Write it anyway if the destination is meant to keep rows the source
+        has dropped; discard it otherwise.{' '}
+        <a href="/docs/bridges#dead-letter-queue">How bridges work</a> has the
+        reasoning.
+      </p>
+
       <h2 id="still-stuck">Still stuck</h2>
       <p>
         <code>syncle logs api</code> carries the server side of anything the

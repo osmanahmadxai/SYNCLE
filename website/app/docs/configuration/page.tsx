@@ -264,6 +264,34 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_DEAD_LETTER_MAX_ROWS</code>
+              </td>
+              <td>
+                <code>10000</code>
+              </td>
+              <td>
+                Undelivered rows one bridge may hold in its{' '}
+                <a href="/docs/bridges#dead-letter-queue">dead-letter queue</a>.
+                At the limit a <code>continue</code> bridge stops, without
+                moving its cursor, rather than grow the metadata store
+                without bound.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_MAX_CONSECUTIVE_FAILURES</code>
+              </td>
+              <td>
+                <code>5</code>
+              </td>
+              <td>
+                Batches in a row that may deliver nothing before a{' '}
+                <code>continue</code> bridge stops. One bad row fails one
+                batch; a destination that is down fails all of them.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_MAX_QUERY_ROWS</code>
               </td>
               <td>

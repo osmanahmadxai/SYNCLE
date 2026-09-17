@@ -246,6 +246,29 @@
     "bridgeUpdated": "桥接已更新",
     "bridgeCreated": "桥接已创建",
     "saveFailed": "无法保存桥接",
-    "defaultName": "{table} → 桥接"
+    "defaultName": "{table} → 桥接",
+    "setAsideContinue": "将失败的行暂存并继续同步",
+    "stopBridge": "停止桥接",
+    "onFailureContinueHint": "失败的行会完整保存在该桥接的死信队列中，原因修复后可以重试。如果目标本身不可用，桥接仍会停止。",
+    "onFailureStopHint": "桥接会在第一次失败处停止，不会越过它。重新启动后会重试相同的行，不会跳过任何数据。"
+  },
+  "deadLetters": {
+    "waiting": "{count, plural, other {死信队列中有 # 行等待处理}}",
+    "explainer": "这些行无法送达，因此被暂存起来而不是丢失。",
+    "retryAll": "全部重试",
+    "discardAll": "全部丢弃",
+    "retry": "重试",
+    "forceRetry": "写入已记录的行",
+    "discard": "丢弃",
+    "entryMeta": "{rows, plural, other {# 行}} · 第 #{sequence} 次投递 · {attempts, plural, =0 {尚未重试} other {已重试 # 次}}",
+    "moreNotShown": "{count, plural, other {还有 # 条未显示}}",
+    "retryResolved": "{count, plural, other {已送达 # 条}}",
+    "retryStillFailing": "{count, plural, other {仍有 # 条失败}}",
+    "retryNeedsForce": "{count, plural, other {# 条需要您决定：源数据行已不存在}}",
+    "couldNotRetry": "无法重试",
+    "discardTitle": "丢弃这些行？",
+    "discardDescription": "{count, plural, other {# 条将永远不会被送达。记录会保留，但此操作无法撤销。}}",
+    "discarded": "{count, plural, other {已丢弃 # 条}}",
+    "couldNotDiscard": "无法丢弃"
   }
 }

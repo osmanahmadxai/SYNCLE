@@ -65,31 +65,43 @@ export function DeliverySection({
           }
         />
       </div>
-      {/* on-failure abort is a job concept. a listener must never stop on one bad delivery */}
-      {syncMode === 'oneTime' && (
-        <div className="grid gap-1.5">
-          <Label className="text-xs">{t('onFailure')}</Label>
-          <Select
-            value={delivery.onError}
-            onValueChange={(v) =>
-              dispatch({
-                type: 'patchDelivery',
-                patch: { onError: v as 'continue' | 'abort' },
-              })
-            }
-          >
-            <SelectTrigger className="h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="continue">
-                {t('logContinue')}
-              </SelectItem>
-              <SelectItem value="abort">{t('stopJob')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      {/* a live bridge defaults to `continue`: one bad row must not stop a
+          listener. that used to mean the row was lost once the source's change
+          log moved on; it is now parked in the dead-letter queue instead, so
+          the choice is safe to offer either way */}
+      <div className="grid gap-1.5">
+        <Label className="text-xs">{t('onFailure')}</Label>
+        <Select
+          value={delivery.onError}
+          onValueChange={(v) =>
+            dispatch({
+              type: 'patchDelivery',
+              patch: { onError: v as 'continue' | 'abort' },
+            })
+          }
+        >
+          <SelectTrigger className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="continue">
+              {syncMode === 'oneTime'
+                ? t('logContinue')
+                : t('setAsideContinue')}
+            </SelectItem>
+            <SelectItem value="abort">
+              {syncMode === 'oneTime' ? t('stopJob') : t('stopBridge')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {syncMode !== 'oneTime' && (
+          <p className="text-muted-foreground text-xs">
+            {delivery.onError === 'continue'
+              ? t('onFailureContinueHint')
+              : t('onFailureStopHint')}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

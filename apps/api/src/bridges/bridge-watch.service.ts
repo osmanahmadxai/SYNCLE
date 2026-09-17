@@ -29,6 +29,8 @@ import {
 import { Queue } from 'bullmq';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
+import { runtimeConfig } from '../common/runtime-config';
+import { DeadLetterService } from './dead-letter.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobService } from './bridge-job.service';
@@ -69,6 +71,7 @@ export class BridgeWatchService implements OnModuleInit {
     private readonly sink: BridgeSinkService,
     private readonly jobs: BridgeJobService,
     private readonly registry: JobRegistryService,
+    private readonly deadLetters: DeadLetterService,
     @InjectQueue(BRIDGE_WATCH_QUEUE) private readonly queue: Queue<BridgeWatchPayload>,
   ) {}
 
@@ -236,6 +239,17 @@ export class BridgeWatchService implements OnModuleInit {
       let delivered = 0;
       let offset = 0;
       let pages = 0;
+      // rows in a row that failed during this poll, to tell a dead destination
+      // from a bad row (see `continue` below)
+      let consecutiveFailures = 0;
+      // stop listening and say why. the page's advanced cursor is NOT saved, so
+      // the next start re-reads this window and the row that failed is retried
+      // (stable idempotency keys make the overlap safe for receivers)
+      const pause = async (message: string): Promise<void> => {
+        this.logger.warn(`Watch ${bridgeId}: ${message}`);
+        await this.unschedule(bridgeId);
+        await this.jobs.finalize(job.id, 'paused', message);
+      };
       // one poll normally fetches a single page. two situations dig deeper:
       // a fully-deduped full page (rows sharing one boundary timestamp, or a
       // snapshot table larger than a page) pages on at the same cursor so the
@@ -286,6 +300,58 @@ export class BridgeWatchService implements OnModuleInit {
             },
             outcome,
           );
+          if (outcome.status === 'failed') {
+            const reason = outcome.error ?? 'delivery failed';
+            // every stop below leaves `seq` unconsumed: the retried row lands
+            // in this same cell and turns it green, instead of stranding a red
+            // one beside a fresh delivery
+            if (bridge.delivery.onError === 'abort') {
+              await pause(`Paused after a failed delivery (onError=abort): ${reason}`);
+              return;
+            }
+            // `continue`: the cursor is about to move past this row, and a
+            // polling cursor never comes back for it. park it first — the
+            // dead-letter queue re-reads it by key on a retry — and stop
+            // instead when that is not safe
+            consecutiveFailures++;
+            if (consecutiveFailures >= runtimeConfig.maxConsecutiveFailures) {
+              await pause(
+                `Stopped without advancing: ${consecutiveFailures} rows in a row failed, which points at the destination rather than the rows. Last error: ${reason}`,
+              );
+              return;
+            }
+            const held = await this.deadLetters.pendingRows(bridgeId);
+            if (held + 1 > runtimeConfig.deadLetterMaxRows) {
+              await pause(
+                `Stopped without advancing: the dead-letter queue is full (${held} rows waiting, limit ${runtimeConfig.deadLetterMaxRows}). Retry or discard them, then start the bridge again. Last error: ${reason}`,
+              );
+              return;
+            }
+            try {
+              await this.deadLetters.park(
+                [
+                  {
+                    bridgeId,
+                    jobId: job.id,
+                    sequence: seq,
+                    op: null,
+                    rows: [row],
+                    cursor: null,
+                    error: reason,
+                    succeededTargets: outcome.succeededTargets ?? [],
+                  },
+                ],
+                { replaceFrom: seq },
+              );
+            } catch (err) {
+              await pause(
+                `Stopped without advancing: a failed row could not be set aside (${(err as Error).message}). Last error: ${reason}`,
+              );
+              return;
+            }
+          } else {
+            consecutiveFailures = 0;
+          }
           seq++;
           // checkpoint the sequence immediately: a crash mid-page must never
           // reuse a sequence (the upsert would overwrite a delivered row)
@@ -293,22 +359,6 @@ export class BridgeWatchService implements OnModuleInit {
             where: { id: job.id },
             data: { cursorOffset: seq },
           });
-          if (outcome.status === 'failed' && bridge.delivery.onError === 'abort') {
-            // stop-on-error: unschedule and leave the job paused with the
-            // reason, WITHOUT persisting this page's advanced cursor — the
-            // next start re-fetches the window, so the failed row is retried
-            // (stable idempotency keys make the overlap safe for receivers)
-            this.logger.warn(
-              `Watch ${bridgeId}: pausing after a failed delivery (onError=abort)`,
-            );
-            await this.unschedule(bridgeId);
-            await this.jobs.finalize(
-              job.id,
-              'paused',
-              'Paused after a failed delivery (onError=abort).',
-            );
-            return;
-          }
           if (bridge.delivery.minDelayMs) await sleep(bridge.delivery.minDelayMs, signal);
         }
         if (signal.aborted) return;

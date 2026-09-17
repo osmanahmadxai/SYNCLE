@@ -114,8 +114,9 @@ model Bridge {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  jobs      BridgeJob[]
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs        BridgeJob[]
+  deadLetters BridgeDeadLetter[]
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([connectionId])
   @@index([workspaceId])
@@ -176,4 +177,41 @@ model BridgeDelivery {
   @@unique([jobId, sequence]) // idempotency guard for resume / stalled-job recovery
   @@index([jobId])
   @@map("bridge_deliveries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Dead letters — rows a LIVE bridge (CDC / watch) could not deliver while set
+//  to `onError: continue`.
+//
+//  A change stream cannot be re-read once the source has been acknowledged past
+//  a position, so a failed row has to be kept somewhere durable BEFORE the
+//  cursor moves on, or it is simply gone. `bridge_deliveries.request_body` is
+//  not that place: it is capped for display and refuses to replay once cut.
+//  `rows_json` here is the complete source row(s), never truncated.
+//
+//  Hangs off the Bridge rather than the job, so the queue survives a job being
+//  replaced and disappears with the bridge.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model BridgeDeadLetter {
+  id                   String    @id
+  bridgeId             String    @map("bridge_id")
+  jobId                String    @map("job_id")
+  sequence             Int // the failed delivery these rows belong to
+  op                   String? // 'insert' | 'update' | 'delete'; null for a polling (watch) bridge
+  rowsJson             String    @map("rows_json") // full source rows, tagged so bytes/dates/bigints round-trip
+  rowCount             Int       @map("row_count")
+  cursor               String? // source position of the last change covered, for the record
+  error                String?
+  attempts             Int       @default(0) // retry attempts so far
+  status               String    @default("pending") // 'pending' | 'resolved' | 'discarded'
+  succeededTargetsJson String?   @map("succeeded_targets_json") // database fan-out: targets that already hold these rows
+  createdAt            DateTime  @default(now()) @map("created_at")
+  resolvedAt           DateTime? @map("resolved_at")
+
+  bridge Bridge @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+
+  @@index([bridgeId, status])
+  @@index([jobId])
+  @@map("bridge_dead_letters")
 }

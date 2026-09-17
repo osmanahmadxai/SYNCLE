@@ -229,14 +229,17 @@ export class PostgresCdcProvider implements CdcProvider {
         flowControl: { enabled: true }, // backpressure, await each delivery
       });
 
-      // messages we don't deliver are deterministically skippable (begin/
-      // commit/relation, disabled ops, other tables), and flow control has
-      // fully processed everything before them, so confirming their LSN is
-      // safe and keeps the slot from pinning WAL on a mostly-filtered stream
-      const ackSkipped = (lsn: string): void => {
-        ackedLsn = lsn;
-        void service.acknowledge(lsn).catch(() => undefined);
-      };
+      // messages we don't deliver (begin/commit/relation, disabled ops, other
+      // tables) still have to move the slot along, or a mostly-skipped stream
+      // pins WAL on the source. but their LSN must NOT be confirmed from here.
+      // flow control only guarantees the rows before them were HANDED to the
+      // orchestrator — which batches, so those rows are typically still in
+      // memory. confirming a COMMIT's LSN at this point put the slot's restart
+      // position past its own transaction's undelivered rows: a failed delivery
+      // or a crash then had nothing left to re-read. the orchestrator is told
+      // instead, and confirms the position once everything before it is durable
+      const skip = (lsn: string): Promise<void> =>
+        handlers.onSkip ? handlers.onSkip(lsn) : Promise.resolve();
 
       service.on(
         'data',
@@ -254,15 +257,15 @@ export class PostgresCdcProvider implements CdcProvider {
           attempt = 0;
           lastReported = null;
           if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') {
-            ackSkipped(lsn);
+            await skip(lsn);
             return;
           }
           if (!ops.has(msg.tag as CdcOperation)) {
-            ackSkipped(lsn);
+            await skip(lsn);
             return;
           }
           if (!msg.relation || msg.relation.name !== src.table || msg.relation.schema !== schema) {
-            ackSkipped(lsn);
+            await skip(lsn);
             return;
           }
           const row = msg.tag === 'delete' ? (msg.old ?? msg.key ?? {}) : (msg.new ?? {});

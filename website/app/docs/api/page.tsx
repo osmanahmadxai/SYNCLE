@@ -604,7 +604,10 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 <code>POST /api/bridges/:id/jobs/:jobId/retry-failed</code>
               </td>
               <td>
-                Re-queue the same job to re-send only its failed deliveries
+                Re-queue the same job to re-send only its failed deliveries.
+                On a watch or CDC bridge whose failed rows are in the
+                dead-letter queue, retries the queue instead — without
+                stopping the bridge
               </td>
             </tr>
             <tr>
@@ -643,6 +646,75 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         The numeric delivery-list parameters must be non-negative integers —
         anything else is a 400, not an empty result. Skipping only affects
         deliveries that are still queued.
+      </p>
+
+      <h3 id="dead-letters">Dead letters</h3>
+      <p>
+        Rows a watch or CDC bridge could not deliver under{' '}
+        <code>onError: continue</code>, kept in full.{' '}
+        <a href="/docs/bridges#when-a-delivery-fails">How bridges work</a>{' '}
+        explains when a row lands here and what a retry does.
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/dead-letters</code>
+              </td>
+              <td>
+                Newest first; filters <code>status=</code> (one of{' '}
+                <code>pending</code>, <code>resolved</code>,{' '}
+                <code>discarded</code>), <code>offset</code>,{' '}
+                <code>limit</code> (default 100, at most 500). Returns{' '}
+                <code>{'{ items, pendingEntries, pendingRows }'}</code> — the
+                two counts cover the whole bridge, not just the page
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/dead-letters/retry</code>
+              </td>
+              <td>
+                Body <code>{'{ ids?, force? }'}</code>. Omit <code>ids</code>{' '}
+                to retry every pending entry (up to 500 per call, oldest
+                first). Returns{' '}
+                <code>{'{ resolved, stillFailing, needsForce }'}</code>. Safe
+                while the bridge is running; a second call while one is in
+                progress is a 409
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/dead-letters/discard</code>
+              </td>
+              <td>
+                Body <code>{'{ ids? }'}</code>. Marks pending entries as never
+                to be delivered; returns <code>{'{ discarded }'}</code>. The
+                entries stay on record and their delivery stays failed
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Each item carries <code>op</code> (<code>insert</code>,{' '}
+        <code>update</code>, <code>delete</code>, or <code>null</code> for a
+        watch bridge), the source <code>rows</code> as read,{' '}
+        <code>error</code>, <code>attempts</code>, the{' '}
+        <code>sequence</code> of the delivery it came from, and{' '}
+        <code>needsForce</code>. In <code>rows</code>, binary values are
+        shown as a byte count rather than dumped; the stored copy is
+        complete. An entry with <code>needsForce: true</code> was left alone
+        by a plain retry because its source row is gone and the bridge does
+        not propagate deletes — send <code>force: true</code> to write the
+        recorded row anyway, or discard it.
       </p>
 
       <h3 id="live-listening">Live listening</h3>

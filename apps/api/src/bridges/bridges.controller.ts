@@ -20,10 +20,16 @@ import {
   type SkipDTO,
   type CdcReadiness,
   type CdcReadinessDTO,
+  type DeadLetterDiscardDTO,
+  type DeadLetterPage,
+  type DeadLetterRetryDTO,
+  type DeadLetterRetryResult,
   BadRequestError,
   cdcReadinessSchema,
   bridgeInputSchema,
   bridgePreviewSchema,
+  deadLetterDiscardSchema,
+  deadLetterRetrySchema,
   mapRow,
   renderRow,
   skipSchema,
@@ -38,6 +44,7 @@ import { BridgeLifecycleService } from './bridge-lifecycle.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchService } from './bridge-watch.service';
+import { DeadLetterService } from './dead-letter.service';
 
 @Controller('bridges')
 export class BridgesController {
@@ -52,6 +59,7 @@ export class BridgesController {
     private readonly delivery: DeliveryService,
     private readonly databaseSink: DatabaseSinkService,
     private readonly lifecycle: BridgeLifecycleService,
+    private readonly deadLetters: DeadLetterService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -265,11 +273,59 @@ export class BridgesController {
   }
 
   @Post(':id/jobs/:jobId/retry-failed')
-  retryFailed(
+  async retryFailed(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
   ): Promise<BridgeJob> {
+    await this.jobs.getJob(id, jobId); // 404 unless the job belongs to this bridge
+    // a live bridge's failed rows sit in its dead-letter queue, and that is
+    // where they are retried: by re-reading the source, which is safe even
+    // while the bridge streams. only failures the queue doesn't own (recorded
+    // before it existed) fall through to the captured-payload resend
+    const { pendingEntries } = await this.deadLetters.page(id, { limit: 1 });
+    if (pendingEntries > 0) {
+      await this.deadLetters.retry(id, { force: false });
+      const job = await this.jobs.getJob(id, jobId);
+      if (job.failedCount === 0 || ['queued', 'running', 'canceling'].includes(job.status)) {
+        return job;
+      }
+      const rest = await this.jobs.resendableFailures(jobId);
+      if (rest === 0) return job;
+    }
     return this.jobs.resendFailed(id, jobId);
+  }
+
+  /* ----- dead letters: rows a live bridge set aside instead of losing ----- */
+
+  @Get(':id/dead-letters')
+  listDeadLetters(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
+  ): Promise<DeadLetterPage> {
+    const valid = status === 'pending' || status === 'resolved' || status === 'discarded';
+    return this.deadLetters.page(id, {
+      status: valid ? status : undefined,
+      offset: parseBound('offset', offset),
+      limit: parseBound('limit', limit),
+    });
+  }
+
+  @Post(':id/dead-letters/retry')
+  retryDeadLetters(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(deadLetterRetrySchema)) dto: DeadLetterRetryDTO,
+  ): Promise<DeadLetterRetryResult> {
+    return this.deadLetters.retry(id, dto);
+  }
+
+  @Post(':id/dead-letters/discard')
+  discardDeadLetters(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(deadLetterDiscardSchema)) dto: DeadLetterDiscardDTO,
+  ): Promise<{ discarded: number }> {
+    return this.deadLetters.discard(id, dto);
   }
 
   @Post(':id/jobs/:jobId/cancel')

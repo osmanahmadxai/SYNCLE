@@ -92,6 +92,14 @@ export class DatabaseSinkService {
         summaries.push(`${label}: skipped (already written by a previous attempt)`);
         continue;
       }
+      // a target with no key columns (append-only `insert` mode) has nothing to
+      // delete BY. attempting it builds an empty WHERE, which every engine
+      // rejects — so each delete on the source would fail the whole delivery
+      if (op === 'delete' && target.keyColumns.length === 0) {
+        succeeded.push(key);
+        summaries.push(`${label}: delete not applied (target has no key columns)`);
+        continue;
+      }
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
         const affected = await this.writeRows(target, rows, op);
@@ -106,11 +114,7 @@ export class DatabaseSinkService {
 
     // requestBody mirrors what we attempted to write (mapped to the first
     // target's columns), so the monitor can show the exact payload
-    const mappedPreview = rows.map((r) => mapRow(r, targets[0]?.mapping ?? []));
-    const serialized = JSON.stringify(
-      mappedPreview.length === 1 ? mappedPreview[0] : mappedPreview,
-    );
-    const requestBody = serialized.slice(0, SUMMARY_LIMIT);
+    const { requestBody, bodyTruncated } = previewBody(rows, targets);
 
     return {
       status: firstError ? 'failed' : 'success',
@@ -122,7 +126,7 @@ export class DatabaseSinkService {
       durationMs: Math.round(performance.now() - started),
       op: op ?? null,
       // a capped capture can't be replayed faithfully; the resend path refuses it
-      bodyTruncated: serialized.length > SUMMARY_LIMIT,
+      bodyTruncated,
       // checkpoint only matters while the delivery is failed; a success clears it
       succeededTargets: firstError ? succeeded : null,
     };
@@ -393,13 +397,31 @@ export class DatabaseSinkService {
 
 /* ----- helpers ----- */
 
+/**
+ * the capped payload shown in the monitor for a set of rows: mapped to the
+ * first target's columns, exactly as {@link DatabaseSinkService.deliver} records
+ * it. `bodyTruncated` marks a capture that can no longer be replayed faithfully.
+ */
+export function previewBody(
+  rows: Row[],
+  targets: DatabaseTarget[],
+): { requestBody: string; bodyTruncated: boolean } {
+  const mapped = rows.map((r) => mapRow(r, targets[0]?.mapping ?? []));
+  const serialized = JSON.stringify(mapped.length === 1 ? mapped[0] : mapped);
+  return {
+    requestBody: serialized.slice(0, SUMMARY_LIMIT),
+    bodyTruncated: serialized.length > SUMMARY_LIMIT,
+  };
+}
+
 function pick(row: Row, keys: string[]): Row {
   const out: Row = {};
   for (const k of keys) out[k] = row[k];
   return out;
 }
 
-function targetKey(t: DatabaseTarget): string {
+/** stable identity of a target, as persisted in `succeededTargets` checkpoints */
+export function targetKey(t: DatabaseTarget): string {
   return `${t.connectionId}::${t.database ?? ''}::${t.schema ?? ''}::${t.table}`;
 }
 

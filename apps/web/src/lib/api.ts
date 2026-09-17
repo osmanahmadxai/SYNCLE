@@ -17,6 +17,9 @@ import type {
   DeleteRowParams,
   CdcReadiness,
   CdcReadinessDTO,
+  DeadLetterPage,
+  DeadLetterRetryResult,
+  DeadLetterStatus,
   DriverInfo,
   Bridge,
   BridgeDelivery,
@@ -313,6 +316,30 @@ export const api = {
     request<CdcReadiness>('/bridges/cdc/readiness', { method: 'POST', ...jsonBody(body) }),
   retryFailedDeliveries: (id: string, jobId: string) =>
     request<BridgeJob>(`/bridges/${id}/jobs/${jobId}/retry-failed`, { method: 'POST' }),
+
+  /* ----- dead letters: rows a live bridge set aside instead of losing ----- */
+
+  listDeadLetters: (
+    id: string,
+    opts: { status?: DeadLetterStatus; offset?: number; limit?: number } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set('status', opts.status);
+    if (opts.offset != null) q.set('offset', String(opts.offset));
+    if (opts.limit != null) q.set('limit', String(opts.limit));
+    const qs = q.toString();
+    return request<DeadLetterPage>(`/bridges/${id}/dead-letters${qs ? `?${qs}` : ''}`);
+  },
+  retryDeadLetters: (id: string, body: { ids?: string[]; force?: boolean } = {}) =>
+    request<DeadLetterRetryResult>(`/bridges/${id}/dead-letters/retry`, {
+      method: 'POST',
+      ...jsonBody(body),
+    }),
+  discardDeadLetters: (id: string, body: { ids?: string[] } = {}) =>
+    request<{ discarded: number }>(`/bridges/${id}/dead-letters/discard`, {
+      method: 'POST',
+      ...jsonBody(body),
+    }),
 };
 
 function dbQuery(database?: string): string {

@@ -45,6 +45,21 @@ export interface CdcStreamHandlers {
    * event so backpressure flows all the way to the source.
    */
   onChange(change: CdcChange): Promise<void>;
+  /**
+   * the stream has moved past something that is NOT delivered: a transaction
+   * marker, another table, a disabled operation. the source still needs to be
+   * told, or a mostly-skipped stream would pin its log forever — but only the
+   * orchestrator knows when that is safe.
+   *
+   * a provider must NEVER acknowledge such a position to the source itself.
+   * "everything before it has been handed over" is not "everything before it
+   * has landed": changes are batched, so the rows ahead of a COMMIT are usually
+   * still in memory when the COMMIT arrives. confirming it then moves the
+   * source's restart point beyond rows that a failed delivery or a crash would
+   * need to read again — and they are gone. the orchestrator folds the position
+   * into the pending batch and confirms it only once that batch is durable.
+   */
+  onSkip?(cursor: string): Promise<void>;
   /** a non-fatal transport error. logged, the provider keeps/reconnects */
   onError(err: Error): void;
 }

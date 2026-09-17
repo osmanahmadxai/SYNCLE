@@ -13,6 +13,12 @@ function resolveDataDir(): string {
 
 const dataDir = resolveDataDir();
 
+/** a whole number ≥ 1 from the environment, or the default when unset/invalid */
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return raw !== undefined && Number.isInteger(n) && n >= 1 ? n : fallback;
+}
+
 export const runtimeConfig = {
   dataDir,
   storeFile: resolve(dataDir, 'syncle.db'),
@@ -102,6 +108,21 @@ export const runtimeConfig = {
   cdcSpool: (process.env.SYNCLE_CDC_SPOOL ?? '') === 'on',
   /** cap on unwritten changes held in the spool before the reader is throttled */
   cdcSpoolMax: Number(process.env.SYNCLE_CDC_SPOOL_MAX ?? 50_000),
+  /**
+   * Dead-letter queue bound. A live bridge set to `onError: continue` parks the
+   * rows it cannot deliver instead of losing them, but that must not turn a
+   * broken destination into unbounded growth of the metadata store: once a
+   * bridge holds this many undelivered rows it stops (without moving its
+   * cursor) and says why, exactly as `abort` would.
+   */
+  deadLetterMaxRows: positiveInt(process.env.SYNCLE_DEAD_LETTER_MAX_ROWS, 10_000),
+  /**
+   * How many batches in a row may deliver NOTHING before a `continue` bridge
+   * stops. One bad row fails one batch; a destination that is down fails all of
+   * them, and carrying on would only move the whole change stream into the
+   * dead-letter queue.
+   */
+  maxConsecutiveFailures: positiveInt(process.env.SYNCLE_MAX_CONSECUTIVE_FAILURES, 5),
   /**
    * when true, HTTP destinations may not resolve to loopback/private/link-local
    * addresses (SSRF guard for network-exposed deployments). off by default —
