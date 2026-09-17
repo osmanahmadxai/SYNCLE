@@ -53,21 +53,46 @@ describe('settings listeners', () => {
     expect(seen).toEqual([11, 7]);
   });
 
-  it('one that throws does not stop a save, or the others', async () => {
+  it('one that throws does not stop a save, or the others — and is not left as an unhandled rejection', async () => {
     const seen: number[] = [];
-    const stopBad = settings.onChange(() => {
-      throw new Error('listener bug');
-    });
-    const stopGood = settings.onChange((s: { jobConcurrency: number }) =>
-      seen.push(s.jobConcurrency),
-    );
-    await new Promise((r) => setTimeout(r, 20));
-    await expect(settings.update({ jobConcurrency: 9 })).resolves.toMatchObject(
-      { jobConcurrency: 9 },
-    );
-    expect(seen.at(-1)).toBe(9);
-    stopBad();
-    stopGood();
+    // the FIRST call happens inside a promise nobody awaits. thrown there, the
+    // error ends the process (Node's default for an unhandled rejection)
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let calls = 0;
+      const stopBad = settings.onChange(() => {
+        calls++;
+        throw new Error('listener bug');
+      });
+      const stopGood = settings.onChange((s: { jobConcurrency: number }) =>
+        seen.push(s.jobConcurrency),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls).toBe(1);
+      await expect(
+        settings.update({ jobConcurrency: 9 }),
+      ).resolves.toMatchObject({ jobConcurrency: 9 });
+      expect(calls).toBe(2);
+      expect(seen.at(-1)).toBe(9);
+      stopBad();
+      stopGood();
+      // an unhandled rejection is reported a turn of the event loop later
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('one that unsubscribes before the settings were read is never called', async () => {
+    let calls = 0;
+    const stop = settings.onChange(() => calls++);
+    stop();
+    await new Promise((r) => setTimeout(r, 50));
+    await settings.update({ jobConcurrency: 10 });
+    expect(calls).toBe(0);
   });
 });
 

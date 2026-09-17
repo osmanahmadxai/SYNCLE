@@ -29,19 +29,29 @@ export class SettingsStoreService implements OnModuleInit {
   onChange(listener: (settings: AppSettings) => void): () => void {
     this.listeners.add(listener);
     void this.resolved().then(
-      (s) => listener(s),
+      (s) => {
+        // unsubscribed before the settings were read: it asked not to be told
+        if (this.listeners.has(listener)) this.tell(listener, s);
+      },
       () => undefined,
     );
     return () => this.listeners.delete(listener);
   }
 
   private announce(settings: AppSettings): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(settings);
-      } catch (err) {
-        this.logger.warn(`A settings listener failed: ${(err as Error).message}`);
-      }
+    for (const listener of this.listeners) this.tell(listener, settings);
+  }
+
+  /**
+   * a listener that throws is its own problem: it must not fail a save, keep the
+   * other listeners from hearing, or — thrown inside a promise nobody awaits —
+   * become an unhandled rejection, which ends a Node process
+   */
+  private tell(listener: (settings: AppSettings) => void, settings: AppSettings): void {
+    try {
+      listener(settings);
+    } catch (err) {
+      this.logger.warn(`A settings listener failed: ${(err as Error).message}`);
     }
   }
 
