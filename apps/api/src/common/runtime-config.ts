@@ -46,6 +46,21 @@ function positiveInt(raw: string | undefined, fallback: number): number {
   return raw !== undefined && Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 
+export type LogLevel = 'error' | 'warn' | 'log' | 'debug' | 'verbose';
+const LOG_LEVELS: LogLevel[] = ['error', 'warn', 'log', 'debug', 'verbose'];
+
+function logLevelOf(raw: string | undefined): LogLevel {
+  const wanted = (raw ?? '').trim().toLowerCase();
+  // `info` is what most of the world calls Nest's `log`
+  const level = wanted === 'info' ? 'log' : wanted;
+  return (LOG_LEVELS as string[]).includes(level) ? (level as LogLevel) : 'warn';
+}
+
+/** a level, and every level more serious than it: what Nest's `logger` option takes */
+export function logLevelsUpTo(level: LogLevel): LogLevel[] {
+  return LOG_LEVELS.slice(0, LOG_LEVELS.indexOf(level) + 1);
+}
+
 export const runtimeConfig = {
   dataDir,
   storeFile: resolve(dataDir, 'syncle.db'),
@@ -181,6 +196,25 @@ export const runtimeConfig = {
    * bridge stops rather than grow without limit.
    */
   snapshotHoldMax: Math.max(1, nonNegativeInt(env('SYNCLE_SNAPSHOT_HOLD_MAX'), 100_000)),
+  /**
+   * Alerts are throttled per channel, kind of event and bridge: a bridge that
+   * fails every thirty seconds sends ONE alert per this many seconds, and the
+   * next says how many were held back. 0 sends every one.
+   */
+  alertThrottleSeconds: nonNegativeInt(env('SYNCLE_ALERT_THROTTLE_SECONDS'), 300),
+  /**
+   * `GET /api/metrics` (Prometheus text format) exists only when this is set,
+   * and answers only to `Authorization: Bearer <this>`. a scraper cannot hold a
+   * session, and numbers about what runs here are not for everyone who can
+   * reach the port.
+   */
+  metricsToken: (env('SYNCLE_METRICS_TOKEN') ?? '').trim(),
+  /**
+   * how much the API logs: error | warn | log | debug | verbose. `warn` (the
+   * default) is what it always was; `log` adds the lifecycle lines — a bridge
+   * started, a slot released, a retention sweep.
+   */
+  logLevel: logLevelOf(env('SYNCLE_LOG_LEVEL')),
   /**
    * Delivery history. Every delivery is recorded with what was sent and what
    * came back, and nothing used to remove those rows: a live bridge writes them

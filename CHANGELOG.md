@@ -353,6 +353,36 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Alerts.** A bridge that stopped at three in the morning said so in one
+  place: its own page. *Settings › Alerts* adds channels to say it out loud — a
+  **webhook** (JSON, optionally signed: `X-Syncle-Signature: sha256=<hmac of the
+  body>`), a **Slack** incoming webhook, or **e-mail** over your SMTP server —
+  each subscribed to the events it wants: a bridge or replay stopped by a
+  failure (or finished with failed deliveries), a live bridge that lost its
+  place in the change log, rows set aside in a dead-letter queue, a bridge
+  making its source keep change log.
+  - Throttled per channel, event and bridge (`SYNCLE_ALERT_THROTTLE_SECONDS`,
+    300): a bridge failing every thirty seconds is one message per window, and
+    the next says how many were held back. Sending never blocks or fails a
+    bridge; a stop or a cancel somebody asked for is not an alert.
+  - A channel's whole configuration is encrypted at rest (a Slack webhook URL
+    *is* its credential) and the API never hands a secret back. Alert requests
+    are held to the same outbound guard as deliveries; redirects are not
+    followed. A *Test* button, and the outcome of the last send on each channel.
+- **`GET /api/metrics`** in the Prometheus text format: bridges by trigger,
+  jobs by status, deliveries, dead-letter rows and source-retained bytes per
+  bridge, component up/down, process memory and event-loop lag. It takes a
+  bearer token of its own (`SYNCLE_METRICS_TOKEN`) and does not exist until one
+  is set. No new dependency: the format is written by hand.
+- **`GET /api/health/ready`**, which is 503 unless the metadata store *and*
+  Redis answer. `GET /api/health` now reports both
+  (`{ ok, checks: { database, redis } }`) but still fails only on the store: it
+  is what the container health check uses, and restarting the API does not bring
+  Redis back. Redis is probed on a connection that neither queues nor waits —
+  the job queue's own connection would wait for Redis to return instead of
+  saying it is gone.
+- **`SYNCLE_LOG_LEVEL`** (`error` | `warn` | `log` | `debug` | `verbose`). The
+  API logged warnings and errors only, with no way to see its lifecycle lines.
 - **Copy what is there, then follow — in one bridge.** A CDC bridge can now
   start from the `beginning`: on its first start it takes its place in the
   source's change log, copies the table through the normal delivery pipeline

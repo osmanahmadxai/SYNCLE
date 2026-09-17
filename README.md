@@ -434,6 +434,9 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_SLOT_WARN_BYTES` | api | WAL pinned by one bridge before it is flagged (default 1 GiB) |
 | `SYNCLE_SLOT_MAX_BYTES` | api | WAL pinned by a *stopped* bridge before its slot is dropped to protect the source (default `0` = never) |
 | `SYNCLE_SNAPSHOT_HOLD_MAX` | api | Keys whose changes a Redis bridge may hold in memory while it copies the existing keys, before it stops instead (default `100000`) |
+| `SYNCLE_LOG_LEVEL` | api | `error` \| `warn` \| `log` \| `debug` \| `verbose` (default `warn`; `log` adds lifecycle lines) |
+| `SYNCLE_METRICS_TOKEN` | api | Enables `GET /api/metrics` (Prometheus) for `Authorization: Bearer <token>`; unset = the endpoint does not exist |
+| `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
 | `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |

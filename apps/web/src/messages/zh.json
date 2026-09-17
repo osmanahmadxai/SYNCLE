@@ -741,7 +741,8 @@
       "account": "账户",
       "bridges": "桥接",
       "engine": "引擎",
-      "security": "安全"
+      "security": "安全",
+      "alerts": "告警"
     },
     "versionApp": "Syncle {version}",
     "versionNode": "Node {version}",
@@ -782,6 +783,83 @@
     "deliveryMaxPerJobHint": "监听或 CDC 桥接永远不会结束，因此仅凭时间无法限制其历史记录：只保留最新的这么多条投递。0 表示不限制。",
     "sessionTtl": "会话超时（分钟）",
     "sessionTtlHint": "登录会话在无操作多少分钟后过期。"
+  },
+  "alertsTab": {
+    "intro": "Syncle 在桥接需要人工处理时发出通知的地方：桥接停止、丢失变更日志中的位置、将行暂存，或使源端保留日志时。告警会限流——持续失败的桥接每五分钟只发一条消息，并附上被抑制的数量。",
+    "none": "还没有告警渠道。没有渠道时，夜里停止的桥接只会在它自己的页面上显示。",
+    "add": "添加渠道",
+    "test": "测试",
+    "edit": "编辑",
+    "delete": "删除",
+    "off": "已关闭",
+    "eventsCount": "{total} 个事件中的 {count} 个",
+    "neverSent": "尚未发送过",
+    "lastOk": "上一条已送达",
+    "lastFailed": "上一条失败：{error}",
+    "testSent": "测试告警已发送",
+    "testFailed": "该渠道未接受测试告警",
+    "deleteTitle": "删除渠道“{name}”？",
+    "deleteDescription": "告警将不再发送到那里。其他内容不变。",
+    "deleted": "渠道已删除",
+    "couldNotDelete": "无法删除渠道",
+    "saved": "渠道已保存",
+    "created": "渠道已创建",
+    "couldNotSave": "无法保存渠道",
+    "save": "保存渠道",
+    "create": "创建渠道",
+    "kindLabel": "类型",
+    "kind": {
+      "webhook": "Webhook",
+      "slack": "Slack",
+      "email": "电子邮件"
+    },
+    "name": "名称",
+    "namePlaceholder": "值班",
+    "nameProblem": "请为渠道命名。",
+    "webhookUrl": "URL",
+    "webhookUrlHelp": "接收一个以 JSON 携带告警的 POST 请求。保存后会以掩码显示：保持原样即可保留。",
+    "slackUrl": "传入 Webhook URL",
+    "slackUrlHelp": "来自 Slack › 应用 › Incoming Webhooks。该 URL 本身就是凭据；它会被加密存储并以掩码显示。",
+    "urlProblem": "必须是 http(s) URL。",
+    "secret": "签名密钥（可选）",
+    "secretHelp": "设置后，每个请求都会带上 X-Syncle-Signature: sha256=…（请求体的 HMAC），接收方据此区分真实告警与任何知道该 URL 的人。",
+    "headers": "额外请求头",
+    "headerName": "请求头名称",
+    "headerValue": "请求头的值",
+    "addHeader": "添加请求头",
+    "removeHeader": "移除请求头",
+    "smtpHost": "SMTP 服务器",
+    "smtpHostProblem": "由哪台服务器发送邮件？",
+    "smtpPort": "端口",
+    "smtpPortProblem": "1–65535",
+    "smtpSecure": "从第一个字节起使用 TLS（端口 465）。关闭：服务器支持时使用 STARTTLS。",
+    "smtpUser": "用户（可选）",
+    "smtpPassword": "密码",
+    "from": "发件人",
+    "to": "收件人",
+    "toHelp": "一个或多个地址，用逗号或换行分隔。",
+    "addressProblem": "这不是电子邮件地址。",
+    "events": "在以下情况通知此渠道",
+    "eventsProblem": "至少选择一项：从不被通知的渠道不算渠道。",
+    "event": {
+      "bridge_failed": {
+        "title": "桥接或重放因失败而停止",
+        "help": "也包括一次运行结束时途中有投递失败的情况。"
+      },
+      "bridge_position_lost": {
+        "title": "实时桥接丢失了变更日志中的位置",
+        "help": "复制槽被删除、binlog 被清理：不接受数据缺口就无法继续。"
+      },
+      "bridge_dead_letters": {
+        "title": "有行被暂存到死信队列",
+        "help": "桥接会继续运行，因此没有其他方式会提示有行在等待处理。"
+      },
+      "source_hold": {
+        "title": "桥接使其源端保留变更日志",
+        "help": "PostgreSQL 复制槽保留的 WAL 超过告警阈值。情况恶化时才通知，而不是每分钟一次。"
+      }
+    },
+    "enabled": "启用"
   },
   "structureView": {
     "empty": "选择一个表以查看其结构。",

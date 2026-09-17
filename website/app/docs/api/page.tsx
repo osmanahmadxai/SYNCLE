@@ -31,7 +31,7 @@ export default function Page() {
         carries extra data:
       </p>
       <CodeBlock>{`$ curl http://localhost:3002/api/health
-{"data":{"ok":true}}
+{"data":{"ok":true,"checks":{"database":"ok","redis":"ok"}}}
 
 $ curl http://localhost:3002/api/connections
 {"error":{"code":"UNAUTHORIZED","message":"Authentication required","details":null}}`}</CodeBlock>
@@ -143,11 +143,13 @@ curl -c cookies.txt -H 'Content-Type: application/json' \\
 # every later call sends it back
 curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
       <Note>
-        There are no API keys or bearer tokens — the session cookie is the only
-        credential. Exactly four routes work without it:{' '}
-        <code>GET /api/health</code>, <code>GET /api/auth/status</code>,{' '}
-        <code>POST /api/auth/setup</code> and <code>POST /api/auth/login</code>.
-        Everything else answers 401.
+        There are no API keys — the session cookie is the only credential
+        for the API. A handful of routes work without it: the two probes{' '}
+        <code>GET /api/health</code> and <code>GET /api/health/ready</code>,{' '}
+        <code>GET /api/auth/status</code>, <code>POST /api/auth/setup</code>{' '}
+        and <code>POST /api/auth/login</code>. <code>GET /api/metrics</code>{' '}
+        takes a bearer token of its own instead of a session (and does not
+        exist until one is configured). Everything else answers 401.
       </Note>
       <p>
         <code>GET /api/version</code> says which release is running —{' '}
@@ -520,6 +522,92 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         <a href="/docs/configuration">configuration page</a> documents each
         setting and its default.
       </p>
+
+      <h2 id="monitoring">Health, metrics and alerts</h2>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/health</code>
+              </td>
+              <td>
+                Is the API alive, and can it reach its metadata store? 200 —
+                or 503 when the store is unreachable — with{' '}
+                <code>{'{ ok, checks: { database, redis } }'}</code>. It{' '}
+                <em>reports</em> Redis without failing on it: what a
+                container health check should use. Public
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/health/ready</code>
+              </td>
+              <td>
+                Can it do everything? 503 unless the store <em>and</em> Redis
+                answer (replays, polling bridges and the CDC spool run on
+                Redis). What an uptime monitor or a load balancer should use.
+                Public
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/metrics</code>
+              </td>
+              <td>
+                Prometheus text format. Exists only when{' '}
+                <code>SYNCLE_METRICS_TOKEN</code> is set (404 otherwise) and
+                answers only to <code>Authorization: Bearer &lt;token&gt;</code>
+                . See <a href="/docs/self-hosting#monitoring">monitoring</a>{' '}
+                for what it exposes
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/alerts/channels</code>
+              </td>
+              <td>
+                Alert channels. Secrets — everything after a URL&apos;s
+                origin, a signing secret, header values, an SMTP password —
+                come back as <code>••••••••</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/alerts/channels</code>,{' '}
+                <code>PUT …/:id</code>, <code>DELETE …/:id</code>
+              </td>
+              <td>
+                Create, replace, delete. On a <code>PUT</code>, a secret sent
+                back as <code>••••••••</code> keeps what is stored; a mask
+                with nothing stored behind it is refused. Kinds:{' '}
+                <code>webhook</code> (<code>url</code>, optional{' '}
+                <code>headers</code> and <code>secret</code>),{' '}
+                <code>slack</code> (<code>url</code>), <code>email</code> (
+                <code>smtp</code>, <code>from</code>, <code>to</code>); each
+                with <code>name</code>, <code>enabled</code> and{' '}
+                <code>events</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/alerts/channels/:id/test</code>
+              </td>
+              <td>
+                Sends a test alert through the channel as stored; answers{' '}
+                <code>{'{ ok, detail }'}</code> and records the outcome on the
+                channel
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <h2 id="bridges">Bridges</h2>
       <p>

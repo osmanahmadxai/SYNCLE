@@ -56,6 +56,7 @@ import {
   type CdcStreamHandle,
 } from './cdc/cdc-provider';
 import { rowMatchesFilters } from './cdc/filter-match';
+import { AlertsService } from '../alerts/alerts.service';
 import { SnapshotCdcProvider } from './cdc/snapshot-provider';
 import { TableReaderService } from './table-reader.service';
 import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
@@ -257,6 +258,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly deadLetters: DeadLetterService,
     private readonly tunnels: SshTunnelService,
     private readonly reader: TableReaderService,
+    private readonly alerts: AlertsService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     // every engine's provider is handed out inside the wrapper that can copy a
@@ -708,9 +710,20 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           cursorJson: JSON.stringify({ cursor: readCursor(job.cursorJson), lost }),
         },
       });
+      this.alertPositionLost(job.id, lost);
     }
     this.logger.warn(`CDC ${bridgeId}: ${lost}`);
     return true;
+  }
+
+  /** for the two places that mark a job as having lost its position without going through `finalize` */
+  private alertPositionLost(jobId: string, message: string): void {
+    this.alerts.emitForJob(jobId, {
+      type: 'bridge.position_lost',
+      severity: 'critical',
+      title: (name) => `Bridge "${name}" lost its place in the source's change log`,
+      message,
+    });
   }
 
   /** the saved position is gone: why, or null when the bridge can resume */
@@ -1092,7 +1105,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
             data: { cursorJson: JSON.stringify({ cursor: stream.watermark, lost }) },
           })
           .catch(() => undefined);
-        await this.halt(bridgeId, stream, 'failed', lost);
+        await this.halt(bridgeId, stream, 'failed', lost, 'bridge.position_lost');
       })
       .catch((err) => {
         this.logger.error(`CDC position-lost chain broke for ${bridgeId}: ${(err as Error).message}`);
@@ -1487,11 +1500,12 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     stream: Stream,
     status: 'paused' | 'failed',
     message: string,
+    alertAs: 'bridge.failed' | 'bridge.position_lost' = 'bridge.failed',
   ): Promise<void> {
     if (stream.halted) return;
     stream.halted = true;
     this.logger.warn(`CDC ${bridgeId}: ${message}`);
-    await this.jobs.finalize(stream.jobId, status, message).catch(() => undefined);
+    await this.jobs.finalize(stream.jobId, status, message, alertAs).catch(() => undefined);
     setImmediate(() => void this.teardown(bridgeId).catch(() => undefined));
   }
 
@@ -1936,6 +1950,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
             cursorJson: JSON.stringify({ cursor: readCursor(r.cursorJson), lost: gap }),
           },
         });
+        this.alertPositionLost(r.id, lost);
         this.logger.warn(`CDC ${r.bridgeId}: ${lost}`);
         await route.close();
         return;

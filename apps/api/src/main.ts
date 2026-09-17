@@ -5,7 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { configureApp } from './configure-app';
-import { runtimeConfig } from './common/runtime-config';
+import { logLevelsUpTo, runtimeConfig } from './common/runtime-config';
 
 const logger = new Logger('Bootstrap');
 
@@ -23,9 +23,9 @@ process.on('uncaughtException', (err) => {
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    // quiet the verbose route-mapping/bootstrap logs so the combined
-    // `pnpm dev` output stays readable. errors and warnings still show
-    logger: ['error', 'warn'],
+    // errors and warnings by default, which keeps the combined `pnpm dev`
+    // output readable; SYNCLE_LOG_LEVEL=log adds the lifecycle lines
+    logger: logLevelsUpTo(runtimeConfig.logLevel),
     // registered manually below so the JSON limit is explicit: backup/restore
     // payloads carry whole dumps and would 413 on the 100kb express default
     bodyParser: false,

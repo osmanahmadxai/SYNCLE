@@ -3,6 +3,9 @@
  * throws a structured {@link ApiError} on `{ error }` responses
  */
 import type {
+  AlertChannel,
+  AlertChannelInput,
+  AlertTestResult,
   AppSettings,
   AppSettingsDTO,
   AuthStatus,
@@ -126,6 +129,18 @@ export const api = {
     ),
   updateSettings: (input: AppSettingsDTO) =>
     request<AppSettings>('/settings', { method: 'PUT', ...jsonBody(input) }),
+
+  /* ----- alert channels ----- */
+  listAlertChannels: () => request<AlertChannel[]>('/alerts/channels'),
+  createAlertChannel: (input: AlertChannelInput) =>
+    request<AlertChannel>('/alerts/channels', { method: 'POST', ...jsonBody(input) }),
+  updateAlertChannel: (id: string, input: AlertChannelInput) =>
+    request<AlertChannel>(`/alerts/channels/${id}`, { method: 'PUT', ...jsonBody(input) }),
+  deleteAlertChannel: (id: string) =>
+    request<void>(`/alerts/channels/${id}`, { method: 'DELETE' }),
+  /** sends a test message through the channel as it is stored */
+  testAlertChannel: (id: string) =>
+    request<AlertTestResult>(`/alerts/channels/${id}/test`, { method: 'POST' }),
 
   /* ----- workspaces ----- */
   listWorkspaces: () => request<Workspace[]>('/workspaces'),

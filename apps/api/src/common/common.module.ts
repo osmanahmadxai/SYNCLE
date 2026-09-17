@@ -1,6 +1,5 @@
 import { Global, Module } from '@nestjs/common';
 import { CryptoService } from './crypto.service';
-import { HealthController } from './health.controller';
 import { PrismaService } from './prisma.service';
 import { VersionController } from './version.controller';
 
@@ -11,7 +10,7 @@ import { VersionController } from './version.controller';
  */
 @Global()
 @Module({
-  controllers: [HealthController, VersionController],
+  controllers: [VersionController],
   providers: [PrismaService, CryptoService],
   exports: [PrismaService, CryptoService],
 })

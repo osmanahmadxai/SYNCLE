@@ -364,6 +364,48 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_LOG_LEVEL</code>
+              </td>
+              <td>
+                <code>warn</code>
+              </td>
+              <td>
+                <code>error</code>, <code>warn</code>, <code>log</code> (or{' '}
+                <code>info</code>), <code>debug</code>, <code>verbose</code>.
+                The default logs what it always did — warnings and errors;{' '}
+                <code>log</code> adds the lifecycle lines: a bridge started, a
+                table copied, a slot released, a retention sweep.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_METRICS_TOKEN</code>
+              </td>
+              <td>unset</td>
+              <td>
+                Turns on <code>GET /api/metrics</code> (Prometheus) for
+                requests carrying{' '}
+                <code>Authorization: Bearer &lt;token&gt;</code>. Unset, the
+                endpoint does not exist. See{' '}
+                <a href="/docs/self-hosting#monitoring">monitoring</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_ALERT_THROTTLE_SECONDS</code>
+              </td>
+              <td>
+                <code>300</code>
+              </td>
+              <td>
+                <a href="/docs/self-hosting#alerts">Alerts</a> are throttled
+                per channel, kind of event and bridge: one per this many
+                seconds, the next one saying how many were held back.{' '}
+                <code>0</code> sends every one.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
               </td>
               <td>

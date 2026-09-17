@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { AlertsTab } from './alerts-tab';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -69,15 +70,20 @@ export function SettingsDialog({
         </DialogHeader>
 
         <Tabs defaultValue={initialTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="account">{t('tabs.account')}</TabsTrigger>
             <TabsTrigger value="bridges">{t('tabs.bridges')}</TabsTrigger>
             <TabsTrigger value="engine">{t('tabs.engine')}</TabsTrigger>
+            <TabsTrigger value="alerts">{t('tabs.alerts')}</TabsTrigger>
             <TabsTrigger value="security">{t('tabs.security')}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="pt-2">
             <AccountTab user={status?.user ?? null} />
+          </TabsContent>
+
+          <TabsContent value="alerts" className="pt-2">
+            <AlertsTab />
           </TabsContent>
 
           {settings ? (

@@ -25,6 +25,8 @@ import {
 } from '@nestjs/common';
 import type { BridgeSourceHold } from '@syncle/core';
 import { PrismaService } from '../../common/prisma.service';
+import { AlertsService } from '../../alerts/alerts.service';
+import { MetricsService } from '../../observability/metrics.service';
 import { runtimeConfig } from '../../common/runtime-config';
 import { BridgeCdcService, formatBytes } from '../bridge-cdc.service';
 
@@ -41,7 +43,27 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cdc: BridgeCdcService,
+    private readonly alerts: AlertsService,
+    private readonly metrics: MetricsService,
   ) {}
+
+  /** the labels each bridge's gauge was published under, to withdraw it by */
+  private readonly gauged = new Map<string, Record<string, string>>();
+
+  private publish(bridgeId: string, name: string, bytes: number | null): void {
+    const labels = this.gauged.get(bridgeId) ?? {
+      bridge_id: bridgeId,
+      bridge: name,
+    };
+    if (bytes === null) this.gauged.delete(bridgeId);
+    else this.gauged.set(bridgeId, labels);
+    this.metrics.setGauge(
+      'syncle_source_retained_bytes',
+      'Change log a bridge is making its SOURCE keep (a PostgreSQL slot pinning WAL), as last measured.',
+      labels,
+      bytes,
+    );
+  }
 
   onModuleInit(): void {
     const seconds = runtimeConfig.sourceHoldCheckSeconds;
@@ -90,6 +112,8 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
         if (!seen.has(id)) {
           this.latest.delete(id);
           this.reported.delete(id);
+          // a deleted bridge must not go on being reported as holding log
+          this.publish(id, id, null);
         }
       }
       const left = await this.cdc.retryCleanups().catch(() => 0);
@@ -108,9 +132,11 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
     if (!hold) {
       this.latest.delete(bridgeId);
       this.reported.delete(bridgeId);
+      this.publish(bridgeId, name, null);
       return;
     }
     this.latest.set(bridgeId, hold);
+    this.publish(bridgeId, name, hold.retainedBytes ?? 0);
 
     const max = runtimeConfig.slotMaxBytes;
     if (
@@ -139,7 +165,21 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Bridge "${name}" (${bridgeId}): source hold back to normal`,
         );
-      else this.logger.warn(`Bridge "${name}" (${bridgeId}): ${hold.message}`);
+      else {
+        this.logger.warn(`Bridge "${name}" (${bridgeId}): ${hold.message}`);
+        // said once per change of level, not once per sweep: a slot that sits
+        // at "warn" for a week is one alert, and one more if it gets worse
+        this.alerts.emit({
+          type: 'source.hold',
+          severity: hold.level === 'critical' ? 'critical' : 'warning',
+          title: `Bridge "${name}" is making its source keep change log`,
+          message:
+            hold.message ??
+            'The source is retaining change log for this bridge.',
+          bridgeId,
+          bridgeName: name,
+        });
+      }
     }
   }
 }

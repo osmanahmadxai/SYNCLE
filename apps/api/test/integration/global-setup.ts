@@ -120,7 +120,7 @@ async function resetLeftovers(): Promise<void> {
   await meta.connect();
   try {
     await meta.query(
-      `TRUNCATE bridge_deliveries, bridge_dead_letters, bridge_jobs, bridges, connections, source_cleanups`,
+      `TRUNCATE bridge_deliveries, bridge_dead_letters, bridge_jobs, bridges, connections, source_cleanups, alert_channels`,
     );
   } finally {
     await meta.end().catch(() => undefined);

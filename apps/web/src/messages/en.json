@@ -741,7 +741,8 @@
       "account": "Account",
       "bridges": "Bridges",
       "engine": "Engine",
-      "security": "Security"
+      "security": "Security",
+      "alerts": "Alerts"
     },
     "versionApp": "Syncle {version}",
     "versionNode": "Node {version}",
@@ -782,6 +783,83 @@
     "deliveryMaxPerJobHint": "A watch or CDC bridge never finishes, so age alone does not bound its history: only the newest this-many deliveries are kept. 0 means no limit.",
     "sessionTtl": "Session timeout (minutes)",
     "sessionTtlHint": "Minutes of inactivity before a login session expires."
+  },
+  "alertsTab": {
+    "intro": "Where Syncle says that a bridge needs someone: when one stops, loses its place in a change log, sets rows aside, or makes its source keep log. Alerts are throttled — a bridge that keeps failing is one message per five minutes, with a count of what was held back.",
+    "none": "No alert channels yet. Without one, a bridge that stops at night says so only on its own page.",
+    "add": "Add channel",
+    "test": "Test",
+    "edit": "Edit",
+    "delete": "Delete",
+    "off": "off",
+    "eventsCount": "{count} of {total} events",
+    "neverSent": "nothing sent yet",
+    "lastOk": "last one delivered",
+    "lastFailed": "last one failed: {error}",
+    "testSent": "Test alert sent",
+    "testFailed": "The channel did not take the test alert",
+    "deleteTitle": "Delete the channel \"{name}\"?",
+    "deleteDescription": "Alerts stop going there. Nothing else changes.",
+    "deleted": "Channel deleted",
+    "couldNotDelete": "Could not delete the channel",
+    "saved": "Channel saved",
+    "created": "Channel created",
+    "couldNotSave": "Could not save the channel",
+    "save": "Save channel",
+    "create": "Create channel",
+    "kindLabel": "Kind",
+    "kind": {
+      "webhook": "Webhook",
+      "slack": "Slack",
+      "email": "E-mail"
+    },
+    "name": "Name",
+    "namePlaceholder": "On-call",
+    "nameProblem": "Give the channel a name.",
+    "webhookUrl": "URL",
+    "webhookUrlHelp": "Receives a POST with the alert as JSON. Shown masked once saved: leave it as it is to keep it.",
+    "slackUrl": "Incoming webhook URL",
+    "slackUrlHelp": "From Slack › Apps › Incoming Webhooks. The URL is the credential; it is stored encrypted and shown masked.",
+    "urlProblem": "This has to be an http(s) URL.",
+    "secret": "Signing secret (optional)",
+    "secretHelp": "When set, every request carries X-Syncle-Signature: sha256=… — the HMAC of the body — so the receiver can tell a real alert from anyone who found the URL.",
+    "headers": "Extra headers",
+    "headerName": "Header name",
+    "headerValue": "Header value",
+    "addHeader": "Add header",
+    "removeHeader": "Remove header",
+    "smtpHost": "SMTP server",
+    "smtpHostProblem": "Which server sends the mail?",
+    "smtpPort": "Port",
+    "smtpPortProblem": "1–65535",
+    "smtpSecure": "TLS from the first byte (port 465). Off: STARTTLS when the server offers it.",
+    "smtpUser": "User (optional)",
+    "smtpPassword": "Password",
+    "from": "From",
+    "to": "To",
+    "toHelp": "One or more addresses, separated by commas or new lines.",
+    "addressProblem": "That is not an e-mail address.",
+    "events": "Tell this channel when",
+    "eventsProblem": "Pick at least one: a channel that is never told anything is not a channel.",
+    "event": {
+      "bridge_failed": {
+        "title": "a bridge or a replay stops because of a failure",
+        "help": "Also when a run finishes with deliveries that failed along the way."
+      },
+      "bridge_position_lost": {
+        "title": "a live bridge loses its place in the change log",
+        "help": "A dropped replication slot, a purged binlog: it cannot resume without accepting a gap."
+      },
+      "bridge_dead_letters": {
+        "title": "rows are set aside in a dead-letter queue",
+        "help": "The bridge carries on, so nothing else would say that rows are waiting."
+      },
+      "source_hold": {
+        "title": "a bridge makes its source keep change log",
+        "help": "A PostgreSQL slot pinning WAL beyond the warning level. Said when it gets worse, not every minute."
+      }
+    },
+    "enabled": "Enabled"
   },
   "structureView": {
     "empty": "Select a table to inspect its structure.",

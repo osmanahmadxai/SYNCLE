@@ -741,7 +741,8 @@
       "account": "Account",
       "bridges": "Bridge",
       "engine": "Motore",
-      "security": "Sicurezza"
+      "security": "Sicurezza",
+      "alerts": "Avvisi"
     },
     "versionApp": "Syncle {version}",
     "versionNode": "Node {version}",
@@ -782,6 +783,83 @@
     "deliveryMaxPerJobHint": "Un bridge di osservazione o CDC non termina mai, quindi l'età da sola non limita la sua cronologia: vengono conservate solo le consegne più recenti, fino a questo numero. 0 significa nessun limite.",
     "sessionTtl": "Timeout della sessione (minuti)",
     "sessionTtlHint": "Minuti di inattività dopo i quali una sessione di accesso scade."
+  },
+  "alertsTab": {
+    "intro": "Dove Syncle segnala che un bridge ha bisogno di qualcuno: quando si ferma, perde la posizione nel log delle modifiche, mette da parte delle righe o costringe l'origine a conservare il log. Gli avvisi sono limitati: un bridge che continua a fallire è un messaggio ogni cinque minuti, con il conteggio di quelli trattenuti.",
+    "none": "Nessun canale di avviso. Senza un canale, un bridge che si ferma di notte lo dice solo nella propria pagina.",
+    "add": "Aggiungi canale",
+    "test": "Prova",
+    "edit": "Modifica",
+    "delete": "Elimina",
+    "off": "spento",
+    "eventsCount": "{count} eventi su {total}",
+    "neverSent": "ancora nessun invio",
+    "lastOk": "ultimo consegnato",
+    "lastFailed": "ultimo fallito: {error}",
+    "testSent": "Avviso di prova inviato",
+    "testFailed": "Il canale non ha accettato l'avviso di prova",
+    "deleteTitle": "Eliminare il canale \"{name}\"?",
+    "deleteDescription": "Gli avvisi non vi arriveranno più. Non cambia nient'altro.",
+    "deleted": "Canale eliminato",
+    "couldNotDelete": "Impossibile eliminare il canale",
+    "saved": "Canale salvato",
+    "created": "Canale creato",
+    "couldNotSave": "Impossibile salvare il canale",
+    "save": "Salva canale",
+    "create": "Crea canale",
+    "kindLabel": "Tipo",
+    "kind": {
+      "webhook": "Webhook",
+      "slack": "Slack",
+      "email": "E-mail"
+    },
+    "name": "Nome",
+    "namePlaceholder": "Reperibilità",
+    "nameProblem": "Dai un nome al canale.",
+    "webhookUrl": "URL",
+    "webhookUrlHelp": "Riceve una POST con l'avviso in JSON. Una volta salvato viene mostrato mascherato: lascialo com'è per mantenerlo.",
+    "slackUrl": "URL del webhook in ingresso",
+    "slackUrlHelp": "Da Slack › App › Incoming Webhooks. L'URL è la credenziale: viene salvato cifrato e mostrato mascherato.",
+    "urlProblem": "Deve essere un URL http(s).",
+    "secret": "Segreto di firma (opzionale)",
+    "secretHelp": "Se impostato, ogni richiesta porta X-Syncle-Signature: sha256=… — l'HMAC del corpo — così chi riceve distingue un avviso vero da chiunque abbia trovato l'URL.",
+    "headers": "Intestazioni aggiuntive",
+    "headerName": "Nome dell'intestazione",
+    "headerValue": "Valore dell'intestazione",
+    "addHeader": "Aggiungi intestazione",
+    "removeHeader": "Rimuovi intestazione",
+    "smtpHost": "Server SMTP",
+    "smtpHostProblem": "Quale server invia la posta?",
+    "smtpPort": "Porta",
+    "smtpPortProblem": "1–65535",
+    "smtpSecure": "TLS dal primo byte (porta 465). Spento: STARTTLS quando il server lo offre.",
+    "smtpUser": "Utente (opzionale)",
+    "smtpPassword": "Password",
+    "from": "Da",
+    "to": "A",
+    "toHelp": "Uno o più indirizzi, separati da virgole o a capo.",
+    "addressProblem": "Non è un indirizzo e-mail.",
+    "events": "Avvisa questo canale quando",
+    "eventsProblem": "Scegline almeno uno: un canale a cui non si dice mai nulla non è un canale.",
+    "event": {
+      "bridge_failed": {
+        "title": "un bridge o un replay si ferma per un errore",
+        "help": "Anche quando un'esecuzione termina con consegne fallite lungo il percorso."
+      },
+      "bridge_position_lost": {
+        "title": "un bridge live perde la posizione nel log delle modifiche",
+        "help": "Uno slot di replica eliminato, un binlog rimosso: non può riprendere senza accettare un buco."
+      },
+      "bridge_dead_letters": {
+        "title": "delle righe vengono messe da parte in una coda dead-letter",
+        "help": "Il bridge prosegue, quindi nient'altro direbbe che ci sono righe in attesa."
+      },
+      "source_hold": {
+        "title": "un bridge costringe l'origine a conservare il log",
+        "help": "Uno slot PostgreSQL che trattiene WAL oltre la soglia di avviso. Segnalato quando peggiora, non ogni minuto."
+      }
+    },
+    "enabled": "Attivo"
   },
   "structureView": {
     "empty": "Seleziona una tabella per esaminarne la struttura.",

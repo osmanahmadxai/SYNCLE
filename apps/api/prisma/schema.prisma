@@ -256,3 +256,29 @@ model SourceCleanup {
   @@index([connectionId])
   @@map("source_cleanups")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Alert channels: where Syncle says out loud that a bridge needs someone — a
+//  webhook, a Slack channel, an e-mail address.
+//
+//  The whole configuration is encrypted, not only the obvious secrets: a Slack
+//  webhook URL IS its credential, and so is most of what a webhook's headers
+//  hold. `events_json` stays readable so that finding the channels for an event
+//  does not mean decrypting every one of them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AlertChannel {
+  id         String    @id
+  name       String
+  kind       String // webhook | slack | email
+  enabled    Boolean   @default(true)
+  eventsJson String    @map("events_json")
+  configEnc  String    @map("config_enc")
+  lastStatus String?   @map("last_status") // ok | failed
+  lastError  String?   @map("last_error")
+  lastSentAt DateTime? @map("last_sent_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("alert_channels")
+}

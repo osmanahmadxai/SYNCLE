@@ -202,6 +202,176 @@ export default function Page() {
         <code>TRUE</code> leaves the guard off.
       </p>
 
+      <h2 id="monitoring">Monitoring</h2>
+      <p>
+        Two probes are public, because an orchestrator needs them before
+        anyone can log in, and neither says more than &quot;up&quot; or
+        &quot;down&quot;:
+      </p>
+      <ul>
+        <li>
+          <code>GET /api/health</code> — the API is alive and reaches its
+          metadata store (503 when it does not). It reports Redis in{' '}
+          <code>checks</code> but does not fail on it: a live bridge delivers
+          without Redis, and restarting the API does not bring Redis back.
+          The compose stack&apos;s container health check uses this one.
+        </li>
+        <li>
+          <code>GET /api/health/ready</code> — 503 unless the store{' '}
+          <em>and</em> Redis answer. Point an uptime monitor here. Redis is
+          asked on a connection of its own that neither queues nor waits, so
+          the probe answers in a second and a half even when Redis is gone —
+          the job queue&apos;s own connection would wait for it to come back.
+        </li>
+      </ul>
+      <p>
+        <code>GET /api/metrics</code> speaks the Prometheus text format. A
+        scraper cannot hold a session, so the route has a token of its own —
+        and does not exist until <code>SYNCLE_METRICS_TOKEN</code> is set:
+      </p>
+      <CodeBlock title="prometheus.yml">{`scrape_configs:
+  - job_name: syncle
+    metrics_path: /api/metrics
+    authorization:
+      credentials: "<the value of SYNCLE_METRICS_TOKEN>"
+    static_configs:
+      - targets: ["syncle.internal:3002"]`}</CodeBlock>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>What it is</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>syncle_up{'{component}'}</code>
+              </td>
+              <td>
+                1 when <code>database</code> / <code>redis</code> answers
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>syncle_bridges{'{trigger,enabled}'}</code>,{' '}
+                <code>syncle_jobs{'{status}'}</code>
+              </td>
+              <td>
+                bridges by trigger, jobs by status. Alert on{' '}
+                <code>syncle_jobs{'{status="failed"}'}</code> rising
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>syncle_deliveries_total{'{status}'}</code>
+              </td>
+              <td>deliveries recorded by the jobs that still exist</td>
+            </tr>
+            <tr>
+              <td>
+                <code>syncle_dead_letter_rows{'{bridge_id,bridge}'}</code>
+              </td>
+              <td>rows waiting in a bridge&apos;s dead-letter queue</td>
+            </tr>
+            <tr>
+              <td>
+                <code>syncle_source_retained_bytes{'{bridge_id,bridge}'}</code>
+              </td>
+              <td>
+                change log a bridge makes its <em>source</em> keep (a
+                PostgreSQL slot pinning WAL), as the{' '}
+                <a href="/docs/cdc#postgres-slots">slot guard</a> last
+                measured it
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>syncle_build_info{'{version}'}</code>,{' '}
+                <code>process_*</code>, <code>nodejs_*</code>
+              </td>
+              <td>
+                the running version; memory, uptime and event-loop lag of the
+                API process
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Everything is read from the metadata store at scrape time with
+        aggregates over small tables — never a scan of the delivery log — so
+        a 15-second scrape interval is fine. Set{' '}
+        <code>SYNCLE_LOG_LEVEL=log</code> to have the API also log lifecycle
+        events (it logs warnings and errors only by default).
+      </p>
+
+      <h3 id="alerts">Alerts</h3>
+      <p>
+        A bridge that stops at three in the morning used to say so in one
+        place: its own page. <strong>Settings › Alerts</strong> adds places
+        to say it out loud — a <strong>webhook</strong>, a{' '}
+        <strong>Slack</strong> incoming webhook, or <strong>e-mail</strong>{' '}
+        over your SMTP server — each subscribed to the events it cares about:
+      </p>
+      <ul>
+        <li>
+          <code>bridge.failed</code> — a bridge or a replay stopped because
+          of a failure (critical), or a run finished with deliveries that
+          failed along the way (warning). A stop or a cancel somebody asked
+          for is not an alert.
+        </li>
+        <li>
+          <code>bridge.position_lost</code> — a live bridge lost its place
+          in the source&apos;s change log and cannot resume without accepting
+          a gap.
+        </li>
+        <li>
+          <code>bridge.dead_letters</code> — rows were set aside. The bridge
+          carries on, so nothing else would tell you they are waiting.
+        </li>
+        <li>
+          <code>source.hold</code> — a bridge is making its source keep
+          change log beyond the warning level. Sent when that gets worse, not
+          on every check.
+        </li>
+      </ul>
+      <p>
+        Alerts are <strong>throttled</strong> per channel, kind of event and
+        bridge (five minutes by default,{' '}
+        <code>SYNCLE_ALERT_THROTTLE_SECONDS</code>): a bridge that fails
+        every thirty seconds is one message per window, and the next says how
+        many were held back. Sending never blocks or fails a bridge; a
+        channel that does not take an alert is tried once more, and the
+        outcome of the last send is shown next to the channel. The{' '}
+        <strong>Test</strong> button sends one now.
+      </p>
+      <p>
+        A webhook receives the event as JSON —{' '}
+        <code>
+          {'{ app, version, type, severity, title, message, bridgeId, bridgeName, jobId, at, suppressed? }'}
+        </code>{' '}
+        — with an <code>X-Syncle-Event</code> header. Give the channel a{' '}
+        <strong>signing secret</strong> and every request also carries{' '}
+        <code>X-Syncle-Signature: sha256=&lt;hex&gt;</code>, the HMAC-SHA256
+        of the exact body bytes, so the receiver can tell a real alert from
+        anyone who found the URL:
+      </p>
+      <CodeBlock title="Verifying an alert (Node.js)">{`const expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(rawBody).digest('hex');
+const given = req.headers['x-syncle-signature'] ?? '';
+const ok = given.length === expected.length &&
+  crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));`}</CodeBlock>
+      <p>
+        A channel&apos;s whole configuration is encrypted at rest with the
+        master key — a Slack webhook URL <em>is</em> its credential — and the
+        API never hands a secret back: everything after a URL&apos;s origin,
+        the signing secret, header values and the SMTP password read as{' '}
+        <code>••••••••</code>. Alert requests are held to the same{' '}
+        <a href="#destination-guard">destination guard</a> as bridge
+        deliveries, and redirects are not followed.
+      </p>
+
       <h2 id="backups">What to back up</h2>
       <p>The stack keeps its state in three named Docker volumes:</p>
       <div className="table-scroll">

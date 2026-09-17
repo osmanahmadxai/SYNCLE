@@ -11,6 +11,7 @@ export * from './validation';
 export * from './bridges';
 export * from './workspace';
 export * from './auth';
+export * from './alerts';
 
 // type-only re-exports of the driver metadata (no driver implementations are
 // pulled in, so this stays safe for the browser bundle)

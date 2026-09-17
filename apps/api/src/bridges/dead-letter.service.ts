@@ -49,6 +49,7 @@ import {
 import type { BridgeDeadLetter as DeadLetterRow } from '@prisma/client';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
+import { AlertsService } from '../alerts/alerts.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeStoreService } from './bridge-store.service';
@@ -100,6 +101,7 @@ export class DeadLetterService {
     private readonly sink: BridgeSinkService,
     private readonly databaseSink: DatabaseSinkService,
     private readonly jobs: BridgeJobService,
+    private readonly alerts: AlertsService,
   ) {}
 
   /* ----- writing ----- */
@@ -139,18 +141,31 @@ export class DeadLetterService {
     });
     if (opts.replaceFrom === undefined) {
       await create;
-      return;
+    } else {
+      await this.prisma.$transaction([
+        this.prisma.bridgeDeadLetter.deleteMany({
+          where: {
+            jobId,
+            status: 'pending',
+            sequence: { gte: opts.replaceFrom },
+          },
+        }),
+        create,
+      ]);
     }
-    await this.prisma.$transaction([
-      this.prisma.bridgeDeadLetter.deleteMany({
-        where: {
-          jobId,
-          status: 'pending',
-          sequence: { gte: opts.replaceFrom },
-        },
-      }),
-      create,
-    ]);
+    // the bridge carries on (that is what `continue` means), so nothing else
+    // will say that rows are now waiting for someone. throttled per bridge: a
+    // run of bad rows is one alert, with a count of the ones not sent
+    const rows = entries.reduce((n, e) => n + e.rows.length, 0);
+    this.alerts.emitForJob(jobId, {
+      type: 'bridge.dead_letters',
+      severity: 'warning',
+      title: (name) =>
+        `${rows} row${rows === 1 ? ' was' : 's were'} set aside on bridge "${name}"`,
+      message:
+        `The bridge is still running; ${rows === 1 ? 'this row is' : 'these rows are'} in its dead-letter queue until someone retries or discards ${rows === 1 ? 'it' : 'them'}. ` +
+        `First error: ${entries[0]!.error ?? 'unknown'}`,
+    });
   }
 
   /* ----- reading ----- */

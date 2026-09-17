@@ -341,6 +341,8 @@ function makeHarness(opts: {
     sink as never,
     databaseSink as never,
     jobs as never,
+    // alerts are fire-and-forget; what they say is tested with the alerts
+    { emit: () => undefined, emitForJob: () => undefined } as never,
   );
   return h;
 }

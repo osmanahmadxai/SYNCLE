@@ -29,6 +29,7 @@ import type {
 } from '@prisma/client';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
+import { AlertsService } from '../alerts/alerts.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { DeliveryService, sleep } from './delivery.service';
 import { DatabaseSinkService } from './database-sink.service';
@@ -61,6 +62,7 @@ export class BridgeJobService implements OnModuleInit {
     private readonly delivery: DeliveryService,
     private readonly databaseSink: DatabaseSinkService,
     @InjectQueue(BRIDGE_JOBS_QUEUE) private readonly queue: Queue<BridgeJobPayload>,
+    private readonly alerts: AlertsService,
   ) {}
 
   /**
@@ -874,11 +876,48 @@ export class BridgeJobService implements OnModuleInit {
     jobId: string,
     status: BridgeJobStatus,
     error?: string | null,
+    /** what KIND of stop this is, when it is not an ordinary failure */
+    alertAs: 'bridge.failed' | 'bridge.position_lost' = 'bridge.failed',
   ): Promise<void> {
-    await this.prisma.bridgeJob.update({
+    const job = await this.prisma.bridgeJob.update({
       where: { id: jobId },
       data: { status, error: error ?? null, finishedAt: new Date() },
     });
+    this.raiseAlert(jobId, status, error ?? null, job.failedCount, alertAs);
+  }
+
+  /**
+   * a job that ends badly is said out loud (see AlertsService). every way a job
+   * ends passes through `finalize`, so this is the one place that has to know:
+   *  - failed, or paused BECAUSE of something (onError=abort) — someone has to act
+   *  - completed, but with deliveries that failed along the way (onError=continue)
+   * a stop or a cancel that somebody asked for is not news.
+   */
+  private raiseAlert(
+    jobId: string,
+    status: BridgeJobStatus,
+    error: string | null,
+    failedCount: number,
+    alertAs: 'bridge.failed' | 'bridge.position_lost',
+  ): void {
+    if (status === 'failed' || (status === 'paused' && error)) {
+      this.alerts.emitForJob(jobId, {
+        type: alertAs,
+        severity: 'critical',
+        title: (name) =>
+          alertAs === 'bridge.position_lost'
+            ? `Bridge "${name}" lost its place in the source's change log`
+            : `Bridge "${name}" stopped`,
+        message: error ?? 'The job failed.',
+      });
+    } else if (status === 'completed' && failedCount > 0) {
+      this.alerts.emitForJob(jobId, {
+        type: 'bridge.failed',
+        severity: 'warning',
+        title: (name) => `A run of "${name}" finished with ${failedCount} failed deliver${failedCount === 1 ? 'y' : 'ies'}`,
+        message: 'The run went on past them (on failure: continue). Open the job to see which rows, and retry them from there.',
+      });
+    }
   }
 
   /* ----- boot reconcile ----- */

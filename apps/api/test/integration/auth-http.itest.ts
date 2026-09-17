@@ -16,6 +16,9 @@ let prisma: any;
 
 const PUBLIC = new Set([
   'GET /api/health',
+  'GET /api/health/ready',
+  // behind a token of its own, and absent (404) until one is configured
+  'GET /api/metrics',
   'GET /api/auth/status',
   'POST /api/auth/setup',
   'POST /api/auth/login',
@@ -89,7 +92,7 @@ function routes(): Array<[string, string]> {
 }
 
 describe('without a session', () => {
-  it('every route answers 401, except the four that are meant to be open', async () => {
+  it('every route answers 401, except the few that are meant to be open', async () => {
     const all = routes();
     // the walk has to be finding the API, or this proves nothing
     expect(all.length).toBeGreaterThan(40);
@@ -111,7 +114,22 @@ describe('without a session', () => {
 
   it('the open ones say nothing they should not', async () => {
     const health = await (await call('GET', '/api/health')).json();
-    expect(health).toEqual({ data: { ok: true } });
+    expect(health).toEqual({
+      data: { ok: true, checks: { database: 'ok', redis: 'ok' } },
+    });
+    expect(await (await call('GET', '/api/health/ready')).json()).toEqual(
+      health,
+    );
+    // no SYNCLE_METRICS_TOKEN here: the endpoint is not there at all, with or
+    // without a session, and whatever is presented as a token
+    expect((await call('GET', '/api/metrics')).status).toBe(404);
+    expect(
+      (
+        await call('GET', '/api/metrics', {
+          headers: { authorization: 'Bearer ' },
+        })
+      ).status,
+    ).toBe(404);
     const status = await (await call('GET', '/api/auth/status')).json();
     expect(status.data).toEqual({
       needsSetup: true,

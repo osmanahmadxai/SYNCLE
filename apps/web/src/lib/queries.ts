@@ -8,6 +8,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import type {
+  AlertChannelInput,
   AppSettingsDTO,
   BrowseParams,
   ChangePasswordDTO,
@@ -25,6 +26,7 @@ export const queryKeys = {
   authStatus: ['auth', 'status'] as const,
   settings: ['settings'] as const,
   version: ['version'] as const,
+  alertChannels: ['alert-channels'] as const,
   drivers: ['drivers'] as const,
   workspaces: ['workspaces'] as const,
   connections: ['connections'] as const,
@@ -118,6 +120,40 @@ export function useUpdateSettings() {
       qc.setQueryData(queryKeys.settings, settings);
       qc.invalidateQueries({ queryKey: queryKeys.settings });
     },
+  });
+}
+
+export function useAlertChannels() {
+  return useQuery({
+    queryKey: queryKeys.alertChannels,
+    queryFn: () => api.listAlertChannels(),
+  });
+}
+
+/** create (no id) or update a channel */
+export function useSaveAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string | null; input: AlertChannelInput }) =>
+      id ? api.updateAlertChannel(id, input) : api.createAlertChannel(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
+  });
+}
+
+export function useDeleteAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteAlertChannel(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
+  });
+}
+
+/** the outcome is recorded on the channel, so the list is refreshed either way */
+export function useTestAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.testAlertChannel(id),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
   });
 }
 
