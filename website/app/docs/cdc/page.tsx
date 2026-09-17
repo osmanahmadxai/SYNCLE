@@ -433,6 +433,21 @@ server_id        = 1   # any unique id`}</CodeBlock>
         which polls and works reliably on SQLite.
       </p>
 
+      <h3 id="ssh">Sources behind an SSH tunnel</h3>
+      <p>
+        A connection that uses an <a href="/docs/workbench#ssh-tunnels">SSH
+        tunnel</a> can be the source of a CDC bridge on every engine. The
+        change stream gets a tunnel of its own, opened when the bridge starts
+        and closed when it stops; if the SSH connection drops — a bastion
+        restart, an idle timeout — the stream is stopped, a new tunnel is
+        opened and the stream resumes from its last checkpoint, retrying with
+        a backoff for as long as the bridge is meant to be running. Nothing is
+        lost across the gap: what had not been checkpointed had not been
+        acknowledged to the source either. The bastion&apos;s host key is
+        pinned the first time, exactly as for any other use of the
+        connection.
+      </p>
+
       <h2 id="readiness">The readiness check</h2>
       <p>
         The bridge builder runs a readiness check when you choose the CDC

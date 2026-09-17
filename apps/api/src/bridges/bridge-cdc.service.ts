@@ -36,6 +36,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { ConnectionStoreService } from '../connections/connection-store.service';
+import { SshTunnelService, type SshTunnel } from '../connections/ssh-tunnel.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { BridgeJobService } from './bridge-job.service';
@@ -48,6 +49,7 @@ import { isolateFailures } from './cdc/isolate-failures';
 import {
   CDC_PROVIDERS,
   backoffMs,
+  delay,
   type CdcChange,
   type CdcProvider,
   type CdcStreamHandle,
@@ -114,6 +116,8 @@ interface Stream {
   halted: boolean;
   /** batches in a row that delivered nothing, to spot a dead destination */
   consecutiveFailures: number;
+  /** how this stream reaches its source; closed with it */
+  route: Route;
   /**
    * does a destination store the row as ONE value (a key-value store)? such a
    * write cannot "leave a column alone". resolved on first need; see
@@ -131,6 +135,34 @@ interface Buffered {
 }
 
 type Row = Record<string, unknown>;
+
+/** what is needed of a job row to bring its stream back up */
+interface ResumableJob {
+  bridgeId: string;
+  id: string;
+  cursorOffset: number;
+  cursorJson: string | null;
+}
+
+/**
+ * how a change stream reaches its source: directly, or through an SSH tunnel.
+ *
+ * providers open their OWN connections (a replication connection, a binlog
+ * client, a change stream, a subscriber), and they used to dial the
+ * connection's host as written — ignoring its SSH tunnel altogether. behind a
+ * bastion that host is unreachable, so CDC simply could not be used with a
+ * tunnelled connection, while the workbench and replays (which go through the
+ * adapter pool, which does tunnel) worked fine on the very same connection.
+ *
+ * the tunnel here belongs to the stream: opened before anything talks to the
+ * source, closed when the stream is torn down.
+ */
+interface Route {
+  /** the connection to hand to a provider: rerouted through the tunnel, if any */
+  conn: ConnectionConfig;
+  tunnel: SshTunnel | undefined;
+  close(): Promise<void>;
+}
 
 /** dead-letter entries are chunked so no single stored row is enormous */
 const DEAD_LETTER_CHUNK = 500;
@@ -199,6 +231,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly jobs: BridgeJobService,
     private readonly spool: CdcSpoolService,
     private readonly deadLetters: DeadLetterService,
+    private readonly tunnels: SshTunnelService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     for (const p of providers) this.providers.set(p.engine, p);
@@ -206,6 +239,37 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
 
   private providerFor(engine: DatabaseEngine): CdcProvider | null {
     return this.providers.get(engine) ?? null;
+  }
+
+  /** open the way to a source. the caller owns the result and must close it */
+  private async openRoute(conn: ConnectionConfig): Promise<Route> {
+    const tunnel = await this.tunnels.openFor(conn);
+    // first tunnel for this connection: pin the jump host's key, exactly as the
+    // adapter pool does, so a different key is refused from now on
+    if (tunnel?.hostKey && !conn.ssh?.hostKey?.trim()) {
+      await this.connStore.pinSshHostKey(conn.id, tunnel.hostKey).catch(() => undefined);
+    }
+    return {
+      conn: this.tunnels.reroute(conn, tunnel),
+      tunnel,
+      close: async () => {
+        await tunnel?.close().catch(() => undefined);
+      },
+    };
+  }
+
+  /** reach a source for the length of one call */
+  private async viaRoute<T>(conn: ConnectionConfig, fn: (routed: ConnectionConfig) => Promise<T>): Promise<T> {
+    const route = await this.openRoute(conn);
+    try {
+      return await fn(route.conn);
+    } catch (err) {
+      // a refused forward reaches the provider as a bare socket reset; the
+      // tunnel knows the real story
+      throw route.tunnel?.takeError() ?? err;
+    } finally {
+      await route.close();
+    }
   }
 
   /* ----- readiness, drives the builder's setup panel ----- */
@@ -224,7 +288,17 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         ],
       };
     }
-    return provider.readiness(dto, conn);
+    // some providers probe with a connection of their own (Redis, MongoDB), and
+    // that one needs the tunnel as much as the stream will
+    return this.viaRoute(conn, (routed) => provider.readiness(dto, routed)).catch(
+      (err): CdcReadiness => ({
+        engine: conn.engine,
+        supported: true,
+        ready: false,
+        checks: [{ label: 'reach the database', ok: false, detail: (err as Error).message }],
+        instructions: ['Could not reach the database to check readiness.'],
+      }),
+    );
   }
 
   /* ----- start / stop ----- */
@@ -256,6 +330,29 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       where: { bridgeId, status: { in: ['queued', 'running', 'canceling'] } },
     });
     if (active) throw new ConflictError('This bridge is already running. Stop it first.');
+
+    // from here on the source is being talked to: through the connection's SSH
+    // tunnel if it has one, opened once and kept for the stream
+    const route = await this.openRoute(conn);
+    try {
+      return await this.startVia(route, bridgeId, bridge, provider, opts);
+    } catch (err) {
+      // a stream that got as far as registering itself owns the route; one that
+      // did not leaves it to us
+      if (this.streams.get(bridgeId)?.route !== route) await route.close();
+      throw route.tunnel?.takeError() ?? err;
+    }
+  }
+
+  private async startVia(
+    route: Route,
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    provider: CdcProvider,
+    opts: { fromNow?: boolean },
+  ): Promise<BridgeJob> {
+    if (bridge.source.kind !== 'table') throw new BadRequestError('Event-based bridges must read from a table.');
+    const conn = route.conn;
 
     const ready = await provider.readiness(
       {
@@ -328,8 +425,10 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
-    await this.beginStream(bridgeId, bridge, conn, provider, job.id, job.cursorOffset, readCursor(job.cursorJson));
-    this.logger.log(`Streaming changes for bridge ${bridgeId} (job ${job.id}, ${conn.engine})`);
+    await this.beginStream(bridgeId, bridge, route, provider, job.id, job.cursorOffset, readCursor(job.cursorJson));
+    this.logger.log(
+      `Streaming changes for bridge ${bridgeId} (job ${job.id}, ${conn.engine}${route.tunnel ? ', through its SSH tunnel' : ''})`,
+    );
     return this.jobs.getJob(bridgeId, job.id);
   }
 
@@ -593,8 +692,12 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
+  /** set on shutdown, so a reconnect loop does not outlive the process's services */
+  private destroyed = false;
+
   /** close every streaming connection on shutdown, no zombie streamers */
   async onModuleDestroy(): Promise<void> {
+    this.destroyed = true;
     for (const bridgeId of [...this.streams.keys()]) {
       await this.teardown(bridgeId);
     }
@@ -616,6 +719,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     // or acked, so the source hands it over again on the next start — and a
     // stream that is no longer registered must not deliver anything
     await stream.handle.stop().catch(() => undefined);
+    await stream.route.close();
   }
 
   /* ----- the shared change pipeline ----- */
@@ -623,7 +727,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   private async beginStream(
     bridgeId: string,
     bridge: ResolvedBridge,
-    conn: ConnectionConfig,
+    route: Route,
     provider: CdcProvider,
     jobId: string,
     startSeq: number,
@@ -664,15 +768,20 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       halted: false,
       consecutiveFailures: 0,
       wholeValueTarget: null,
+      route,
     };
     this.streams.set(bridgeId, stream);
+    // the SSH connection can drop on its own (a bastion restart, an idle
+    // timeout). the provider would then retry a local port nobody listens on,
+    // for ever: the stream has to be given a new tunnel
+    route.tunnel?.onClose(() => void this.rerouteStream(bridgeId, stream));
 
     let handle: CdcStreamHandle;
     try {
       handle = await provider.startStream({
         bridgeId,
         bridge,
-        conn,
+        conn: route.conn,
         fromCursor: startCursor,
         handlers: {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
@@ -686,8 +795,11 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       // a failed start must not strand the job as 'running' behind a dead
       // placeholder (that would be a permanent ConflictError on retry)
       if (this.streams.get(bridgeId) === stream) this.streams.delete(bridgeId);
-      await this.jobs.finalize(jobId, 'failed', (err as Error).message).catch(() => undefined);
-      throw err;
+      await route.close();
+      // a refused forward reaches the provider as a bare socket reset
+      const cause = route.tunnel?.takeError() ?? (err as Error);
+      await this.jobs.finalize(jobId, 'failed', cause.message).catch(() => undefined);
+      throw cause;
     }
     // stop() may have raced us during startStream: it removed the entry and
     // "stopped" the placeholder, so close the real handle instead of leaking it
@@ -1706,7 +1818,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   /* ----- boot recovery ----- */
 
   async onModuleInit(): Promise<void> {
-    let jobs: { bridgeId: string; id: string; cursorOffset: number; cursorJson: string | null }[];
+    let jobs: ResumableJob[];
     try {
       jobs = await this.prisma.bridgeJob.findMany({
         where: { status: 'running' },
@@ -1717,45 +1829,107 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     }
     for (const r of jobs) {
       try {
-        const bridge = await this.store.resolve(r.bridgeId);
-        if (bridge.trigger.kind !== 'cdc' || !bridge.enabled || bridge.source.kind !== 'table') continue;
-        const conn = await this.connStore.resolve(bridge.source.connectionId);
-        const provider = this.providerFor(conn.engine);
-        if (!provider) continue;
-        // the slot may have been dropped, or invalidated by the server, while
-        // this process was down. provisioning would quietly make a new one
-        const gap = await this.positionLost(r.bridgeId, bridge, conn, provider, r.cursorJson);
-        if (gap) {
-          const lost = `This bridge could not resume where it stopped: ${gap} ${GAP_ADVICE}`;
-          await this.prisma.bridgeJob.update({
-            where: { id: r.id },
-            data: {
-              status: 'failed',
-              error: lost,
-              finishedAt: new Date(),
-              cursorJson: JSON.stringify({ cursor: readCursor(r.cursorJson), lost: gap }),
-            },
-          });
-          this.logger.warn(`CDC ${r.bridgeId}: ${lost}`);
-          continue;
-        }
-        try {
-          await provider.provision(r.bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
-        } catch (err) {
-          // a REFUSAL is not a hiccup: this bridge must not run (a table that
-          // cannot be served, a bridge that would feed itself). anything else —
-          // the source is briefly unreachable — is left to the stream's retries
-          if (err instanceof BadRequestError) {
-            await this.jobs.finalize(r.id, 'failed', err.message).catch(() => undefined);
-            this.logger.warn(`CDC ${r.bridgeId} not resumed: ${err.message}`);
-            continue;
-          }
-        }
-        await this.beginStream(r.bridgeId, bridge, conn, provider, r.id, r.cursorOffset, readCursor(r.cursorJson));
-        this.logger.log(`Resumed CDC stream for bridge ${r.bridgeId} (${conn.engine})`);
+        await this.resumeJob(r);
       } catch (err) {
         this.logger.warn(`Could not resume CDC ${r.bridgeId}: ${(err as Error).message}`);
       }
+    }
+  }
+
+  /**
+   * bring a job that is marked `running` back up: after a restart of this
+   * process, or after the tunnel its stream ran through dropped. resolves
+   * without starting anything when the job should not run (no longer a CDC
+   * bridge, disabled, its position lost, refused); throws when it should but
+   * the source could not be reached, so the caller can try again.
+   */
+  private async resumeJob(r: ResumableJob): Promise<void> {
+    const bridge = await this.store.resolve(r.bridgeId);
+    if (bridge.trigger.kind !== 'cdc' || !bridge.enabled || bridge.source.kind !== 'table') return;
+    const raw = await this.connStore.resolve(bridge.source.connectionId);
+    const provider = this.providerFor(raw.engine);
+    if (!provider) return;
+
+    const route = await this.openRoute(raw);
+    try {
+      const conn = route.conn;
+      // the slot may have been dropped, or invalidated by the server, while
+      // this process was down. provisioning would quietly make a new one
+      const gap = await this.positionLost(r.bridgeId, bridge, conn, provider, r.cursorJson);
+      if (gap) {
+        const lost = `This bridge could not resume where it stopped: ${gap} ${GAP_ADVICE}`;
+        await this.prisma.bridgeJob.update({
+          where: { id: r.id },
+          data: {
+            status: 'failed',
+            error: lost,
+            finishedAt: new Date(),
+            cursorJson: JSON.stringify({ cursor: readCursor(r.cursorJson), lost: gap }),
+          },
+        });
+        this.logger.warn(`CDC ${r.bridgeId}: ${lost}`);
+        await route.close();
+        return;
+      }
+      try {
+        await provider.provision(r.bridgeId, bridge, conn, (id) => this.connStore.resolve(id));
+      } catch (err) {
+        // a REFUSAL is not a hiccup: this bridge must not run (a table that
+        // cannot be served, a bridge that would feed itself). anything else —
+        // the source is briefly unreachable — is left to the stream's retries
+        if (err instanceof BadRequestError) {
+          await this.jobs.finalize(r.id, 'failed', err.message).catch(() => undefined);
+          this.logger.warn(`CDC ${r.bridgeId} not resumed: ${err.message}`);
+          await route.close();
+          return;
+        }
+      }
+      await this.beginStream(r.bridgeId, bridge, route, provider, r.id, r.cursorOffset, readCursor(r.cursorJson));
+      this.logger.log(`Resumed CDC stream for bridge ${r.bridgeId} (${raw.engine})`);
+    } catch (err) {
+      if (this.streams.get(r.bridgeId)?.route !== route) await route.close();
+      throw route.tunnel?.takeError() ?? err;
+    }
+  }
+
+  /**
+   * the SSH tunnel under a running stream dropped. stop what is left of the
+   * stream, then keep trying to bring it back through a new tunnel — for as
+   * long as the job is still meant to be running — from the last position that
+   * was durably checkpointed. nothing is lost: what was not checkpointed was
+   * not acknowledged either, and the source hands it over again.
+   */
+  private async rerouteStream(bridgeId: string, stream: Stream): Promise<void> {
+    if (this.streams.get(bridgeId) !== stream || stream.halted || this.destroyed) return;
+    this.logger.warn(`CDC ${bridgeId}: the SSH tunnel to its source dropped; reconnecting`);
+    const jobId = stream.jobId;
+    await this.teardown(bridgeId);
+
+    for (let attempt = 0; !this.destroyed; attempt++) {
+      let job: ResumableJob | null = null;
+      try {
+        const row = await this.prisma.bridgeJob.findUnique({
+          where: { id: jobId },
+          select: { bridgeId: true, id: true, cursorOffset: true, cursorJson: true, status: true },
+        });
+        // stopped, deleted or failed in the meantime: no longer ours to revive
+        if (!row || row.status !== 'running') return;
+        job = row;
+        // beginStream finalizes the job as failed when it cannot connect; this
+        // is a retry loop, so put it back before the next attempt reads it
+        await this.resumeJob(job);
+        if (this.streams.has(bridgeId)) return;
+      } catch (err) {
+        this.logger.warn(
+          `CDC ${bridgeId}: could not re-establish its tunnel (attempt ${attempt + 1}): ${(err as Error).message}`,
+        );
+        if (job) {
+          await this.prisma.bridgeJob
+            .updateMany({ where: { id: jobId, status: 'failed' }, data: { status: 'running', finishedAt: null } })
+            .catch(() => undefined);
+        }
+      }
+      await delay(backoffMs(attempt, 1_000, 30_000));
     }
   }
 }

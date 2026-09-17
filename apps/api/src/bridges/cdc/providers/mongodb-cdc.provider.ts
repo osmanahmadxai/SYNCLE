@@ -24,7 +24,7 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
-import { mongoTlsOptions, normalizeMongoDocument } from '@syncle/core/adapters';
+import { mongoTlsOptions, mongoTunnelOptions, normalizeMongoDocument } from '@syncle/core/adapters';
 import type { ResolvedBridge } from '../../bridges.types';
 import { backoffMs, delay, type CdcChange, type CdcProvider, type CdcStreamContext, type CdcStreamHandle } from '../cdc-provider';
 
@@ -55,7 +55,7 @@ export class MongodbCdcProvider implements CdcProvider {
    * change still crossed the network in plaintext.
    */
   private clientOptions(conn: ConnectionConfig): Record<string, unknown> {
-    return { serverSelectionTimeoutMS: 8000, ...mongoTlsOptions(conn) };
+    return { serverSelectionTimeoutMS: 8000, ...mongoTunnelOptions(conn), ...mongoTlsOptions(conn) };
   }
 
   private uri(conn: ConnectionConfig): string {

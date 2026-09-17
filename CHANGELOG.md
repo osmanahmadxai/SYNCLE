@@ -183,6 +183,21 @@ can no longer lose a row to a failed delivery.
   fills it. MySQL is covered too: a purged binlog file, or a connection that
   now reaches a different server, is detected before the stream is opened
   instead of failing in a loop.
+- **CDC ignored a connection's SSH tunnel.** Change streams open their own
+  connections — a replication connection, a binlog client, a change stream, a
+  subscriber — and dialled the database host as written. Behind a bastion that
+  host is unreachable, so the workbench and replays worked on a tunnelled
+  connection and CDC on the very same connection never connected; Redis and
+  MongoDB failed already at the readiness check. A stream now gets a tunnel of
+  its own for as long as it runs, the bastion's host key is pinned as usual, and
+  a tunnel that drops is replaced and the stream resumed from its checkpoint.
+  Tested against a real SSH server, with database host names that only resolve
+  on the far side of it.
+- Through a tunnel, MongoDB connections (workbench and CDC alike) went on to
+  discover the replica set and dial its members by their internal names, which
+  cannot be reached from this side — the first query timed out on a connection
+  that had "tested" fine. A tunnelled connection now talks only to the address
+  it was given.
 - **On a Docker install, almost no setting could be changed.** The compose file
   listed the API's environment by hand and passed two variables through, so the
   CDC spool, the batch sizes, the dead-letter limits and everything since were

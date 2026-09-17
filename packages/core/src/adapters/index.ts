@@ -23,6 +23,7 @@ import {
 } from './nosql/mongodb-adapter';
 export {
   mergeSampledType,
+  mongoTunnelOptions,
   normalizeMongoDocument,
   normalizeMongoValue,
 } from './nosql/mongodb-adapter';

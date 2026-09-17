@@ -397,6 +397,18 @@ export default function Page() {
         it; use the separate host/port fields instead. That leaves PostgreSQL,
         MySQL/MariaDB, MongoDB and Redis as the engines that tunnel.
       </p>
+      <p>
+        A tunnel covers everything the connection is used for: the workbench,
+        replays and watch bridges, and <a href="/docs/cdc">CDC</a> change
+        streams, which open a tunnel of their own that lives exactly as long
+        as the stream and is re-established if the SSH connection drops.
+        (Until recently a change stream dialled the database host directly and
+        ignored the tunnel, so CDC could not be used with a tunnelled
+        connection at all.) Through a tunnel a MongoDB connection talks only
+        to the address it was given rather than discovering the replica
+        set&apos;s other members, whose internal names cannot be reached from
+        this side of the bastion — point it at the primary.
+      </p>
     </DocArticle>
   );
 }

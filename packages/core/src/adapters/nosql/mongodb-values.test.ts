@@ -13,8 +13,10 @@ import {
   Timestamp,
   UUID,
 } from 'mongodb';
+import type { ConnectionConfig } from '../types';
 import {
   mergeSampledType,
+  mongoTunnelOptions,
   normalizeMongoDocument,
   normalizeMongoValue,
 } from './mongodb-adapter';
@@ -110,5 +112,40 @@ describe('mergeSampledType', () => {
 
   it('agreement changes nothing', () => {
     expect(mergeSampledType('string', 'string')).toBe('string');
+  });
+});
+
+describe('mongoTunnelOptions', () => {
+  const base = {
+    id: 'c',
+    name: 'c',
+    engine: 'mongodb',
+    host: '127.0.0.1',
+    port: 40123,
+  } as ConnectionConfig;
+
+  it('pins the driver to the tunnelled address', () => {
+    // rerouted through a tunnel: `tlsHostOverride` carries the real host name.
+    // left to discover the replica set, the driver would go on to dial the
+    // members by the names the SET knows them by — unreachable from this side
+    expect(
+      mongoTunnelOptions({ ...base, tlsHostOverride: 'mongo-0.internal' }),
+    ).toEqual({
+      directConnection: true,
+    });
+  });
+
+  it('leaves an ordinary connection to discover its replica set', () => {
+    expect(mongoTunnelOptions(base)).toEqual({});
+  });
+
+  it('leaves a connection string to say what it means', () => {
+    expect(
+      mongoTunnelOptions({
+        ...base,
+        tlsHostOverride: 'mongo-0.internal',
+        connectionString: 'mongodb://a,b,c/?replicaSet=rs0',
+      }),
+    ).toEqual({});
   });
 });

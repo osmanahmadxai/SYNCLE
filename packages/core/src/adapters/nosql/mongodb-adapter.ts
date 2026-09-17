@@ -107,6 +107,20 @@ function buildUpsert(
   return { filter, update };
 }
 
+/**
+ * through an SSH tunnel the driver must talk ONLY to the address it was given.
+ *
+ * left to itself it treats that address as a seed: it asks the server which
+ * members the replica set has, and then connects to THOSE — by the names the
+ * set knows them by, `mongo-1.internal:27017`, which is exactly what cannot be
+ * reached from this side of the tunnel. the first query then times out in
+ * server selection, on a connection that "tested" fine. a connection string
+ * says what it means and is left alone.
+ */
+export function mongoTunnelOptions(config: ConnectionConfig): { directConnection?: boolean } {
+  return config.tlsHostOverride !== undefined && !config.connectionString ? { directConnection: true } : {};
+}
+
 export class MongodbAdapter implements DatabaseAdapter {
   readonly engine = 'mongodb' as const;
   readonly capabilities = MONGODB_CAPABILITIES;
@@ -137,6 +151,7 @@ export class MongodbAdapter implements DatabaseAdapter {
       this.client = new MongoClient(this.uri(), {
         serverSelectionTimeoutMS: 8000,
         maxPoolSize: 5,
+        ...mongoTunnelOptions(this.config),
         // with host/port fields the driver was never told about TLS: the
         // "Use TLS" switch did nothing here and the connection was plaintext
         ...mongoTlsOptions(this.config),
