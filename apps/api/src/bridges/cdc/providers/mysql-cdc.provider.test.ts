@@ -4,6 +4,7 @@ import {
   MysqlCdcProvider,
   binlogEventStart,
   gtidFromEvent,
+  normalizeBinlogRow,
 } from './mysql-cdc.provider';
 
 // cursorAfter/splitCursor are pure, the pool is only used by readiness()
@@ -154,5 +155,43 @@ describe('gtidFromEvent', () => {
     expect(gtidFromEvent({ serverId: 'nope', transactionRange: 1 })).toBeNull();
     expect(gtidFromEvent({ serverId: Buffer.alloc(4), transactionRange: 1 })).toBeNull();
     expect(gtidFromEvent({})).toBeNull();
+  });
+});
+
+describe('normalizeBinlogRow: a binlog row looks like the same row read with a SELECT', () => {
+  const columns = [
+    { name: 'id', type: 3 },
+    { name: 'doc', type: 245 }, // MYSQL_TYPE_JSON
+    { name: 'note', type: 253 }, // VARCHAR
+  ];
+
+  it('parses a JSON column, which the reader hands over as text', () => {
+    const row = { id: 1, doc: '{"a":{"b":[1,2]}}', note: 'x' };
+    expect(normalizeBinlogRow(row, columns)).toEqual({
+      id: 1,
+      doc: { a: { b: [1, 2] } },
+      note: 'x',
+    });
+    expect(row.doc).toBe('{"a":{"b":[1,2]}}'); // the reader's row is not mutated
+  });
+
+  it('keeps JSON scalars as the values they are', () => {
+    expect(normalizeBinlogRow({ doc: '"123"' }, columns).doc).toBe('123');
+    expect(normalizeBinlogRow({ doc: '[]' }, columns).doc).toEqual([]);
+    expect(normalizeBinlogRow({ doc: 'null' }, columns).doc).toBeNull();
+  });
+
+  it('never touches a text column that merely contains JSON', () => {
+    const row = { id: 1, doc: null, note: '{"looks":"like json"}' };
+    expect(normalizeBinlogRow(row, columns)).toBe(row);
+  });
+
+  it('leaves unparseable text, nulls and missing metadata alone', () => {
+    expect(normalizeBinlogRow({ doc: '{broken' }, columns).doc).toBe('{broken');
+    const row = { id: 1, doc: null };
+    expect(normalizeBinlogRow(row, columns)).toBe(row);
+    expect(normalizeBinlogRow(row, undefined)).toBe(row);
+    // a delete image may carry only some columns
+    expect(normalizeBinlogRow({ id: 5 }, columns)).toEqual({ id: 5 });
   });
 });

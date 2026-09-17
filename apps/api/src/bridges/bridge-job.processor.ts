@@ -99,6 +99,7 @@ export class BridgeJobProcessor extends WorkerHost {
           row.cursorOffset,
           parseKeysetCheckpoint(row.cursorJson),
           row.configSnapshotJson,
+          row.bridgeId,
           controller.signal,
         );
       }
@@ -112,10 +113,11 @@ export class BridgeJobProcessor extends WorkerHost {
     startOffset: number,
     resumeKey: KeysetCheckpoint | null,
     snapshotJson: string,
+    bridgeId: string,
     signal: AbortSignal,
   ): Promise<void> {
     await this.jobs.markRunning(jobId);
-    const bridge = this.store.resolveSnapshot(snapshotJson);
+    const bridge = this.store.resolveSnapshot(snapshotJson, bridgeId);
     const { delivery } = bridge;
     const batchSize = delivery.batchSize;
     const table = bridge.source.kind === 'table' ? bridge.source.table : '(query)';

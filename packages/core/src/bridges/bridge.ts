@@ -14,6 +14,7 @@ import type {
   DatabaseEngine,
 } from '../adapters/types';
 import type { ColumnMapping, BridgeDestination } from './bridge-config';
+import { translateColumnType } from './type-map';
 
 /* -------------------------------------------------------------------------- */
 /* display helpers (shared by web list / map / panel)                         */
@@ -89,115 +90,86 @@ export function sourceColumnFor(target: string, mapping: ColumnMapping[]): strin
 }
 
 /* -------------------------------------------------------------------------- */
-/* portable type translation (source dataType string → target engine type)    */
+/* auto-created destination tables                                            */
 /* -------------------------------------------------------------------------- */
-
-export type PortableType =
-  | 'integer'
-  | 'bigint'
-  | 'number'
-  | 'boolean'
-  | 'timestamp'
-  | 'json'
-  | 'uuid'
-  | 'text';
-
-/**
- * collapse an engine-specific column type string into a portable category. errs
- * toward `text`, the universally-safe fallback, when nothing matches.
- */
-export function normalizeType(dataType: string): PortableType {
-  const t = (dataType || '').toLowerCase();
-  if (/(^| )(uuid)/.test(t)) return 'uuid';
-  if (/(bool)/.test(t)) return 'boolean';
-  if (/(timestamp|datetime|^date$| date|time with|time without)/.test(t))
-    return 'timestamp';
-  if (/(json|jsonb|object|array|bson)/.test(t)) return 'json';
-  if (/(bigint|int8|long)/.test(t)) return 'bigint';
-  if (/(serial|^int|integer|int4|int2|smallint|tinyint|mediumint)/.test(t))
-    return 'integer';
-  if (/(numeric|decimal|real|double|float|money|number)/.test(t)) return 'number';
-  return 'text';
-}
-
-/**
- * render a portable type as a concrete column type for the target engine. key
- * columns get an indexable type (e.g. MySQL `VARCHAR(255)` instead of `TEXT`,
- * which can't carry a primary key without a prefix length).
- */
-export function engineColumnType(
-  engine: DatabaseEngine,
-  type: PortableType,
-  isKey: boolean,
-): string {
-  switch (engine) {
-    case 'postgres':
-      return {
-        integer: 'INTEGER',
-        bigint: 'BIGINT',
-        number: 'DOUBLE PRECISION',
-        boolean: 'BOOLEAN',
-        timestamp: 'TIMESTAMP',
-        json: 'JSONB',
-        uuid: 'UUID',
-        text: 'TEXT',
-      }[type];
-    case 'mysql':
-      return {
-        integer: 'INT',
-        bigint: 'BIGINT',
-        number: 'DOUBLE',
-        boolean: 'TINYINT(1)',
-        timestamp: 'DATETIME',
-        json: 'JSON',
-        uuid: isKey ? 'VARCHAR(255)' : 'CHAR(36)',
-        text: isKey ? 'VARCHAR(255)' : 'TEXT',
-      }[type];
-    case 'sqlite':
-    default:
-      return {
-        integer: 'INTEGER',
-        bigint: 'INTEGER',
-        number: 'REAL',
-        boolean: 'INTEGER',
-        timestamp: 'TEXT',
-        json: 'TEXT',
-        uuid: 'TEXT',
-        text: 'TEXT',
-      }[type];
-  }
-}
 
 /** a target column to (re)create: its name, the source type, and nullability */
 export interface TargetColumnShape {
   name: string;
+  /** the source column's native type, as precisely as the source reports it */
   sourceType: string;
   nullable: boolean;
 }
 
+/** a column whose target type cannot hold everything the source type can */
+export interface ColumnTypeWarning {
+  column: string;
+  sourceType: string;
+  targetType: string;
+  message: string;
+}
+
+export interface TargetTablePlan {
+  spec: CreateTableSpec;
+  /** empty when every column translates faithfully */
+  warnings: ColumnTypeWarning[];
+}
+
 /**
- * build a `CREATE TABLE` spec for `engine` from the projected target columns.
- * `keyColumns` become the primary key (so upserts have something to conflict
- * on); values are inserted verbatim, so nothing is marked auto-increment.
+ * plan the `CREATE TABLE` for `engine` from the projected target columns, and
+ * report every column the target cannot represent faithfully. `keyColumns`
+ * become the primary key (so upserts have something to conflict on); values are
+ * inserted verbatim, so nothing is marked auto-increment.
+ *
+ * `sourceEngine` matters: `timestamp`, `float` and `int` do not mean the same
+ * thing in every engine. leave it undefined when the columns did not come from
+ * schema introspection (a query source, or types inferred from a sample row).
  */
-export function buildCreateTableSpec(
+export function planTargetTable(
   table: string,
   schema: string | undefined,
   columns: TargetColumnShape[],
   keyColumns: string[],
   engine: DatabaseEngine,
-): CreateTableSpec {
+  sourceEngine?: DatabaseEngine,
+): TargetTablePlan {
   const keys = new Set(keyColumns);
+  const warnings: ColumnTypeWarning[] = [];
   const defs: ColumnDefinition[] = columns.map((c) => {
     const isKey = keys.has(c.name);
+    const plan = translateColumnType(c.sourceType, {
+      source: sourceEngine,
+      target: engine,
+      isKey,
+    });
+    for (const message of plan.warnings) {
+      warnings.push({
+        column: c.name,
+        sourceType: c.sourceType,
+        targetType: plan.type,
+        message,
+      });
+    }
     return {
       name: c.name,
-      type: engineColumnType(engine, normalizeType(c.sourceType), isKey),
+      type: plan.type,
       // key columns must be NOT NULL to serve as a primary key
       nullable: isKey ? false : c.nullable,
       primaryKey: isKey,
       autoIncrement: false,
     };
   });
-  return { table, schema, columns: defs };
+  return { spec: { table, schema, columns: defs }, warnings };
+}
+
+/** {@link planTargetTable} for callers that only need the spec */
+export function buildCreateTableSpec(
+  table: string,
+  schema: string | undefined,
+  columns: TargetColumnShape[],
+  keyColumns: string[],
+  engine: DatabaseEngine,
+  sourceEngine?: DatabaseEngine,
+): CreateTableSpec {
+  return planTargetTable(table, schema, columns, keyColumns, engine, sourceEngine).spec;
 }

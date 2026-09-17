@@ -58,8 +58,11 @@ function makeAdapter() {
   return { adapter, calls };
 }
 
-/** service wired to stub adapters, keyed by connectionId */
-function makeService(adapters: Record<string, unknown>): DatabaseSinkService {
+/** service wired to stub adapters, keyed by connectionId (all Postgres unless told otherwise) */
+function makeService(
+  adapters: Record<string, unknown>,
+  engines: Record<string, string> = {},
+): DatabaseSinkService {
   const pool = {
     withAdapter: async (
       connectionId: string,
@@ -67,7 +70,9 @@ function makeService(adapters: Record<string, unknown>): DatabaseSinkService {
       fn: (a: unknown) => unknown,
     ) => fn(adapters[connectionId]),
   };
-  const connections = { resolve: async () => ({ engine: 'postgres' }) };
+  const connections = {
+    resolve: async (id: string) => ({ engine: engines[id] ?? 'postgres' }),
+  };
   return new DatabaseSinkService(pool as never, connections as never);
 }
 
@@ -256,14 +261,183 @@ describe('DatabaseSinkService.deliver', () => {
     expect(outcome.status).toBe('success');
     expect(dst.calls.create).toHaveLength(1);
     const byName = new Map(dst.calls.create[0]!.columns.map((c) => [c.name, c]));
-    expect(byName.get('id')).toMatchObject({
-      type: 'BIGINT',
-      primaryKey: true,
-      nullable: false,
+    expect(byName.get('id')).toMatchObject({ primaryKey: true, nullable: false });
+    // Postgres on both sides: the source's own types, verbatim. (this used to
+    // expect DOUBLE PRECISION and TEXT — an exact decimal turned into a float
+    // and a bounded varchar into unbounded text, on a same-engine copy)
+    expect(byName.get('id')!.type).toBe('bigint');
+    expect(byName.get('price')!.type).toBe('numeric(10,2)');
+    expect(byName.get('meta')!.type).toBe('jsonb');
+    expect(byName.get('note')!.type).toBe('character varying(120)');
+  });
+
+  it('prefers the precise native type, and reads it in the SOURCE engine’s dialect', async () => {
+    const src = makeAdapter();
+    const precise = (name: string, dataType: string, nativeType: string) => ({
+      ...col(name, dataType, true),
+      nativeType,
     });
-    expect(byName.get('price')!.type).toBe('DOUBLE PRECISION');
-    expect(byName.get('meta')!.type).toBe('JSONB');
-    expect(byName.get('note')!.type).toBe('TEXT');
+    src.adapter.getSchema = async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [
+                { ...col('id', 'int unsigned', false) },
+                col('active', 'tinyint(1)', true),
+                col('seen', 'timestamp', true),
+                col('ratio', 'float', true),
+                // what Postgres' catalog says vs. what the column really is
+                precise('amount', 'numeric', 'numeric(38,10)'),
+                precise('tags', 'ARRAY', 'text[]'),
+              ],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dst = makeAdapter();
+    dst.adapter.browse = async () => {
+      throw new Error('relation "users_copy" does not exist');
+    };
+    const svc = makeService(
+      { src: src.adapter, dst: dst.adapter },
+      { src: 'mysql' },
+    );
+
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget({ createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+    const types = Object.fromEntries(
+      dst.calls.create[0]!.columns.map((c) => [c.name, c.type]),
+    );
+    expect(types).toEqual({
+      id: 'BIGINT', // int unsigned does not fit a signed INTEGER
+      active: 'BOOLEAN', // MySQL's tinyint(1)
+      seen: 'TIMESTAMP', // a MySQL timestamp is a wall-clock reading here
+      ratio: 'REAL', // MySQL float is single precision; Postgres float is double
+      amount: 'NUMERIC(38,10)', // from nativeType, not the catalog's bare "numeric"
+      tags: 'TEXT[]',
+    });
+  });
+
+  it('converts values for the target engine, and only when it has to', async () => {
+    const src = makeAdapter();
+    src.adapter.getSchema = async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [
+                col('id', 'int', false),
+                col('active', 'tinyint(1)', true),
+                col('seen', 'datetime', true),
+              ],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dst = makeAdapter();
+    const svc = makeService(
+      { src: src.adapter, dst: dst.adapter },
+      { src: 'mysql' },
+    );
+
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{ id: 1, active: 1, seen: '0000-00-00 00:00:00' }],
+      undefined,
+    );
+    // a MySQL 0/1 flag is a boolean in Postgres; a zero date is NULL anywhere else
+    expect((dst.calls.upsert[0] as { values: unknown }).values).toEqual({
+      id: 1,
+      active: true,
+      seen: null,
+    });
+  });
+
+  it('keeps each bridge’s source shape apart', async () => {
+    // the cache is keyed by bridge id: two bridges must never share a slot
+    const schemaOf = (column: string) => async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [col('id', 'integer', false), col(column, 'text', true)],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const srcA = makeAdapter();
+    srcA.adapter.getSchema = schemaOf('alpha');
+    const srcB = makeAdapter();
+    srcB.adapter.getSchema = schemaOf('beta');
+    const dst = makeAdapter();
+    dst.adapter.browse = async () => {
+      throw new Error('does not exist');
+    };
+    const svc = makeService({
+      srcA: srcA.adapter,
+      srcB: srcB.adapter,
+      dst: dst.adapter,
+    });
+    const bridge = (id: string, connectionId: string) =>
+      ({
+        ...makeBridge(),
+        id,
+        source: { kind: 'table', connectionId, table: 'users' },
+      }) as ResolvedBridge;
+
+    await svc.deliver(
+      bridge('a', 'srcA'),
+      [makeTarget({ table: 'copy_a', createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+    await svc.deliver(
+      bridge('b', 'srcB'),
+      [makeTarget({ table: 'copy_b', createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+
+    expect(dst.calls.create.map((c) => c.columns.map((x) => x.name))).toEqual([
+      ['id', 'alpha'],
+      ['id', 'beta'],
+    ]);
   });
 
   it('falls back to sample-row inference when no schema is available', async () => {

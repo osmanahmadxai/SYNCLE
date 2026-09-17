@@ -301,7 +301,7 @@ export class BridgeJobService implements OnModuleInit {
     if (opts.onlyExisting && count === 0) return null;
 
     const snapshotJson = await this.store.snapshotJson(bridgeId);
-    const total = await this.computeTotal(snapshotJson).catch(() => null);
+    const total = await this.computeTotal(snapshotJson, bridgeId).catch(() => null);
     const row = await this.prisma.bridgeJob.create({
       data: {
         id: randomUUID(),
@@ -370,7 +370,7 @@ export class BridgeJobService implements OnModuleInit {
     await ensureQueueReady(this.queue);
     const id = randomUUID();
     const snapshotJson = await this.store.snapshotJson(bridgeId);
-    const total = await this.computeTotal(snapshotJson).catch(() => null);
+    const total = await this.computeTotal(snapshotJson, bridgeId).catch(() => null);
     const row = await this.prisma.bridgeJob.create({
       data: {
         id,
@@ -424,8 +424,8 @@ export class BridgeJobService implements OnModuleInit {
   }
 
   /** best-effort planned row count for a source, used to render the timeline */
-  private async computeTotal(snapshotJson: string): Promise<number | null> {
-    const bridge = this.store.resolveSnapshot(snapshotJson);
+  private async computeTotal(snapshotJson: string, bridgeId: string): Promise<number | null> {
+    const bridge = this.store.resolveSnapshot(snapshotJson, bridgeId);
     if (bridge.source.kind === 'table') {
       const src = bridge.source;
       const page = await this.pool.withAdapter(

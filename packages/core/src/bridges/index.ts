@@ -1,4 +1,6 @@
 export * from './transform';
 export * from './bridge-config';
 export * from './bridge';
+export * from './type-map';
+export * from './value-map';
 export * from './watch';

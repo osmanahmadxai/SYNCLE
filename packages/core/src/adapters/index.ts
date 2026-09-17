@@ -21,6 +21,11 @@ import {
   MongodbAdapter,
   MONGODB_CAPABILITIES,
 } from './nosql/mongodb-adapter';
+export {
+  mergeSampledType,
+  normalizeMongoDocument,
+  normalizeMongoValue,
+} from './nosql/mongodb-adapter';
 import { RedisAdapter, REDIS_CAPABILITIES } from './nosql/redis-adapter';
 
 const hostPortUserPass = (

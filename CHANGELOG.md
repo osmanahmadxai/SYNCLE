@@ -32,6 +32,55 @@ can no longer lose a row to a failed delivery.
   - With `onError: abort`, the bridge stopped at the failed batch — but a batch
     already queued behind it could still be delivered in the instant before the
     stream shut down, and its checkpoint carried the cursor past the failure.
+- **Auto-created tables got the wrong column types, and values changed on the
+  way across.** Both halves of cross-engine translation were rebuilt, and are
+  now checked against real PostgreSQL, MySQL, MongoDB and SQLite — by replay and
+  by CDC, under three different server time zones.
+  - Types were matched by substring. `interval` became `INTEGER` (it starts with
+    "int"); a MongoDB `_id` became `JSONB` (objectId contains "object"), which
+    then rejected the id it was given; `timestamp with time zone` lost its zone;
+    `numeric(38,10)` became a float; `bytea` and `blob` became text; MySQL
+    `tinyint(1)` became an integer and `int unsigned` a signed `INTEGER` it can
+    overflow. Types are now looked up by name, per engine. Between two instances
+    of the same engine the source's type is reused verbatim, so a same-engine
+    copy narrows nothing.
+  - PostgreSQL's catalog label was used where the real type was needed:
+    `numeric`, `character varying` and `ARRAY` for columns that are
+    `numeric(38,10)`, `character varying(255)` and `integer[]`. Precision,
+    length and array element types are now read too.
+  - **Timestamps depended on the server's time zone.** `pg` parses a
+    `timestamp without time zone` in the process's zone, so on a server at
+    UTC+4:30 `05:06:07` became 00:36Z, and any writer that formats dates as UTC
+    stored a different time than the source holds. Dates and timestamps are now
+    read as the text PostgreSQL sends. That also keeps **microseconds**, which a
+    JavaScript date silently rounded off every `now()`-stamped column. MySQL
+    writes an instant as UTC instead of in the process's zone. The polling
+    cursor's lookback window had the same fault: on a server at UTC−8 a 3-second
+    window pointed 8 hours into the future, and skipped rows.
+  - An empty JSON array written to PostgreSQL arrived as `{}`, an empty *object*,
+    with no error: a JavaScript array bound as a parameter is sent as a
+    PostgreSQL array literal. Non-empty arrays failed outright, and the JSON
+    string `"123"` arrived as the number 123. Batches of 250+ rows took a
+    different write path and did not have the bug — so the same data synced
+    differently in a backfill than it did live. JSON now reaches PostgreSQL
+    correctly on both paths, whatever it holds.
+  - MySQL CDC rounded every `DECIMAL` to a double — the binlog reader builds the
+    exact digits and then calls `parseFloat` — while the same column read by a
+    replay stayed exact. Patched (`patches/`), reported values are now identical.
+    MySQL CDC also delivered a JSON column as text where a replay delivered the
+    parsed value.
+  - SQLite returned 64-bit integers as JavaScript numbers: 9223372036854775807
+    read back as 9223372036854776000, and a bridge then wrote that. A column
+    with no declared type was treated as a BLOB.
+  - MongoDB `Decimal128`, `Long`, binaries, UUIDs and *nested* `ObjectId`s
+    reached SQL targets as the driver's internal objects. A field's type was
+    taken from the first document only, so a field that started `null` became a
+    text column.
+- **After the first replay in a process, every later replay bridge created its
+  destination table with the FIRST bridge's columns.** A replay resolves its
+  bridge from the job's config snapshot, which came back with an empty id — and
+  the sink caches source columns by bridge id, so every replay shared one slot.
+  Deliveries then failed with `column … does not exist`.
 - A delete reaching a target with no key columns (an `insert`-mode, append-only
   target) failed the whole delivery: there was nothing to delete by, and the
   empty `WHERE` was rejected by every engine. Such a target now simply does not
@@ -62,6 +111,12 @@ can no longer lose a row to a failed delivery.
     (`SYNCLE_DEAD_LETTER_MAX_ROWS`, 10,000).
 - The builder offers **On failure** for watch and CDC bridges, where it was
   previously hidden and fixed to `continue`.
+- **Type warnings.** Whenever a target column cannot hold everything the source
+  column can — a time zone MySQL has nowhere to put, more precision than
+  `DECIMAL(65,30)`, a key that had to be bounded to `VARCHAR(255)`, an enum
+  carried as text — the column is named. `POST /api/bridges/:id/preview` now
+  reports whether each target table exists and, when a run would create it, the
+  exact columns (`plannedColumns`) and those warnings — before anything runs.
 
 ### Changed
 
@@ -69,6 +124,11 @@ can no longer lose a row to a failed delivery.
   one. Bridges that already exist keep the value they were saved with, and the
   web app's builder still pre-selects `continue` — which, with the queue, no
   longer loses anything.
+- The workbench shows PostgreSQL dates and timestamps as PostgreSQL writes them
+  (`2026-03-04 05:06:07.891234+00`) rather than as a JavaScript date rendered in
+  UTC, which was off by the server's offset for columns without a time zone.
+- Auto-created MySQL text columns are `LONGTEXT`, not `TEXT`: a PostgreSQL
+  `text` value is not limited to 64 KB. Existing tables are never altered.
 - A live bridge stopped by a failure now says what failed, not only that
   something did, and reuses the failed delivery when it is started again
   instead of leaving a permanently red cell beside a fresh green one.

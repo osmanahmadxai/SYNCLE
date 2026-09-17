@@ -3,7 +3,18 @@
  * is inferred by sampling documents (Mongo is schemaless). the query editor
  * speaks a small JSON dialect, see {@link MongodbAdapter.query}
  */
-import { MongoClient, ObjectId, type Db } from 'mongodb';
+import {
+  Binary,
+  Decimal128,
+  Double,
+  Int32,
+  Long,
+  MongoClient,
+  ObjectId,
+  Timestamp,
+  UUID,
+  type Db,
+} from 'mongodb';
 import type {
   AdapterCapabilities,
   BackupDocument,
@@ -533,19 +544,91 @@ function coerceId(identity: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-function normalizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(doc)) {
-    out[k] = v instanceof ObjectId ? v.toHexString() : v;
+/**
+ * turn a BSON value into a plain JavaScript one that every other engine's
+ * driver can bind. the driver hands back wrapper objects for the types JSON has
+ * no word for, and a SQL driver that meets one either stringifies its internals
+ * (`{"$numberDecimal":…}`, an ObjectId wrapped in quotes) or rejects it:
+ *
+ *   ObjectId    → its 24-character hex string
+ *   Decimal128  → its decimal string, exact (a JS number would round it)
+ *   Long        → a number when that is exact, otherwise its decimal string
+ *   Int32/Double→ a number
+ *   Binary      → a Buffer; a UUID-subtype Binary → the canonical UUID string
+ *   Timestamp   → its decimal string (an internal replication value)
+ *
+ * applied at every depth, because a nested document lands in ONE json column
+ * and its members need the same treatment as top-level fields.
+ */
+export function normalizeMongoValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v;
+  if (typeof v !== 'object') return v;
+  if (v instanceof Date || Buffer.isBuffer(v)) return v;
+  if (v instanceof ObjectId) return v.toHexString();
+  if (v instanceof Decimal128) return v.toString();
+  // a Timestamp IS a Long underneath, so it has to be tested first
+  if (v instanceof Timestamp) return v.toString();
+  if (v instanceof Long) {
+    const n = v.toNumber();
+    return Number.isSafeInteger(n) ? n : v.toString();
   }
+  if (v instanceof Int32 || v instanceof Double) return v.valueOf();
+  if (v instanceof UUID) return v.toString();
+  if (v instanceof Binary) {
+    if (v.sub_type === Binary.SUBTYPE_UUID) {
+      try {
+        return v.toUUID().toString();
+      } catch {
+        /* not 16 bytes after all: fall through to raw bytes */
+      }
+    }
+    return Buffer.from(v.buffer);
+  }
+  if (Array.isArray(v)) return v.map(normalizeMongoValue);
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = normalizeMongoValue(x);
+    return out;
+  }
+  return v; // an unknown wrapper: leave it for the target's own coercion
+}
+
+/** {@link normalizeMongoValue} over a whole document */
+export function normalizeMongoDocument(
+  doc: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(doc)) out[k] = normalizeMongoValue(v);
   return out;
+}
+
+const normalizeDoc = normalizeMongoDocument;
+
+/** numeric labels, narrowest first: a field seen as both takes the wider one */
+const NUMERIC_WIDENING = ['int', 'long', 'number', 'decimal128'];
+
+/**
+ * fold one more sampled value's type into what a field has been seen as so far.
+ * the first document alone used to decide — so a field whose first value was
+ * null stayed "null" however many real values followed, and a bridge then
+ * created a text column for what was really a number or a date.
+ */
+export function mergeSampledType(seen: string | undefined, next: string): string {
+  if (seen === undefined || seen === 'null' || seen === 'undefined') return next;
+  if (next === 'null' || next === 'undefined' || next === seen) return seen;
+  const a = NUMERIC_WIDENING.indexOf(seen);
+  const b = NUMERIC_WIDENING.indexOf(next);
+  if (a >= 0 && b >= 0) return NUMERIC_WIDENING[Math.max(a, b)]!;
+  // genuinely different kinds in one field (a number here, a string there)
+  return 'mixed';
 }
 
 function inferColumns(docs: Record<string, unknown>[]): ColumnSchema[] {
   const seen = new Map<string, string>();
   for (const doc of docs) {
     for (const [k, v] of Object.entries(doc)) {
-      if (!seen.has(k)) seen.set(k, jsType(v));
+      seen.set(k, mergeSampledType(seen.get(k), jsType(v)));
     }
   }
   return [...seen.entries()].map(([name, dataType]) => ({
@@ -561,9 +644,24 @@ function inferColumns(docs: Record<string, unknown>[]): ColumnSchema[] {
   }));
 }
 
+/**
+ * the type label for a sampled value. these are the names the bridge type map
+ * knows MongoDB by (`packages/core/src/bridges/type-map.ts`), so a new label
+ * here needs an entry there.
+ */
 function jsType(v: unknown): string {
   if (v === null) return 'null';
   if (v instanceof ObjectId) return 'objectId';
+  if (v instanceof Decimal128) return 'decimal128';
+  if (v instanceof Timestamp) return 'string';
+  if (v instanceof Long) return 'long';
+  if (v instanceof Int32) return 'int';
+  if (v instanceof Double) return 'number';
+  if (v instanceof UUID) return 'uuid';
+  if (v instanceof Binary) {
+    return v.sub_type === Binary.SUBTYPE_UUID ? 'uuid' : 'binary';
+  }
+  if (Buffer.isBuffer(v)) return 'binary';
   if (Array.isArray(v)) return 'array';
   if (v instanceof Date) return 'date';
   return typeof v;

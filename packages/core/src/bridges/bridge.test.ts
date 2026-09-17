@@ -4,7 +4,6 @@ import {
   destinationLabel,
   destinationNodeKeys,
   mapRow,
-  normalizeType,
 } from './bridge';
 import type { BridgeDestination } from './bridge-config';
 
@@ -20,19 +19,6 @@ describe('mapRow', () => {
     ]);
     expect(out).toEqual({ user_id: 7, name: 'Ada' });
     expect(out).not.toHaveProperty('extra');
-  });
-});
-
-describe('normalizeType', () => {
-  it('collapses engine-specific types into portable categories', () => {
-    expect(normalizeType('character varying(255)')).toBe('text');
-    expect(normalizeType('bigint')).toBe('bigint');
-    expect(normalizeType('integer')).toBe('integer');
-    expect(normalizeType('timestamp with time zone')).toBe('timestamp');
-    expect(normalizeType('jsonb')).toBe('json');
-    expect(normalizeType('boolean')).toBe('boolean');
-    expect(normalizeType('uuid')).toBe('uuid');
-    expect(normalizeType('numeric(10,2)')).toBe('number');
   });
 });
 
@@ -53,8 +39,8 @@ describe('buildCreateTableSpec', () => {
     expect(id.primaryKey).toBe(true);
     expect(id.nullable).toBe(false);
     expect(id.type).toBe('INT');
-    // a non-key text column on MySQL stays TEXT
-    expect(spec.columns.find((c) => c.name === 'name')!.type).toBe('TEXT');
+    // MySQL's TEXT stops at 64 KB and the source's `text` does not
+    expect(spec.columns.find((c) => c.name === 'name')!.type).toBe('LONGTEXT');
   });
 
   it('uses an indexable type for a text KEY column on MySQL', () => {

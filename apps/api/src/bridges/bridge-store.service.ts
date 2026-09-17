@@ -208,11 +208,19 @@ export class BridgeStoreService {
     return JSON.stringify(snapshot);
   }
 
-  /** decrypt a job snapshot into a runnable, fully-resolved bridge config */
-  resolveSnapshot(json: string): ResolvedBridge {
+  /**
+   * decrypt a job snapshot into a runnable, fully-resolved bridge config.
+   *
+   * the snapshot does not store the bridge's id, so the caller supplies it —
+   * and it must: the id is what per-bridge caches are keyed by. while this
+   * returned `id: ''`, every replay job shared ONE cache slot, so the sink
+   * reused the first replayed bridge's source columns for every bridge after
+   * it, and created their destination tables with the wrong bridge's columns.
+   */
+  resolveSnapshot(json: string, id: string): ResolvedBridge {
     const s = JSON.parse(json) as JobSnapshot;
     return {
-      id: '',
+      id,
       name: s.name,
       source: s.source,
       destination: this.withSecret(

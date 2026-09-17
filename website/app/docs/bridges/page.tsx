@@ -234,14 +234,215 @@ export default function Page() {
           </tbody>
         </table>
       </div>
+      <h3 id="type-translation">How column types are translated</h3>
       <p>
-        Auto-created tables use cross-engine type translation: each source
-        column type is collapsed to a portable type (integer, bigint, number,
-        boolean, timestamp, json, uuid, text — falling back to text) and
-        rendered in the target engine&apos;s dialect, with{' '}
-        <code>keyColumns</code> as the NOT NULL primary key and nothing
-        auto-increment. The mapping preview in the builder renders exactly
-        the mapping the runner performs.
+        An auto-created table takes <code>keyColumns</code> as its NOT NULL
+        primary key, nothing auto-increment, and every other column typed
+        from the source. Between two instances of the <em>same</em> engine
+        the source&apos;s own type is reused word for word —{' '}
+        <code>numeric(38,10)</code> stays <code>numeric(38,10)</code>,{' '}
+        <code>timestamp(3) with time zone</code> stays exactly that — so a
+        same-engine copy narrows nothing. (The exception is a type that lives
+        in one database only, such as a Postgres enum or domain: a domain
+        becomes the base type it wraps, an enum becomes text.)
+      </p>
+      <p>
+        Across engines each type is read in the <em>source</em> engine&apos;s
+        dialect — <code>float</code> is single precision in MySQL and double
+        in Postgres, <code>timestamp</code> means different things in each —
+        and rendered as the closest type the target has:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Source column</th>
+              <th>→ PostgreSQL</th>
+              <th>→ MySQL</th>
+              <th>→ SQLite</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>exact decimal, <code>numeric(p,s)</code></td>
+              <td>
+                <code>NUMERIC(p,s)</code>
+              </td>
+              <td>
+                <code>DECIMAL(p,s)</code>, up to (65,30)
+              </td>
+              <td>
+                <code>DECIMAL(p,s)</code> to 15 digits, text beyond
+              </td>
+            </tr>
+            <tr>
+              <td>
+                64-bit and unsigned integers (<code>bigint unsigned</code>)
+              </td>
+              <td>
+                <code>BIGINT</code> / <code>NUMERIC(20,0)</code>
+              </td>
+              <td>as declared</td>
+              <td>
+                <code>INTEGER</code> / text
+              </td>
+            </tr>
+            <tr>
+              <td>
+                boolean, MySQL <code>tinyint(1)</code> and <code>bit(1)</code>
+              </td>
+              <td>
+                <code>BOOLEAN</code>
+              </td>
+              <td>
+                <code>TINYINT(1)</code>
+              </td>
+              <td>
+                <code>INTEGER</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                bytes (<code>bytea</code>, <code>blob</code>, <code>binary</code>)
+              </td>
+              <td>
+                <code>BYTEA</code>
+              </td>
+              <td>
+                <code>LONGBLOB</code>
+              </td>
+              <td>
+                <code>BLOB</code>
+              </td>
+            </tr>
+            <tr>
+              <td>unbounded text</td>
+              <td>
+                <code>TEXT</code>
+              </td>
+              <td>
+                <code>LONGTEXT</code> (MySQL&apos;s <code>TEXT</code> stops at
+                64 KB)
+              </td>
+              <td>
+                <code>TEXT</code>
+              </td>
+            </tr>
+            <tr>
+              <td>wall-clock timestamp (no zone)</td>
+              <td>
+                <code>TIMESTAMP</code>
+              </td>
+              <td>
+                <code>DATETIME(6)</code>
+              </td>
+              <td>text</td>
+            </tr>
+            <tr>
+              <td>
+                instant (<code>timestamptz</code>, a MongoDB date)
+              </td>
+              <td>
+                <code>TIMESTAMPTZ</code>
+              </td>
+              <td>
+                <code>DATETIME(6)</code>, as UTC
+              </td>
+              <td>ISO-8601 text, UTC</td>
+            </tr>
+            <tr>
+              <td>JSON, arrays, nested documents</td>
+              <td>
+                <code>JSONB</code>; a Postgres array stays an array
+              </td>
+              <td>
+                <code>JSON</code>
+              </td>
+              <td>JSON text</td>
+            </tr>
+            <tr>
+              <td>
+                <code>uuid</code> / MongoDB <code>ObjectId</code>
+              </td>
+              <td>
+                <code>UUID</code> / <code>VARCHAR(24)</code>
+              </td>
+              <td>
+                <code>CHAR(36)</code> / <code>CHAR(24)</code>
+              </td>
+              <td>text</td>
+            </tr>
+            <tr>
+              <td>
+                enum, set, geometry, anything Syncle does not recognise
+              </td>
+              <td colSpan={3}>text, with a warning</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        MongoDB has no declared types, so a field&apos;s type is sampled from
+        its documents — all of the sample, not just the first, so a field
+        that starts out <code>null</code> still gets its real type, and one
+        that holds both numbers and strings is stored as text.
+      </p>
+      <p>
+        <strong>A narrowing is never silent.</strong> Whenever the target
+        cannot hold everything the source column can — a time zone MySQL has
+        nowhere to put, a precision beyond MySQL&apos;s 65 digits, a key
+        column that had to be bounded to <code>VARCHAR(255)</code>, an enum
+        carried as text — the column is named in a warning. The preview
+        (<code>POST /api/bridges/:id/preview</code>) lists the exact columns a
+        run would create and those warnings <em>before</em> anything runs,
+        and the same warnings are logged when the table is created. If a
+        default is not what you want, create the table yourself: an existing
+        table is never altered.
+      </p>
+
+      <h3 id="value-fidelity">Values arrive as the values they were</h3>
+      <p>
+        The right column type is half of it; the drivers on either side also
+        have to agree on what a value <em>is</em>. Syncle reads values in the
+        form that loses nothing and converts only where the target needs it:
+      </p>
+      <ul>
+        <li>
+          Postgres dates and timestamps are read as the text Postgres sends,
+          not as JavaScript dates — so microseconds survive (every{' '}
+          <code>now()</code>-stamped column has them), and a wall-clock{' '}
+          <code>timestamp</code> cannot shift by the server&apos;s time zone.
+          An instant is written to MySQL and SQLite as its UTC reading.
+        </li>
+        <li>
+          Exact numbers stay text end to end: Postgres <code>numeric</code>{' '}
+          and <code>bigint</code>, MySQL <code>DECIMAL</code> and{' '}
+          <code>BIGINT</code> (from the binlog too), SQLite 64-bit integers,
+          MongoDB <code>Decimal128</code> and <code>Long</code>.
+        </li>
+        <li>
+          MongoDB&apos;s wrapper types become plain values at every depth of
+          a document: an <code>ObjectId</code> its hex string, a binary
+          bytes, a UUID its canonical string.
+        </li>
+        <li>
+          A MySQL zero date (<code>0000-00-00</code>) is MySQL&apos;s
+          &quot;no date&quot; and becomes <code>NULL</code> in any other
+          engine. A <code>tinyint(1)</code> or <code>bit(1)</code> becomes a
+          real boolean.
+        </li>
+        <li>
+          JSON keeps its shape into Postgres whatever it holds: an empty
+          array stays an array, and the JSON string{' '}
+          <code>&quot;123&quot;</code> stays a string.
+        </li>
+      </ul>
+      <p>
+        A row reads the same whether it arrived by replay or by CDC — the two
+        are tested against each other on real engines, under more than one
+        server time zone. One thing cannot be told apart: a JSON{' '}
+        <code>null</code> inside a Postgres json column reads the same as SQL{' '}
+        <code>NULL</code>, and is written as <code>NULL</code>.
       </p>
       <Note>
         <code>insert</code> mode appends on every delivery, so a retry or a

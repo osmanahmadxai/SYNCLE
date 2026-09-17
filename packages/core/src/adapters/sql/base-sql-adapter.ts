@@ -678,9 +678,16 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
   }
 
   /** validate a raw column type string (it can't be a bound parameter) */
+  /**
+   * a column type is spliced into DDL verbatim (it cannot be a bound
+   * parameter), so it is held to a strict alphabet: names, spaces, and a
+   * `(precision, scale)` modifier. the only other thing allowed is a trailing
+   * run of literal `[]` pairs — a Postgres array such as `integer[]`. quotes,
+   * semicolons, comment markers and anything else are refused.
+   */
   protected validateType(type: string): string {
     const t = type.trim();
-    if (!/^[A-Za-z0-9_ (),]+$/.test(t)) {
+    if (!/^[A-Za-z0-9_ (),]+(\[\])*$/.test(t)) {
       throw new BadRequestError(`Invalid column type: "${type}"`);
     }
     return t;

@@ -63,6 +63,11 @@ export class MysqlAdapter extends BaseSqlAdapter {
       connectTimeout: 10_000,
       namedPlaceholders: false,
       dateStrings: true,
+      // a JavaScript Date is an instant. mysql2 formats one in the PROCESS's
+      // zone by default, so the wall-clock time stored for the same instant
+      // depended on where the API happened to run. UTC, always. (reads are
+      // unaffected: `dateStrings` returns the stored text untouched.)
+      timezone: 'Z',
       // BIGINT/DECIMAL beyond 2^53 would otherwise be silently rounded as
       // JS numbers
       supportBigNumbers: true,

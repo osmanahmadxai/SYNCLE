@@ -25,6 +25,9 @@ RUN apt-get update \
 #    apps/api/prisma is copied first because @syncle/api's postinstall runs
 #    `prisma generate`, which needs the schema.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# dependency patches are applied BY `pnpm install`, so they have to be in the
+# image before it runs (a frozen lockfile that names a missing patch fails)
+COPY patches patches
 COPY packages/core/package.json packages/core/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json

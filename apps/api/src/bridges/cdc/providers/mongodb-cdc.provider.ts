@@ -23,6 +23,7 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
+import { normalizeMongoDocument } from '@syncle/core/adapters';
 import type { ResolvedBridge } from '../../bridges.types';
 import { backoffMs, delay, type CdcChange, type CdcProvider, type CdcStreamContext, type CdcStreamHandle } from '../cdc-provider';
 
@@ -232,7 +233,9 @@ export class MongodbCdcProvider implements CdcProvider {
           full ?? ((change as { documentKey?: Record<string, unknown> }).documentKey ?? {});
         // replace behaves like an overwrite, so report it as an update
         const op: CdcOperation = change.operationType === 'insert' ? 'insert' : 'update';
-        return { op, row, cursor };
+        // plain values, exactly as a replay reads them: an ObjectId left as an
+        // object reaches a SQL driver as `"507f…"`, quotes and all
+        return { op, row: normalizeMongoDocument(row), cursor };
       }
       case 'delete': {
         // prefer the pre-image (full prior document, incl. business keys); fall
@@ -240,7 +243,7 @@ export class MongodbCdcProvider implements CdcProvider {
         const before = (change as { fullDocumentBeforeChange?: Record<string, unknown> })
           .fullDocumentBeforeChange;
         const key = (change as { documentKey?: Record<string, unknown> }).documentKey ?? {};
-        return { op: 'delete', row: before ?? key, cursor };
+        return { op: 'delete', row: normalizeMongoDocument(before ?? key), cursor };
       }
       default:
         return null; // drop, rename, invalidate, etc

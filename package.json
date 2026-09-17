@@ -24,7 +24,10 @@
       "@prisma/engines",
       "prisma",
       "esbuild"
-    ]
+    ],
+    "patchedDependencies": {
+      "@powersync/mysql-zongji@0.6.0": "patches/@powersync__mysql-zongji@0.6.0.patch"
+    }
   },
   "scripts": {
     "dev": "node scripts/setup-env.mjs && pnpm --filter @syncle/core build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api dev\" \"pnpm --filter @syncle/web dev\"",

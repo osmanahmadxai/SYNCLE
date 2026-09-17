@@ -84,9 +84,16 @@ What makes the database-to-database sync trustworthy:
   you choose, so replays, retries, and redeliveries never double-write. Inserts,
   updates, **and deletes** all propagate.
 - **Missing table? Auto-create it.** If the destination table/collection doesn't
-  exist, Syncle creates it from the source's shape (with cross-engine type
-  translation). Or **map and rename columns** yourself — "write this column into
-  that column over there."
+  exist, Syncle creates it from the source's shape. Between two instances of one
+  engine the source's own types are reused word for word; across engines each
+  type is translated to the closest the target has, and **a narrowing is never
+  silent** — the preview lists the exact columns a run would create, and names
+  every one the target can't hold faithfully, before anything runs. Or **map and
+  rename columns** yourself — "write this column into that column over there."
+- **Values arrive as the values they were.** Exact decimals and 64-bit integers
+  stay exact, bytes stay bytes, microseconds survive, and a wall-clock timestamp
+  can't shift by the server's time zone — checked against real engines, by
+  replay and by CDC, under more than one time zone.
 - **Live, polled, or one-shot** — you pick how it fires (see triggers below).
 
 ### How a bridge fires

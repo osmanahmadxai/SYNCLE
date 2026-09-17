@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@powersync/mysql-zongji@0.6.0':
+    hash: f91dce89985988d93b1732c133c6801b8aab93650040dd0e4ef46269b1b1e10e
+    path: patches/@powersync__mysql-zongji@0.6.0.patch
+
 importers:
 
   .:
@@ -36,8 +41,8 @@ importers:
         specifier: ^10.4.7
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22)
       '@powersync/mysql-zongji':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: 0.6.0
+        version: 0.6.0(patch_hash=f91dce89985988d93b1732c133c6801b8aab93650040dd0e4ef46269b1b1e10e)
       '@prisma/client':
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
@@ -5954,7 +5959,7 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@powersync/mysql-zongji@0.6.0':
+  '@powersync/mysql-zongji@0.6.0(patch_hash=f91dce89985988d93b1732c133c6801b8aab93650040dd0e4ef46269b1b1e10e)':
     dependencies:
       '@vlasky/mysql': 2.18.7
       big-integer: 1.6.52

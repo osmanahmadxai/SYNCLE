@@ -574,7 +574,13 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Render what would be delivered without delivering — body{' '}
-                <code>{'{ sampleRow?, limit }'}</code>, limit 1–10, default 3
+                <code>{'{ sampleRow?, limit }'}</code>, limit 1–10, default 3.
+                For a database destination each target also reports{' '}
+                <code>exists</code> and, when a run would create the table,{' '}
+                <code>plannedColumns</code> (name, source type, target type,
+                nullable, primary key); <code>warnings</code> names every
+                column the target cannot hold faithfully. Read-only: nothing
+                is created
               </td>
             </tr>
             <tr>

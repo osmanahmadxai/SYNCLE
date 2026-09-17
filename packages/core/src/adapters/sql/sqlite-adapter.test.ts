@@ -371,3 +371,66 @@ describe('SqliteAdapter fileBaseDir jail', () => {
     );
   });
 });
+
+describe('SqliteAdapter: values come back as the values they are', () => {
+  let adapter: SqliteAdapter;
+  let file: string;
+
+  beforeEach(async () => {
+    file = join(tmpdir(), `syncle-exact-${Date.now()}-${Math.random()}.db`);
+    adapter = new SqliteAdapter(makeConfig(file));
+    await adapter.connect();
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+    for (const suffix of ['', '-wal', '-shm']) rmSync(file + suffix, { force: true });
+  });
+
+  it('a 64-bit integer is not rounded to the nearest double', async () => {
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, big INTEGER)');
+    await adapter.query(
+      "INSERT INTO n VALUES (1, 9223372036854775807), (2, -9223372036854775808), (3, 9007199254740993)",
+    );
+    const { rows } = await adapter.browse({ table: 'n', limit: 10, offset: 0 });
+    // as a plain number this read back as 9223372036854776000
+    expect(rows.map((r) => r.big)).toEqual([
+      '9223372036854775807',
+      '-9223372036854775808',
+      '9007199254740993',
+    ]);
+  });
+
+  it('an integer a number CAN hold exactly is still a number', async () => {
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, v INTEGER)');
+    await adapter.query('INSERT INTO n VALUES (1, 0), (2, -5), (3, 9007199254740991)');
+    const { rows, total } = await adapter.browse({ table: 'n', limit: 10, offset: 0 });
+    expect(rows).toEqual([
+      { id: 1, v: 0 },
+      { id: 2, v: -5 },
+      { id: 3, v: 9007199254740991 },
+    ]);
+    expect(total).toBe(3); // counts are ordinary numbers too
+  });
+
+  it('a digit string written to an INTEGER column is stored exactly', async () => {
+    // how a bigint arrives from Postgres or MySQL across a bridge
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, big INTEGER)');
+    await adapter.upsertRows!({
+      table: 'n',
+      rows: [{ id: 1, big: '9223372036854775807' }],
+      keyColumns: ['id'],
+    });
+    const check = await adapter.query('SELECT CAST(big AS TEXT) AS t, typeof(big) AS k FROM n');
+    expect(check.rows[0]).toEqual({ t: '9223372036854775807', k: 'integer' });
+  });
+
+  it('reports an undeclared column truthfully, not as a declared BLOB', async () => {
+    await adapter.query('CREATE TABLE loose (id INTEGER PRIMARY KEY, anything, data BLOB)');
+    const schema = await adapter.getSchema();
+    const cols = schema.namespaces[0]!.tables.find((t) => t.name === 'loose')!.columns;
+    const by = Object.fromEntries(cols.map((c) => [c.name, c.nativeType]));
+    expect(by.anything).toBe('');
+    expect(by.data).toBe('BLOB');
+  });
+});

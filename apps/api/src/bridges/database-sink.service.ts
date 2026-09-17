@@ -29,9 +29,12 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
-  buildCreateTableSpec,
   mapRow,
+  planTargetTable,
+  rowConverterFor,
   type CdcOperation,
+  type ColumnTypeWarning,
+  type DatabaseEngine,
   type DatabaseTarget,
   type TargetColumnShape,
 } from '@syncle/core';
@@ -50,6 +53,12 @@ export class DatabaseSinkService {
   private readonly ensured = new Set<string>();
   /** cached source column shapes per bridge (resolved once) */
   private readonly sourceCols = new Map<string, TargetColumnShape[] | null>();
+  /**
+   * cached value converters, per bridge and target (`null` = nothing to
+   * convert). see `value-map.ts`: what a driver READS for a column is not
+   * always something another engine's driver can WRITE.
+   */
+  private readonly converters = new Map<string, ((row: Row) => Row) | null>();
 
   constructor(
     private readonly pool: AdapterPoolService,
@@ -59,6 +68,9 @@ export class DatabaseSinkService {
   /** drop cached schema/existence state for a bridge (on edit/delete) */
   forget(bridgeId: string): void {
     this.sourceCols.delete(bridgeId);
+    for (const key of this.converters.keys()) {
+      if (key.startsWith(`${bridgeId}::`)) this.converters.delete(key);
+    }
     // ensured keys are keyed by target identity, not bridge, so leave them;
     // a changed target table name produces a new key anyway.
   }
@@ -102,7 +114,12 @@ export class DatabaseSinkService {
       }
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
-        const affected = await this.writeRows(target, rows, op);
+        const convert = await this.converterFor(bridge, target);
+        const affected = await this.writeRows(
+          target,
+          convert ? rows.map(convert) : rows,
+          op,
+        );
         succeeded.push(key);
         summaries.push(`${label}: ${op === 'delete' ? 'deleted' : 'wrote'} ${affected}`);
       } catch (err) {
@@ -273,25 +290,23 @@ export class DatabaseSinkService {
       );
     }
 
-    const engine = (await this.connections.resolve(target.connectionId)).engine;
-    const columns = await this.targetColumns(bridge, target, sampleRow);
-    if (columns.length === 0) {
+    const plan = await this.planTable(bridge, target, sampleRow);
+    if (plan.spec.columns.length === 0) {
       throw new Error('Cannot create target table: no columns to derive');
     }
     await this.pool.withAdapter(target.connectionId, target.database, (adapter) =>
-      adapter.createTable(
-        buildCreateTableSpec(
-          target.table,
-          target.schema,
-          columns,
-          target.keyColumns,
-          engine,
-        ),
-      ),
+      adapter.createTable(plan.spec),
     );
     this.logger.log(
-      `Created target table ${targetLabel(target)} (${columns.length} cols)`,
+      `Created target table ${targetLabel(target)} (${plan.spec.columns.length} cols)`,
     );
+    // a column the target cannot represent faithfully is said out loud, once,
+    // at the moment the table is made — not discovered later as a bad value
+    for (const w of plan.warnings) {
+      this.logger.warn(
+        `${targetLabel(target)}.${w.column} (${w.sourceType} → ${w.targetType}): ${w.message}`,
+      );
+    }
     await this.ensureKeyIndex(target);
     this.ensured.add(key);
   }
@@ -318,6 +333,120 @@ export class DatabaseSinkService {
       this.logger.warn(
         `Could not index key columns on ${targetLabel(target)} — upserts will be slower: ${(err as Error).message}`,
       );
+    }
+  }
+
+  /**
+   * the `CREATE TABLE` a target would get, and every column it cannot hold
+   * faithfully. used when the table is actually created, and by the preview so
+   * the DDL can be read BEFORE anything runs.
+   */
+  async planTable(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+    sampleRow: Row,
+  ): Promise<{ spec: ReturnType<typeof planTargetTable>['spec']; warnings: ColumnTypeWarning[] }> {
+    const engine = (await this.connections.resolve(target.connectionId)).engine;
+    const columns = await this.targetColumns(bridge, target, sampleRow);
+    // type names are read in the SOURCE engine's dialect, but only when they
+    // really came from its catalog; inferred types are engine-neutral
+    const known = await this.resolveSourceCols(bridge);
+    const sourceEngine = known ? await this.sourceEngine(bridge) : undefined;
+    return planTargetTable(
+      target.table,
+      target.schema,
+      columns,
+      target.keyColumns,
+      engine,
+      sourceEngine,
+    );
+  }
+
+  /**
+   * how this bridge's rows have to change to be writable on this target, or
+   * null when they don't (always, between two instances of one engine). built
+   * from the source's column types, so it needs the schema: a query source, or
+   * a source that cannot be introspected, is written as read.
+   */
+  private async converterFor(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+  ): Promise<((row: Row) => Row) | null> {
+    const cacheKey = `${bridge.id}::${targetKey(target)}`;
+    const cached = this.converters.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    let convert: ((row: Row) => Row) | null = null;
+    try {
+      const columns = await this.resolveSourceCols(bridge);
+      const source = columns ? await this.sourceEngine(bridge) : undefined;
+      if (columns && source) {
+        const engine = (await this.connections.resolve(target.connectionId)).engine;
+        convert = rowConverterFor(columns, source, engine);
+      }
+    } catch {
+      convert = null; // unknown shape: write what was read, as before
+    }
+    this.converters.set(cacheKey, convert);
+    return convert;
+  }
+
+  /**
+   * what a run would do to this target's TABLE, without doing it: is it there,
+   * and if not, exactly which columns it would be created with and which of
+   * them cannot hold everything the source column can. nothing is written.
+   */
+  async describeTarget(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+    sampleRow: Row,
+  ): Promise<{
+    exists: boolean | null;
+    columns?: Array<{
+      name: string;
+      sourceType: string;
+      type: string;
+      nullable: boolean;
+      primaryKey: boolean;
+    }>;
+    warnings: ColumnTypeWarning[];
+  }> {
+    let exists: boolean | null;
+    try {
+      exists = await this.pool.withAdapter(target.connectionId, target.database, (adapter) =>
+        adapter
+          .browse({ schema: target.schema, table: target.table, limit: 1, offset: 0 })
+          .then(
+            () => true,
+            () => false,
+          ),
+      );
+    } catch {
+      exists = null; // the target connection itself is unreachable
+    }
+    if (exists !== false || !target.createMissingTable) return { exists, warnings: [] };
+
+    const plan = await this.planTable(bridge, target, sampleRow);
+    const shapes = await this.targetColumns(bridge, target, sampleRow);
+    const sourceTypeOf = new Map(shapes.map((c) => [c.name, c.sourceType]));
+    return {
+      exists,
+      columns: plan.spec.columns.map((c) => ({
+        name: c.name,
+        sourceType: sourceTypeOf.get(c.name) ?? '',
+        type: c.type,
+        nullable: c.nullable,
+        primaryKey: c.primaryKey,
+      })),
+      warnings: plan.warnings,
+    };
+  }
+
+  private async sourceEngine(bridge: ResolvedBridge): Promise<DatabaseEngine | undefined> {
+    try {
+      return (await this.connections.resolve(bridge.source.connectionId)).engine;
+    } catch {
+      return undefined;
     }
   }
 
@@ -382,7 +511,9 @@ export class DatabaseSinkService {
         if (table) {
           cols = table.columns.map((c) => ({
             name: c.name,
-            sourceType: c.dataType,
+            // the precise spelling where the engine gives one: Postgres'
+            // catalog label drops precision, length and array element types
+            sourceType: c.nativeType ?? c.dataType,
             nullable: c.nullable,
           }));
         }

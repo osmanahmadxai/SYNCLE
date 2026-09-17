@@ -230,6 +230,34 @@ describe('timestamp lookback window', () => {
     expect(qn.filters[0]!.value).toBe(5000);
   });
 
+  it('keeps a zone-less cursor in wall-clock terms, whatever zone this runs in', () => {
+    // what MySQL (`dateStrings`) and Postgres hand over for a column with no
+    // time zone. answering in UTC shifted the window by the process's offset
+    const cursor = {
+      strategy: 'timestamp' as const,
+      ts: '2026-01-01 00:00:10.250',
+      boundaryKeys: [],
+    };
+    expect(watchQuery(TSL, cursor, ['id']).filters).toEqual([
+      { column: 'updated_at', operator: 'gte', value: '2026-01-01 00:00:05.250' },
+    ]);
+    // across midnight, and with the `T` separator some drivers use
+    expect(
+      watchQuery(TSL, { ...cursor, ts: '2026-03-01T00:00:02' }, ['id']).filters[0]!.value,
+    ).toBe('2026-02-28 23:59:57.000');
+  });
+
+  it('keeps a cursor that names its zone as an instant', () => {
+    const cursor = { strategy: 'timestamp' as const, ts: '', boundaryKeys: [] };
+    for (const [ts, expected] of [
+      ['2026-01-01T00:00:10.000Z', '2026-01-01T00:00:05.000Z'],
+      ['2026-01-01 04:30:10+04:30', '2026-01-01T00:00:05.000Z'],
+      ['2025-12-31 16:00:10-08', '2026-01-01T00:00:05.000Z'],
+    ]) {
+      expect(watchQuery(TSL, { ...cursor, ts }, ['id']).filters[0]!.value).toBe(expected);
+    }
+  });
+
   it('keys every row inside the window so the overlap re-fetch dedupes', () => {
     const rows = [
       { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },

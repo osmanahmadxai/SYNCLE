@@ -1,0 +1,21 @@
+diff --git a/lib/common.js b/lib/common.js
+index 6b4dbe24029742a1947cb9adca841273aa5ed9a5..7d876be46a7a73937d724817d0792e9d96d12e4a 100644
+--- a/lib/common.js
++++ b/lib/common.js
+@@ -250,7 +250,15 @@ const parseNewDecimal = function (parser, column) {
+   // Fractional digits may have leading zeros
+   str += '.' + fractionDigits;
+ 
+-  return parseFloat(str);
++  // [syncle patch] Return the exact decimal as text, the same form mysql2 gives
++  // with `bigNumberStrings` (e.g. "123.450", "-0.000000000001"). The upstream
++  // `parseFloat(str)` rounds to a double, so a DECIMAL(30,12) read from the
++  // binlog lost everything past its 15th-17th significant digit — while the
++  // very same column read with a SELECT stayed exact.
++  let exact = str.replace(/^(-?)0+(?=\d)/, '$1'); // "000000001.5" -> "1.5"
++  if (exact.endsWith('.')) exact = exact.slice(0, -1); // scale 0
++  if (/^-0(\.0*)?$/.test(exact)) exact = exact.slice(1); // no "-0.00"
++  return exact;
+ };
+ 
+ // Did not work in place. Function cribbed from lines 311-363 of

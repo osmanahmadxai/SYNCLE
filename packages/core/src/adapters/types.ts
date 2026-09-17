@@ -130,6 +130,16 @@ export type ConnectionInput = Omit<
 export interface ColumnSchema {
   name: string;
   dataType: string;
+  /**
+   * the column's type exactly as the engine would need it spelled to recreate
+   * it — with length, precision/scale, array element and time-zone wording —
+   * where `dataType` is the engine's looser catalog label. Postgres is the case
+   * that matters: its catalog says `numeric`, `character varying` and `ARRAY`
+   * where the column is really `numeric(38,10)`, `character varying(255)` and
+   * `integer[]`. bridges read this when they create a destination table;
+   * absent means `dataType` already is the full spelling.
+   */
+  nativeType?: string;
   nullable: boolean;
   isPrimaryKey: boolean;
   isUnique: boolean;

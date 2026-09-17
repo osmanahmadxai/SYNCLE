@@ -408,12 +408,31 @@ export interface BridgeDelivery {
   createdAt: string;
 }
 
+/** one column of a table a bridge is about to create */
+export interface BridgePreviewColumn {
+  name: string;
+  /** the source column's native type */
+  sourceType: string;
+  /** the type it will be created as on the target */
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+}
+
 /** a database target as summarized for the preview panel */
 export interface BridgePreviewTarget {
   label: string;
   writeMode: string;
   keyColumns: string[];
   createMissingTable: boolean;
+  /** whether the target table is there already (null = could not be checked) */
+  exists: boolean | null;
+  /**
+   * the table that WILL be created, column by column — present only when the
+   * table is missing and `createMissingTable` is on. this is the DDL a run
+   * would execute, shown before it does.
+   */
+  plannedColumns?: BridgePreviewColumn[];
 }
 
 /** result of the preview endpoint: rendered bodies + resolved request shape */

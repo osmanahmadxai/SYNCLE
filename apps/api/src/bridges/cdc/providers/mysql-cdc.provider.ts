@@ -29,6 +29,45 @@ import {
   type CdcStreamHandle,
 } from '../cdc-provider';
 
+/** a column as the binlog's table-map event describes it */
+export interface BinlogColumn {
+  name: string;
+  /** MySQL's wire type code */
+  type: number;
+}
+
+/** `MYSQL_TYPE_JSON` */
+const BINLOG_TYPE_JSON = 245;
+
+/**
+ * make a row decoded from the binlog look like the same row read with a SELECT.
+ * a bridge's type handling is written against what the adapter returns; every
+ * place the two differ is a value that syncs one way in a backfill and another
+ * way live. the binlog reader hands a JSON column over as its serialised TEXT,
+ * where `mysql2` returns the parsed value — so downstream a JSON document
+ * looked like a plain string, and landed in a json column as a JSON *string*.
+ * (DECIMAL was the other difference, fixed at the source: see
+ * patches/@powersync__mysql-zongji.)
+ */
+export function normalizeBinlogRow(
+  row: Record<string, unknown>,
+  columns: BinlogColumn[] | undefined,
+): Record<string, unknown> {
+  if (!columns) return row;
+  let out: Record<string, unknown> | null = null;
+  for (const c of columns) {
+    if (c.type !== BINLOG_TYPE_JSON) continue;
+    const v = row[c.name];
+    if (typeof v !== 'string') continue;
+    try {
+      (out ??= { ...row })[c.name] = JSON.parse(v) as unknown;
+    } catch {
+      /* not valid JSON text: leave what the reader gave us */
+    }
+  }
+  return out ?? row;
+}
+
 interface ZongjiConn {
   host: string;
   port: number;
@@ -408,7 +447,10 @@ export class MysqlCdcProvider implements CdcProvider {
       const rowEvt = evt as unknown as {
         tableId: number;
         nextPosition: number;
-        tableMap: Record<number, { parentSchema: string; tableName: string }>;
+        tableMap: Record<
+          number,
+          { parentSchema: string; tableName: string; columns?: BinlogColumn[] }
+        >;
         rows: Record<string, unknown>[] | { before: Record<string, unknown>; after: Record<string, unknown> }[];
       };
       const meta = rowEvt.tableMap[rowEvt.tableId];
@@ -433,10 +475,12 @@ export class MysqlCdcProvider implements CdcProvider {
         const startKnown = groupStart > 0;
         for (let i = 0; i < rowEvt.rows.length; i++) {
           const r = rowEvt.rows[i]!;
-          const row =
+          const row = normalizeBinlogRow(
             op === 'update'
               ? (r as { after: Record<string, unknown> }).after
-              : (r as Record<string, unknown>);
+              : (r as Record<string, unknown>),
+            meta.columns,
+          );
           const idx = groupRow++;
           // defensive fallback: a row event with no seen tablemap (shouldn't
           // happen) keeps the legacy end-position cursor format

@@ -24,12 +24,42 @@ import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
 import type { CdcOperation } from '@syncle/core';
 import { redisConnectionOptions } from '../../common/runtime-config';
+import { decodeRows, encodeRows } from '../row-codec';
 
 /** one change as it is held in the spool */
 export interface SpoolEntry {
   op: CdcOperation;
   row: Record<string, unknown>;
   cursor: string;
+}
+
+/**
+ * an entry as the stream holds it. the row goes through the lossless row codec:
+ * plain `JSON.stringify` turned a Buffer into `{type:'Buffer',data:[…]}` and a
+ * Date into a string, so with the spool ON a bytea column arrived as a JSON
+ * blob and a bridge behaved differently than the same bridge with it OFF.
+ */
+export function encodeEntry(entry: SpoolEntry): string {
+  return JSON.stringify({ op: entry.op, cursor: entry.cursor, r: encodeRows([entry.row]) });
+}
+
+/** inverse of {@link encodeEntry}; also reads entries spooled before the codec */
+export function decodeEntry(text: string): SpoolEntry {
+  const raw = JSON.parse(text) as {
+    op: CdcOperation;
+    cursor: string;
+    r?: string;
+    row?: Record<string, unknown>;
+  };
+  if (typeof raw.r === 'string') {
+    const [row] = decodeRows(raw.r);
+    if (!row) throw new Error('spool entry holds no row');
+    return { op: raw.op, cursor: raw.cursor, row };
+  }
+  if (raw.row && typeof raw.row === 'object') {
+    return { op: raw.op, cursor: raw.cursor, row: raw.row };
+  }
+  throw new Error('spool entry holds no row');
 }
 
 /** a spooled entry plus the stream id it must be trimmed by */
@@ -88,12 +118,18 @@ export class CdcSpoolService implements OnModuleDestroy {
     const key = this.key(bridgeId);
     const pipeline = this.conn().pipeline();
     for (const entry of entries) {
-      pipeline.xadd(key, '*', 'e', JSON.stringify(entry));
+      pipeline.xadd(key, '*', 'e', encodeEntry(entry));
     }
     const results = await pipeline.exec();
     if (!results?.length) return null;
-    const [err, id] = results[results.length - 1] as [Error | null, string];
-    if (err) throw err;
+    // EVERY write has to have landed, not just the last. the caller acks the
+    // source on the strength of this returning, and a pipeline reports errors
+    // per command: an early XADD refused (Redis out of memory, say) followed by
+    // a later one accepted used to read as success, and that change was gone
+    for (const [err] of results as Array<[Error | null, unknown]>) {
+      if (err) throw err;
+    }
+    const [, id] = results[results.length - 1] as [Error | null, string];
     return id;
   }
 
@@ -113,7 +149,7 @@ export class CdcSpoolService implements OnModuleDestroy {
       const idx = fields.indexOf('e');
       if (idx < 0 || idx + 1 >= fields.length) continue;
       try {
-        items.push({ id, entry: JSON.parse(fields[idx + 1]!) as SpoolEntry });
+        items.push({ id, entry: decodeEntry(fields[idx + 1]!) });
       } catch {
         // an unparseable entry would block the queue forever; drop it loudly
         this.logger.error(`discarding malformed spool entry ${id} for ${bridgeId}`);

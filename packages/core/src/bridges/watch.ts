@@ -124,7 +124,29 @@ function tsMinus(ts: unknown, ms: number): unknown {
   const n = tsNorm(ts);
   if (typeof n !== 'number') return ts;
   if (typeof ts === 'number') return n - ms;
-  return new Date(n - ms).toISOString();
+  const shifted = new Date(n - ms);
+  // a wall-clock string ('2026-03-04 05:06:07', as MySQL and Postgres hand
+  // over a zone-less column) was parsed in THIS process's zone, so it has to be
+  // written back in it too. answering in UTC instead moved the window by the
+  // process's UTC offset: on a server at UTC+4:30 a 3-second lookback became
+  // 4½ hours, and at UTC-8 it pointed 8 hours into the FUTURE and skipped rows
+  return typeof ts === 'string' && !hasZone(ts)
+    ? wallClock(shifted)
+    : shifted.toISOString();
+}
+
+/** does a timestamp string say which zone it is in (`Z`, `+04:30`, `-08`)? */
+function hasZone(text: string): boolean {
+  return /(Z|[+-]\d\d(:?\d\d)?)$/i.test(text.trim());
+}
+
+/** a Date as the zone-less text a database column of that kind compares to */
+function wallClock(d: Date): string {
+  const p = (n: number, width = 2): string => String(n).padStart(width, '0');
+  return (
+    `${p(d.getFullYear(), 4)}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+  );
 }
 
 /* -------------------------------------------------------------------------- */

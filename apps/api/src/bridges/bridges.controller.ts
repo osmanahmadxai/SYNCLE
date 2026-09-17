@@ -163,14 +163,33 @@ export class BridgesController {
       if (dest.targets.some((t) => t.writeMode === 'upsert' && t.keyColumns.length === 0)) {
         warnings.push('A target is set to upsert but has no key columns selected.');
       }
-      return {
-        destinationKind: 'database',
-        targets: dest.targets.map((t) => ({
-          label: t.schema ? `${t.schema}.${t.table}` : t.table,
+      // read-only: says whether each target table exists and, if a run would
+      // create it, with exactly which columns — so a type the target cannot
+      // hold faithfully is a warning here instead of a surprise in production
+      const targets = [];
+      for (const t of dest.targets) {
+        const label = t.schema ? `${t.schema}.${t.table}` : t.table;
+        const described = await this.databaseSink
+          .describeTarget(bridge, t, rows[0] ?? {})
+          .catch(() => ({ exists: null, columns: undefined, warnings: [] }));
+        for (const w of described.warnings) {
+          warnings.push(`${label}.${w.column} (${w.sourceType} → ${w.targetType}): ${w.message}`);
+        }
+        if (described.exists === false && !t.createMissingTable) {
+          warnings.push(`${label} does not exist and auto-create is off, so every delivery would fail.`);
+        }
+        targets.push({
+          label,
           writeMode: t.writeMode,
           keyColumns: t.keyColumns,
           createMissingTable: t.createMissingTable,
-        })),
+          exists: described.exists,
+          ...(described.columns ? { plannedColumns: described.columns } : {}),
+        });
+      }
+      return {
+        destinationKind: 'database',
+        targets,
         bodies: rows.map((row) => mapRow(row, mapping)),
         warnings,
         fromSource,
