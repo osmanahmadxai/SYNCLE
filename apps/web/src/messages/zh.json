@@ -55,6 +55,7 @@
     "couldNotLogout": "无法退出登录"
   },
   "connections": {
+    "connectionStringWithSsh": "SSH 隧道会改写主机和端口字段，而连接字符串会绕过隧道。使用隧道时请填写上面的字段，或关闭隧道。",
     "title": "连接",
     "new": "新建连接",
     "edit": "编辑连接",

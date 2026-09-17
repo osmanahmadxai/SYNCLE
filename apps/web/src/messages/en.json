@@ -55,6 +55,7 @@
     "couldNotLogout": "Could not log out"
   },
   "connections": {
+    "connectionStringWithSsh": "An SSH tunnel reroutes the host and port fields, and a connection string would go around it. Use the fields above with a tunnel, or turn the tunnel off.",
     "title": "Connections",
     "new": "New connection",
     "edit": "Edit connection",

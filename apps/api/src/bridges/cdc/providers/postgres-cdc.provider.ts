@@ -22,7 +22,7 @@ import {
   type DatabaseEngine,
 } from '@syncle/core';
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
-import { nodeTlsOptions } from '@syncle/core/adapters';
+import { nodeTlsOptions, withDatabase } from '@syncle/core/adapters';
 import { AdapterPoolService } from '../../../connections/adapter-pool.service';
 import type { ResolvedBridge } from '../../bridges.types';
 import {
@@ -916,16 +916,13 @@ export class PostgresCdcProvider implements CdcProvider {
     if (conn.connectionString) {
       // logical replication is per-database: the stream must open against the
       // bridge's source database, not whatever database the saved string names
-      if (database) {
-        try {
-          const u = new URL(conn.connectionString);
-          u.pathname = `/${database}`;
-          return { connectionString: u.toString() } as Record<string, unknown>;
-        } catch {
-          /* unparseable string, fall back to using it verbatim */
-        }
-      }
-      return { connectionString: conn.connectionString } as Record<string, unknown>;
+      const ssl = conn.tls ? nodeTlsOptions(conn) : undefined;
+      return {
+        connectionString: withDatabase(conn.connectionString, database),
+        // a TLS setting chosen beside the string says how far to trust the
+        // certificate, exactly as it does for the ordinary connection
+        ...(ssl ? { ssl } : {}),
+      } as Record<string, unknown>;
     }
     return {
       host: conn.host,

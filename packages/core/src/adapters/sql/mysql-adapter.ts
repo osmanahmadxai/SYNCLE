@@ -23,6 +23,7 @@ import type {
   QueryResult,
   TableSchema,
 } from '../types';
+import { withDatabase } from '../connection-string';
 import { ConnectionError, QueryError } from '../../errors';
 import { quoteIdent } from '../../sql';
 import {
@@ -97,7 +98,8 @@ export class MysqlAdapter extends BaseSqlAdapter {
 
     this.pool = this.config.connectionString
       ? mysql.createPool({
-          uri: this.config.connectionString,
+          // the URI's database wins over a `database` option beside it
+          uri: withDatabase(this.config.connectionString, this.config.database),
           ...(this.config.tls && ssl ? { ssl } : {}),
           ...shared,
         })

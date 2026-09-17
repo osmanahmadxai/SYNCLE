@@ -55,6 +55,7 @@
     "couldNotLogout": "Impossibile disconnettersi"
   },
   "connections": {
+    "connectionStringWithSsh": "Un tunnel SSH reindirizza i campi host e porta, e una stringa di connessione lo aggirerebbe. Con un tunnel usa i campi qui sopra, oppure disattiva il tunnel.",
     "title": "Connessioni",
     "new": "Nuova connessione",
     "edit": "Modifica connessione",

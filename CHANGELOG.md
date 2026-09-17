@@ -198,6 +198,13 @@ can no longer lose a row to a failed delivery.
   cannot be reached from this side — the first query timed out on a connection
   that had "tested" fine. A tunnelled connection now talks only to the address
   it was given.
+- **With a connection string, the database you chose was ignored** on PostgreSQL
+  and MySQL: both drivers let the string's database win over one given beside
+  it. The workbench showed the string's database under another one's name, and a
+  bridge configured to read `orders_eu` read whatever the string said. The
+  chosen database now goes into the string. (The PostgreSQL change stream
+  already did this, without encoding the name; it shares the helper now, and
+  honours a TLS setting chosen beside a connection string, which it ignored.)
 - **Most of the Settings dialog did nothing.** The default poll interval, rows
   per poll and CDC operations, the query row cap and job concurrency were
   stored, shown and reported by the API, and read by nothing — the docs carried
@@ -290,6 +297,10 @@ can no longer lose a row to a failed delivery.
   not report a truncate as a change, asking for it is refused at start.
 - The CDC readiness check shows which columns the table identifies rows by, and
   warns about tables that can only report inserts.
+- **Connection strings for PostgreSQL, MySQL and Redis** in the connection
+  dialog — what a hosted database usually hands you. The adapters always
+  accepted one; only MongoDB's form had a field for it. Stored encrypted and
+  redacted like a password.
 - **A running instance can say which version it is**: `GET /api/version`, and
   the bottom of the Settings dialog. The release build bakes the tag into the
   image (`SYNCLE_VERSION`), and a source checkout reads its package.json — which

@@ -299,6 +299,13 @@ export function ConnectionDialog() {
               {field.hint && (
                 <p className="text-xs text-muted-foreground">{field.hint}</p>
               )}
+              {field.key === 'connectionString' &&
+                sshEnabled &&
+                !!form.connectionString?.trim() && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {t('connectionStringWithSsh')}
+                  </p>
+                )}
             </div>
           ))}
 

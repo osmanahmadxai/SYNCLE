@@ -269,6 +269,31 @@ export default function Page() {
         </table>
       </div>
 
+      <h2 id="connection-strings">Connection strings</h2>
+      <p>
+        PostgreSQL, MySQL/MariaDB, MongoDB and Redis connections can be given
+        as a single connection string instead of separate host, port, user and
+        password fields — which is what a hosted database (Neon, Supabase,
+        PlanetScale, Atlas, Upstash…) usually hands you:
+      </p>
+      <CodeBlock>{`postgres://user:password@host:5432/database?sslmode=require
+mysql://user:password@host:3306/database
+mongodb+srv://user:password@cluster.example.net/database
+rediss://default:password@host:6379/0`}</CodeBlock>
+      <p>
+        When the field is filled in it is used instead of the fields above
+        it. The string contains a password, so it is treated as one: encrypted
+        at rest, and shown back as <code>********</code> — leave that in
+        place when you edit the connection and the stored string is kept. The
+        database a string names is only a default: browsing another database
+        in the workbench, or a bridge whose source says which database it
+        reads, uses <em>that</em> database with the same credentials. A
+        string&apos;s own <code>sslmode</code> or <code>rediss://</code>{' '}
+        scheme turns TLS on; the <a href="#tls">TLS setting</a> beside it
+        decides how far the certificate is trusted. A connection string
+        cannot be combined with an <a href="#ssh-tunnels">SSH tunnel</a>.
+      </p>
+
       <h2 id="tls">TLS to the database</h2>
       <p>
         A connection&apos;s TLS setting applies to <em>every</em> connection

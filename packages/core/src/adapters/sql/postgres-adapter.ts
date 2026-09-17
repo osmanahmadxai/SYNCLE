@@ -6,6 +6,7 @@ import {
   type PoolConfig,
   type QueryResult as PgResult,
 } from 'pg';
+import { withDatabase } from '../connection-string';
 import { nodeTlsOptions } from '../tls-options';
 import type {
   InsertRowsParams,
@@ -115,7 +116,9 @@ export class PostgresAdapter extends BaseSqlAdapter {
   private getPool(): Pool {
     if (this.pool) return this.pool;
     const cfg: PoolConfig = this.config.connectionString
-      ? { connectionString: this.config.connectionString }
+      ? // pg lets the string win over a `database` beside it, so the database
+        // that was actually asked for has to go INTO the string
+        { connectionString: withDatabase(this.config.connectionString, this.config.database) }
       : {
           host: this.config.host,
           port: this.config.port ?? 5432,
