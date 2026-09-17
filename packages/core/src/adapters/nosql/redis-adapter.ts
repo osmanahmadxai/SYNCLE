@@ -43,9 +43,12 @@ export const REDIS_CAPABILITIES: AdapterCapabilities = {
   ddl: false,
   manageDatabases: false,
   backupFormats: ['json'],
+  cursorPaging: true,
 };
 
 const KEYSPACE = 'keys';
+/** SCAN calls one cursor-mode page may make: bounds the wait on a sparse MATCH */
+const MAX_SCANS_PER_PAGE = 1000;
 
 export class RedisAdapter implements DatabaseAdapter {
   readonly engine = 'redis' as const;
@@ -225,6 +228,10 @@ export class RedisAdapter implements DatabaseAdapter {
     const limit = Math.min(Math.max(params.limit, 1), 500);
     const started = performance.now();
 
+    if (params.cursor !== undefined) {
+      return this.browseFrom(client, params.cursor || '0', pattern, limit, started);
+    }
+
     const keys: string[] = [];
     let cursor = '0';
     do {
@@ -254,6 +261,55 @@ export class RedisAdapter implements DatabaseAdapter {
       estimated: true,
       hasMore,
       primaryKey: ['key'],
+    };
+  }
+
+  /**
+   * one page of a read that means to see every key: it follows the SCAN cursor
+   * instead of slicing an offset out of a scan started over.
+   *
+   * SCAN's own guarantee is what makes this a faithful copy: a key that exists
+   * from the first call to the last is returned — at least once. keys added or
+   * removed meanwhile may or may not be, and a key can come up twice (the table
+   * was rehashed); a reader writes with upserts, so twice is once.
+   *
+   * values are read whole. the offset mode cuts a list or a sorted set to its
+   * first 25 entries, which is a preview for a grid and was, for a replay, 25
+   * entries of data and the silent loss of the rest.
+   */
+  private async browseFrom(
+    client: Redis,
+    from: string,
+    pattern: string,
+    limit: number,
+    started: number,
+  ): Promise<BrowseResult> {
+    const keys: string[] = [];
+    let cursor = from;
+    let scans = 0;
+    do {
+      const [next, batch] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', Math.max(100, limit));
+      keys.push(...batch);
+      cursor = next;
+      scans++;
+    } while (cursor !== '0' && keys.length < limit && scans < MAX_SCANS_PER_PAGE);
+
+    const unique = [...new Set(keys)];
+    const read = await Promise.all(unique.map((k) => this.readKey(client, k, true)));
+    // deleted between the SCAN and the read: not a key with no value
+    const rows = read.filter((r) => r.type !== 'none');
+    const dbsize = await client.dbsize().catch(() => null);
+    return {
+      columns: ['key', 'type', 'ttl', 'value'].map((name) => ({ name })),
+      rows,
+      rowCount: rows.length,
+      executionMs: Math.round(performance.now() - started),
+      command: 'scan',
+      total: dbsize,
+      estimated: true,
+      hasMore: cursor !== '0',
+      primaryKey: ['key'],
+      nextCursor: cursor === '0' ? null : cursor,
     };
   }
 

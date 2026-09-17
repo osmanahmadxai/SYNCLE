@@ -292,6 +292,21 @@ can no longer lose a row to a failed delivery.
   apply deletes; keyed targets on the same bridge are unaffected.
 - Documentation no longer says a CDC bridge always delivers one row per
   delivery. That stopped being true for database destinations in 1.3.0.
+- **A replay from Redis copied the first 200 keys and reported success.** Redis
+  has no order to page by, and the replay paged it like a table anyway: "keys
+  greater than the last one". The Redis adapter reads any filter on `key` as a
+  glob, so page two asked for the keys that *contain* the last key of page one,
+  got that one key back, and the job finished — `completed`, no error, one page
+  deep into a database of any size. (With a key filter of the bridge's own, page
+  one was read again for ever instead.) A Redis source is now read by following
+  its `SCAN` cursor to the end, which is also what makes the read complete:
+  every key that exists for the length of the read is returned. A stopped replay
+  resumes from the cursor of the page it was in.
+  - The same read cut every list and sorted set to its first 25 entries — it
+    went through the preview the data grid uses. A replay reads values whole.
+  - Syncle's own keys (its job queues, a bridge's spool) are left out of a
+    replay when the Redis being read is the one Syncle runs on, as they already
+    were from a change stream.
 - **Editing a bridge in the builder deleted parts of it.** The builder could
   write exactly one source filter — the row selection — and rebuilt the rest of
   the configuration from what it has controls for. Saving a bridge that had been

@@ -5,6 +5,7 @@ import { DeliveryService } from './delivery.service';
 import { DatabaseSinkService } from './database-sink.service';
 import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobProcessor } from './bridge-job.processor';
+import { TableReaderService } from './table-reader.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeCdcService } from './bridge-cdc.service';
 import { BridgeLifecycleService } from './bridge-lifecycle.service';
@@ -45,6 +46,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     BridgeSinkService,
     JobRegistryService,
     BridgeJobProcessor,
+    TableReaderService,
     BridgeWatchProcessor,
     CdcSpoolService,
     DeadLetterService,

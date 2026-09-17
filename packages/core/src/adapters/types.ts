@@ -46,6 +46,13 @@ export interface AdapterCapabilities {
   manageDatabases: boolean;
   /** backup/restore formats this engine can produce/consume */
   backupFormats: BackupFormat[];
+  /**
+   * `browse` can page by an opaque cursor ({@link BrowseParams.cursor}), and a
+   * reader that means to see EVERY row must use it: the engine has no order to
+   * page by (Redis — its keys come out of SCAN in hash-table order, so neither
+   * `key > last` nor an OFFSET into a fresh scan is a stable place)
+   */
+  cursorPaging?: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -306,6 +313,15 @@ export interface BrowseParams {
   offset: number;
   sort?: SortSpec[];
   filters?: FilterSpec[];
+  /**
+   * for an engine with {@link AdapterCapabilities.cursorPaging}: read the page
+   * that starts at this cursor ('' or '0' = the beginning) instead of at
+   * `offset`. values are read IN FULL in this mode — it is what copies data,
+   * where the offset mode is what a grid shows a preview with. a page may hold
+   * somewhat more than `limit` rows, or none while more are still to come:
+   * {@link BrowseResult.nextCursor} alone says when the read is over
+   */
+  cursor?: string;
 }
 
 export interface BrowseResult extends QueryResult {
@@ -316,6 +332,11 @@ export interface BrowseResult extends QueryResult {
   /** true when more rows exist beyond this page (from a `limit + 1` probe) */
   hasMore: boolean;
   primaryKey: string[];
+  /**
+   * answer to {@link BrowseParams.cursor}: where the next page starts, or null
+   * when this was the last one
+   */
+  nextCursor?: string | null;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -17,11 +17,7 @@
  */
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
-import {
-  BadRequestError,
-  type BrowseParams,
-  type SortSpec,
-} from '@syncle/core';
+import { BadRequestError } from '@syncle/core';
 import type { Job } from 'bullmq';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { runtimeConfig } from '../common/runtime-config';
@@ -31,6 +27,7 @@ import { BridgeSinkService } from './bridge-sink.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { JobRegistryService } from './job-registry.service';
+import { TableReaderService } from './table-reader.service';
 import {
   BRIDGE_JOBS_QUEUE,
   type BridgeJobPayload,
@@ -76,6 +73,7 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
     private readonly sink: BridgeSinkService,
     private readonly registry: JobRegistryService,
     private readonly settings: SettingsStoreService,
+    private readonly reader: TableReaderService,
   ) {
     super();
   }
@@ -295,115 +293,11 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
     startOffset: number,
     resumeKey: KeysetCheckpoint | null,
   ): AsyncGenerator<StreamItem> {
-    if (bridge.source.kind !== 'table') return;
-    const src = bridge.source;
-    const { sort, total, keysetColumn } = await this.resolveTableOrder(bridge);
-    await this.jobs.setTotal(jobId, total);
-    const pageSize = bridge.delivery.pageSize;
-    const browse = (params: BrowseParams) =>
-      this.pool.withAdapter(src.connectionId, src.database, (a) => a.browse(params));
-
-    // keyset pagination on a unique key, O(1) per page no matter how deep we
-    // are, so a multi-million-row replay stays fast (no OFFSET re-scan)
-    if (keysetColumn) {
-      let lastKey: unknown = null;
-      let index = startOffset;
-      if (startOffset > 0) {
-        if (resumeKey && resumeKey.column === keysetColumn) {
-          // exact resume from the checkpointed key — immune to rows added or
-          // removed under the job, and no deep-OFFSET seek query
-          lastKey = resumeKey.value;
-        } else {
-          // legacy jobs (no checkpoint) or a changed sort column: fall back to
-          // seeking the key of the last already-delivered row by offset
-          const seek = await browse({
-            schema: src.schema,
-            table: src.table,
-            filters: src.filters,
-            sort,
-            limit: 1,
-            offset: startOffset - 1,
-          });
-          lastKey = seek.rows[0]?.[keysetColumn] ?? null;
-        }
-      }
-      for (;;) {
-        const filters = [
-          ...(src.filters ?? []),
-          ...(lastKey != null
-            ? [{ column: keysetColumn, operator: 'gt' as const, value: lastKey }]
-            : []),
-        ];
-        const page = await browse({
-          schema: src.schema,
-          table: src.table,
-          filters,
-          sort,
-          limit: pageSize,
-          offset: 0,
-        });
-        for (const row of page.rows) {
-          lastKey = row[keysetColumn];
-          yield { row, index, keyset: { column: keysetColumn, value: lastKey } };
-          index++;
-        }
-        if (!page.hasMore || page.rows.length === 0) return;
-      }
-    }
-
-    // fallback: OFFSET pagination (composite key or custom non-unique sort)
-    let offset = startOffset;
-    for (;;) {
-      const page = await browse({
-        schema: src.schema,
-        table: src.table,
-        filters: src.filters,
-        sort,
-        limit: pageSize,
-        offset,
-      });
-      for (let i = 0; i < page.rows.length; i++) {
-        yield { row: page.rows[i]!, index: offset + i };
-      }
-      if (!page.hasMore || page.rows.length === 0) return;
-      offset += page.rows.length;
-    }
-  }
-
-  /**
-   * a stable order is mandatory: `LIMIT/OFFSET` without `ORDER BY` can skip or
-   * repeat rows across pages. use the caller's sort, else the primary key, and
-   * report whether we can keyset-paginate (single, uniquely-ordered key).
-   */
-  private async resolveTableOrder(
-    bridge: ResolvedBridge,
-  ): Promise<{ sort: SortSpec[]; total: number | null; keysetColumn: string | null }> {
-    if (bridge.source.kind !== 'table') return { sort: [], total: null, keysetColumn: null };
-    const src = bridge.source;
-    const probe = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
-      a.browse({ schema: src.schema, table: src.table, filters: src.filters, limit: 1, offset: 0 }),
-    );
-    const singlePk = probe.primaryKey.length === 1 ? probe.primaryKey[0]! : null;
-
-    if (src.sort && src.sort.length > 0) {
-      // keyset only if the caller's order is exactly the (unique) primary key asc
-      const s = src.sort;
-      const keyset =
-        s.length === 1 && s[0]!.column === singlePk && s[0]!.direction === 'asc'
-          ? singlePk
-          : null;
-      return { sort: src.sort, total: probe.total, keysetColumn: keyset };
-    }
-    if (probe.primaryKey.length > 0) {
-      return {
-        sort: probe.primaryKey.map((column) => ({ column, direction: 'asc' as const })),
-        total: probe.total,
-        keysetColumn: singlePk,
-      };
-    }
-    throw new BadRequestError(
-      `Table "${src.table}" has no primary key, so rows cannot be paged in a stable order. Add a sort to the bridge to replay it safely.`,
-    );
+    // the paging itself lives in TableReaderService: a change-stream bridge
+    // that copies its table first reads it the same way
+    const order = await this.reader.resolveOrder(bridge);
+    await this.jobs.setTotal(jobId, order.total);
+    yield* this.reader.rows(bridge, { startOffset, resumeKey, order });
   }
 
   private async *streamQuery(
