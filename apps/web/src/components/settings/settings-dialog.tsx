@@ -32,6 +32,7 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertsTab } from './alerts-tab';
 import { ApiKeysSection } from './api-keys-section';
+import { EncryptionStatus } from './encryption-status';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -445,6 +446,8 @@ function SecurityTab({ settings }: { settings: AppSettings }) {
       />
       <SaveBar saving={saving} onSave={save} />
       <ApiKeysSection />
+      {/* only while a change of master key is under way */}
+      <EncryptionStatus />
     </div>
   );
 }

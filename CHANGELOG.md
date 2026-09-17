@@ -438,6 +438,19 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **The master key can be changed.** It could not: every stored secret is
+  under it, and the documentation said never to touch it. Now: put the new key
+  in `SYNCLE_MASTER_KEY` and the old one in `SYNCLE_MASTER_KEY_PREVIOUS`, and
+  restart. Both open everything from that moment (the old one only ever
+  decrypts), and at start whatever is still under it — connection passwords and
+  strings, SSH and TLS secrets, webhook credentials including the copies inside
+  resumable jobs, alert channels — is re-encrypted with the new key. When the
+  log, *Settings → Security* or `GET /api/settings/encryption` says nothing
+  depends on a previous key any more, take it out. There is no moment at which
+  anything is unreadable, the pass can be interrupted or repeated, and nobody
+  is signed out. An instance that began on a generated `master.key` file and is
+  then given a key in its environment needs no previous key at all.
+
 - **A way back in when the password is gone.** Until now a forgotten password
   meant editing the database by hand. *Forgot your password?* on the sign-in
   screen (or `syncle reset-password`) makes the API print a one-time code on

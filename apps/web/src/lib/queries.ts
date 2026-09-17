@@ -72,6 +72,19 @@ export function useLogin() {
   });
 }
 
+/** only worth showing while a change of master key is under way */
+export function useEncryptionStatus(enabled: boolean) {
+  return useQuery({ queryKey: ['encryptionStatus'], queryFn: () => api.encryptionStatus(), enabled, retry: false });
+}
+
+export function useRotateEncryption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.rotateEncryption(),
+    onSuccess: (report) => qc.setQueryData(['encryptionStatus'], report),
+  });
+}
+
 export function useRequestPasswordReset() {
   return useMutation({ mutationFn: () => api.requestPasswordReset() });
 }

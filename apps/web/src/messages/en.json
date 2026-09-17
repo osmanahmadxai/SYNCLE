@@ -969,6 +969,14 @@
     "noTables": "No tables yet."
   },
   "settingsDialog": {
+    "encryption": {
+      "title": "Master key change",
+      "previous": "{count, plural, one {This instance still accepts # previous master key (SYNCLE_MASTER_KEY_PREVIOUS).} other {This instance still accepts # previous master keys (SYNCLE_MASTER_KEY_PREVIOUS).}}",
+      "done": "Every stored secret is under the current key. Nothing depends on a previous key any more: you can remove SYNCLE_MASTER_KEY_PREVIOUS and restart.",
+      "unreadable": "{count, plural, one {# stored secret fits none of the keys this instance has. It was left as it is: a key is missing from SYNCLE_MASTER_KEY_PREVIOUS.} other {# stored secrets fit none of the keys this instance has. They were left as they are: a key is missing from SYNCLE_MASTER_KEY_PREVIOUS.}}",
+      "moved": "{count, plural, one {The last pass moved # secret to the current key.} other {The last pass moved # secrets to the current key.}}",
+      "check": "Check again"
+    },
     "title": "Settings",
     "description": "Manage your account and the server-wide defaults.",
     "tabs": {

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { CryptoService } from './crypto.service';
+import { KeyRotationService } from './key-rotation.service';
 import { PrismaService } from './prisma.service';
 import { VersionController } from './version.controller';
 
@@ -11,7 +12,7 @@ import { VersionController } from './version.controller';
 @Global()
 @Module({
   controllers: [VersionController],
-  providers: [PrismaService, CryptoService],
-  exports: [PrismaService, CryptoService],
+  providers: [PrismaService, CryptoService, KeyRotationService],
+  exports: [PrismaService, CryptoService, KeyRotationService],
 })
 export class CommonModule {}

@@ -74,6 +74,16 @@ export const runtimeConfig = {
   /** where a password-reset code is put for the operator to read (0600, removed once used or expired) */
   resetCodeFile: resolve(dataDir, 'reset-code'),
   masterKey: env('SYNCLE_MASTER_KEY') ?? null,
+  /**
+   * keys this instance USED to encrypt with, comma-separated: still accepted
+   * for decrypting, never used for encrypting. what is found under one of them
+   * is re-encrypted with SYNCLE_MASTER_KEY at start, which is how the key is
+   * changed without a moment at which anything is unreadable
+   */
+  previousMasterKeys: (env('SYNCLE_MASTER_KEY_PREVIOUS') ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean),
   maxQueryRows: numberEnv('SYNCLE_MAX_QUERY_ROWS', 5000),
   poolIdleMs: numberEnv('SYNCLE_POOL_IDLE_MS', 300_000),
   port: numberEnv('PORT', 4000),

@@ -127,11 +127,57 @@ export default function Page() {
         you care about.
       </p>
       <Note>
-        Never regenerate <code>SYNCLE_MASTER_KEY</code> once data exists. A new
-        key makes every stored credential undecryptable and logs everyone out.
-        If the key ever appears invalid, recover the original — do not mint a
-        replacement.
+        Never simply <em>replace</em> <code>SYNCLE_MASTER_KEY</code> once data
+        exists: every stored credential is under it, and a new key on its own
+        opens none of them. To change it, keep the old one beside it for a
+        while — see below. If the key ever appears invalid, recover the
+        original; do not mint a replacement.
       </Note>
+
+      <h3 id="changing-the-master-key">Changing the master key</h3>
+      <p>
+        A key that may have leaked, an operator who has left, a policy that
+        says yearly: the key can be changed without a moment at which anything
+        is unreadable.
+      </p>
+      <ol>
+        <li>
+          Generate a new key (<code>openssl rand -base64 32</code>). Put it in{' '}
+          <code>SYNCLE_MASTER_KEY</code>, and the key you had in{' '}
+          <code>SYNCLE_MASTER_KEY_PREVIOUS</code> (comma-separated if there are
+          several). On a launcher install both go in{' '}
+          <code>~/.syncle/.env</code>.
+        </li>
+        <li>
+          Restart. From this moment both keys open everything — the old one is
+          only ever used to decrypt — and at start the API re-encrypts whatever
+          is still under it with the new key: connection passwords and
+          connection strings, SSH and TLS secrets, webhook credentials
+          (including the copies inside jobs that can still be resumed), alert
+          channels. It is safe to interrupt and safe to repeat.
+        </li>
+        <li>
+          When the log says{' '}
+          <em>
+            Nothing depends on a previous master key any more
+          </em>{' '}
+          — <strong>Settings → Security</strong> shows the same, and{' '}
+          <code>GET /api/settings/encryption</code> answers{' '}
+          <code>{'{ previousKeys, reencrypted, unreadable }'}</code> — take{' '}
+          <code>SYNCLE_MASTER_KEY_PREVIOUS</code> out and restart once more.
+        </li>
+      </ol>
+      <p>
+        Nobody is signed out: a session signed under the previous key stays
+        valid while that key is listed, and is re-signed under the new one the
+        next time it is renewed. An instance that started without a key in its
+        environment (so with a generated <code>master.key</code> in its data
+        directory) and is then given one needs no{' '}
+        <code>SYNCLE_MASTER_KEY_PREVIOUS</code> at all: the file is treated as
+        a previous key. A count of <code>unreadable</code> above zero means a
+        secret fits none of the keys given — a key is missing from the list;
+        nothing is touched until it is there.
+      </p>
 
       <h2 id="beyond-localhost">Exposing Syncle beyond localhost</h2>
       <p>Before opening the port to a wider network:</p>

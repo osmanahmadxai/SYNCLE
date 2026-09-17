@@ -538,6 +538,18 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         <a href="/docs/configuration">configuration page</a> documents each
         setting and its default.
       </p>
+      <p>
+        <code>GET /api/settings/encryption</code> reports on a{' '}
+        <a href="/docs/self-hosting#changing-the-master-key">
+          change of master key
+        </a>
+        : <code>{'{ previousKeys, reencrypted, unreadable, checkedAt }'}</code>{' '}
+        — how many previous keys are still accepted, and what the last pass over
+        the stored secrets moved to the current key or could not read with
+        any. <code>POST /api/settings/encryption/rotate</code> runs that pass
+        now (it also runs at every start); signed in only, not with an API
+        key.
+      </p>
 
       <h3 id="api-keys">API keys</h3>
       <p>

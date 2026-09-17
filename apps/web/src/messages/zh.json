@@ -969,6 +969,14 @@
     "noTables": "还没有表。"
   },
   "settingsDialog": {
+    "encryption": {
+      "title": "主密钥更换",
+      "previous": "{count, plural, other {此实例仍接受 # 个旧主密钥（SYNCLE_MASTER_KEY_PREVIOUS）。}}",
+      "done": "所有已存储的机密都已使用当前密钥加密。不再有任何内容依赖旧密钥：可以移除 SYNCLE_MASTER_KEY_PREVIOUS 并重启。",
+      "unreadable": "{count, plural, other {有 # 个已存储的机密无法用此实例拥有的任何密钥解密。它们保持原样：SYNCLE_MASTER_KEY_PREVIOUS 中缺少某个密钥。}}",
+      "moved": "{count, plural, other {上一次处理已将 # 个机密迁移到当前密钥。}}",
+      "check": "再次检查"
+    },
     "title": "设置",
     "description": "管理你的账户和服务器级默认设置。",
     "tabs": {

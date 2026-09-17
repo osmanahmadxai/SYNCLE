@@ -59,6 +59,14 @@ import type {
  * values are inlined at build time. Set NEXT_PUBLIC_API_URL to an absolute URL
  * to bypass the proxy and call the API directly (then CORS applies).
  */
+/** what `GET /settings/encryption` answers (the API's KeyRotationReport) */
+export interface KeyRotationReport {
+  previousKeys: number;
+  reencrypted: number;
+  unreadable: number;
+  checkedAt: string;
+}
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
 export class ApiError extends Error {
@@ -123,6 +131,9 @@ export const api = {
     request<AuthUser>('/auth/setup', { method: 'POST', ...jsonBody(input) }),
   login: (input: LoginDTO) =>
     request<AuthUser>('/auth/login', { method: 'POST', ...jsonBody(input) }),
+  /** a change of master key: how many previous keys are still accepted, and what the last pass found */
+  encryptionStatus: () => request<KeyRotationReport>('/settings/encryption'),
+  rotateEncryption: () => request<KeyRotationReport>('/settings/encryption/rotate', { method: 'POST' }),
   /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way */
   requestPasswordReset: () =>
     request<{ requested: true }>('/auth/reset/request', { method: 'POST' }),

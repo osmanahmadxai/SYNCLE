@@ -449,6 +449,7 @@ Env files are created automatically on first run from the committed
 | `DATABASE_URL`                | api   | Postgres datasource for the metadata store   |
 | `REDIS_URL`                   | api   | Redis backing the bridge-job queue           |
 | `SYNCLE_MASTER_KEY`       | api   | base64 32-byte key for secret encryption     |
+| `SYNCLE_MASTER_KEY_PREVIOUS` | api | Changing the key: the old key(s), comma-separated. Still accepted for decrypting; what is under them is re-encrypted at start. Remove once the API says nothing depends on them |
 | `SYNCLE_JOB_CONCURRENCY` | api   | How many bridge jobs may execute in parallel |
 | `SYNCLE_CDC_BATCH_SIZE`  | api   | Rows per CDC delivery to a database destination (default `100000`) |
 | `SYNCLE_CDC_BATCH_BYTES` | api   | Byte ceiling for one batch, so wide rows flush early (default `67108864`) |

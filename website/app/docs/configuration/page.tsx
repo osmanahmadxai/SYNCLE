@@ -164,6 +164,22 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_MASTER_KEY_PREVIOUS</code>
+              </td>
+              <td>—</td>
+              <td>
+                While{' '}
+                <a href="/docs/self-hosting#changing-the-master-key">
+                  changing the master key
+                </a>
+                : the old key or keys, comma-separated. Still accepted for
+                decrypting, never used for encrypting; what is under them is
+                re-encrypted at start. Remove it when the API says nothing
+                depends on a previous key any more.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DATA_DIR</code>
               </td>
               <td>

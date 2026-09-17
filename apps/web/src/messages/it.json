@@ -969,6 +969,14 @@
     "noTables": "Ancora nessuna tabella."
   },
   "settingsDialog": {
+    "encryption": {
+      "title": "Cambio della chiave principale",
+      "previous": "{count, plural, one {Questa istanza accetta ancora # chiave principale precedente (SYNCLE_MASTER_KEY_PREVIOUS).} other {Questa istanza accetta ancora # chiavi principali precedenti (SYNCLE_MASTER_KEY_PREVIOUS).}}",
+      "done": "Ogni segreto memorizzato è sotto la chiave attuale. Nulla dipende più da una chiave precedente: puoi rimuovere SYNCLE_MASTER_KEY_PREVIOUS e riavviare.",
+      "unreadable": "{count, plural, one {# segreto memorizzato non corrisponde a nessuna delle chiavi di questa istanza. È stato lasciato com’è: manca una chiave in SYNCLE_MASTER_KEY_PREVIOUS.} other {# segreti memorizzati non corrispondono a nessuna delle chiavi di questa istanza. Sono stati lasciati come sono: manca una chiave in SYNCLE_MASTER_KEY_PREVIOUS.}}",
+      "moved": "{count, plural, one {L’ultimo passaggio ha spostato # segreto sotto la chiave attuale.} other {L’ultimo passaggio ha spostato # segreti sotto la chiave attuale.}}",
+      "check": "Controlla di nuovo"
+    },
     "title": "Impostazioni",
     "description": "Gestisci il tuo account e le impostazioni predefinite del server.",
     "tabs": {
