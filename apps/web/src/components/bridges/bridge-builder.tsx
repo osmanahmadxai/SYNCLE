@@ -6,11 +6,11 @@
  * components in `./builder/`. the draft state + cascades live in
  * `./builder/draft.ts`, the pure load/save mappings in `./builder/mapping.ts`.
  */
-import { useEffect, useMemo, useReducer, useRef } from 'react';
-import { Loader2, Webhook } from 'lucide-react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { FlaskConical, Loader2, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
-import type { TableSchema } from '@syncle/core';
+import type { BridgePreview, TableSchema } from '@syncle/core';
 import { api, ApiError } from '@/lib/api';
 import {
   useBrowse,
@@ -33,6 +33,7 @@ import { PAGE_SIZE, builderReducer, initialDraft } from './builder/draft';
 import { buildInput, loadBridge } from './builder/mapping';
 import { SourceSection } from './builder/source-section';
 import { TriggerSection } from './builder/trigger-section';
+import { DryRunDialog } from './builder/dry-run-dialog';
 import { PayloadSection } from './builder/payload-section';
 import { DestinationSection } from './builder/destination-section';
 import { DeliverySection } from './builder/delivery-section';
@@ -193,6 +194,13 @@ export function BridgeBuilder() {
     !(mode === 'selected' && (!singlePk || selectedKeys.size === 0)) &&
     !watchNeedsColumn;
 
+  const [dryRun, setDryRun] = useState<{
+    open: boolean;
+    loading: boolean;
+    preview: BridgePreview | null;
+    error: string | null;
+  }>({ open: false, loading: false, preview: null, error: null });
+
   async function handleSave() {
     try {
       const input = buildInput(draft, {
@@ -212,6 +220,27 @@ export function BridgeBuilder() {
     } catch (err) {
       toast.error(t('saveFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
+
+  /** what this draft would do, without saving it or writing anything */
+  async function handleDryRun() {
+    setDryRun({ open: true, loading: true, preview: null, error: null });
+    try {
+      const input = buildInput(draft, {
+        columns: columns.map((c) => c.name),
+        singlePk,
+        fallbackName: t('defaultName', { table }),
+      });
+      const preview = await api.previewDraft(input);
+      setDryRun({ open: true, loading: false, preview, error: null });
+    } catch (err) {
+      setDryRun({
+        open: true,
+        loading: false,
+        preview: null,
+        error: err instanceof ApiError ? err.message : String(err),
       });
     }
   }
@@ -260,12 +289,33 @@ export function BridgeBuilder() {
           <Button variant="ghost" onClick={closeBridgeEditor}>
             {t('cancel')}
           </Button>
+          <Button
+            variant="outline"
+            onClick={handleDryRun}
+            disabled={!canSave || dryRun.loading}
+            title={t('dryRunHint')}
+          >
+            {dryRun.loading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FlaskConical className="mr-2 h-4 w-4" />
+            )}
+            {t('dryRun')}
+          </Button>
           <Button onClick={handleSave} disabled={!canSave || saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {editing ? t('saveBridge') : t('createBridge')}
           </Button>
         </div>
       </div>
+
+      <DryRunDialog
+        open={dryRun.open}
+        onOpenChange={(open) => setDryRun((d) => ({ ...d, open }))}
+        loading={dryRun.loading}
+        preview={dryRun.preview}
+        error={dryRun.error}
+      />
 
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* ---- source / grid ---- */}

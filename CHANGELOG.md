@@ -297,6 +297,12 @@ can no longer lose a row to a failed delivery.
   not report a truncate as a change, asking for it is refused at start.
 - The CDC readiness check shows which columns the table identifies rows by, and
   warns about tables that can only report inserts.
+- **Dry run in the builder.** Before a bridge is saved: the table each database
+  target would be created as, column by column with the source type beside the
+  type it becomes; every column the target cannot hold faithfully; and real
+  rows as they would be written or sent. The API could already say all of this
+  for a saved bridge and nothing in the UI asked; `POST /api/bridges/preview`
+  does it for a draft. Nothing is stored, created or delivered.
 - **Connection strings for PostgreSQL, MySQL and Redis** in the connection
   dialog — what a hosted database usually hands you. The adapters always
   accepted one; only MongoDB's form had a field for it. Stored encrypted and

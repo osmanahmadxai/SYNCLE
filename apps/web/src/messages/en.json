@@ -163,6 +163,8 @@
     "kindWatch": "watch"
   },
   "bridgeBuilder": {
+    "dryRun": "Dry run",
+    "dryRunHint": "See what this bridge would do — nothing is saved, created or delivered",
     "namePlaceholder": "Bridge name",
     "cancel": "Cancel",
     "sendsAll": "sends {count, plural, one {# row} other {# rows}} · {cols}/{total} columns",
@@ -300,5 +302,27 @@
     "warnTitle": "This bridge is holding change log on the source",
     "criticalTitle": "The source needs attention",
     "holding": "({size} held)"
+  },
+  "dryRun": {
+    "title": "Dry run",
+    "description": "What this bridge would do, as it is set up now. Nothing has been saved, no table has been created and nothing has been delivered.",
+    "looking": "Sampling the source and looking at the destination…",
+    "warnings": "{count, plural, one {# thing to look at first} other {# things to look at first}}",
+    "noWarnings": "Nothing stands out.",
+    "request": "Request",
+    "exists": "exists",
+    "unknown": "could not be checked",
+    "willBeCreated": "will be created",
+    "missing": "missing — and nothing would create it",
+    "column": "Column",
+    "sourceType": "At the source",
+    "targetType": "Created as",
+    "key": "key",
+    "required": "required",
+    "payloads": "Payloads",
+    "rows": "Rows as they would be written",
+    "fromSource": "real rows from the source",
+    "fromSample": "from a sample row",
+    "noRows": "The source has no rows to show yet."
   }
 }

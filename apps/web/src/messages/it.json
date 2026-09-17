@@ -163,6 +163,8 @@
     "kindWatch": "osserva"
   },
   "bridgeBuilder": {
+    "dryRun": "Prova a vuoto",
+    "dryRunHint": "Guarda cosa farebbe questo bridge: nulla viene salvato, creato o consegnato",
     "namePlaceholder": "Nome bridge",
     "cancel": "Annulla",
     "sendsAll": "invia {count, plural, one {# riga} other {# righe}} · {cols}/{total} colonne",
@@ -300,5 +302,27 @@
     "warnTitle": "Questo bridge sta trattenendo il log delle modifiche sull'origine",
     "criticalTitle": "L'origine richiede attenzione",
     "holding": "({size} trattenuti)"
+  },
+  "dryRun": {
+    "title": "Prova a vuoto",
+    "description": "Cosa farebbe questo bridge così com'è configurato ora. Nulla è stato salvato, nessuna tabella è stata creata e nulla è stato consegnato.",
+    "looking": "Campionamento dell'origine e analisi della destinazione…",
+    "warnings": "{count, plural, one {# cosa da controllare prima} other {# cose da controllare prima}}",
+    "noWarnings": "Niente da segnalare.",
+    "request": "Richiesta",
+    "exists": "esiste",
+    "unknown": "impossibile verificare",
+    "willBeCreated": "verrà creata",
+    "missing": "mancante — e nulla la creerebbe",
+    "column": "Colonna",
+    "sourceType": "All'origine",
+    "targetType": "Creata come",
+    "key": "chiave",
+    "required": "obbligatoria",
+    "payloads": "Payload",
+    "rows": "Righe come verrebbero scritte",
+    "fromSource": "righe reali dall'origine",
+    "fromSample": "da una riga di esempio",
+    "noRows": "L'origine non ha ancora righe da mostrare."
   }
 }

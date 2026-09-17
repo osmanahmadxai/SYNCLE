@@ -274,6 +274,12 @@ export const api = {
     request<Bridge>(`/bridges/${id}`, { method: 'PUT', ...jsonBody(input) }),
   deleteBridge: (id: string) =>
     request<{ id: string }>(`/bridges/${id}`, { method: 'DELETE' }),
+  /** a dry run of a bridge that is not saved: nothing is created or delivered */
+  previewDraft: (bridge: BridgeInputDTO, limit = 3) =>
+    request<BridgePreview>('/bridges/preview', {
+      method: 'POST',
+      ...jsonBody({ bridge, limit }),
+    }),
   previewBridge: (id: string, body: BridgePreviewDTO) =>
     request<BridgePreview>(`/bridges/${id}/preview`, {
       method: 'POST',

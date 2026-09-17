@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   Body,
   Controller,
@@ -13,6 +14,7 @@ import {
   type Bridge,
   type BridgeDelivery,
   type BridgeInputDTO,
+  type BridgeDraftPreviewDTO,
   type BridgePreview,
   type BridgePreviewDTO,
   type BridgeJob,
@@ -29,6 +31,7 @@ import {
   type DeadLetterRetryResult,
   BadRequestError,
   cdcReadinessSchema,
+  bridgeDraftPreviewSchema,
   bridgeInputSchema,
   bridgePreviewSchema,
   deadLetterDiscardSchema,
@@ -48,6 +51,7 @@ import { BridgeLifecycleService } from './bridge-lifecycle.service';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchService } from './bridge-watch.service';
+import type { ResolvedBridge } from './bridges.types';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -163,7 +167,41 @@ export class BridgesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(bridgePreviewSchema)) dto: BridgePreviewDTO,
   ): Promise<BridgePreview> {
-    const bridge = await this.store.resolve(id);
+    return this.previewOf(await this.store.resolve(id), dto);
+  }
+
+  /**
+   * a dry run of a bridge that does not exist yet — the builder's draft. nothing
+   * is saved, nothing is written, no table is created: the source is sampled
+   * and the targets are LOOKED at, so that "this table will be created with
+   * these columns, and that one cannot hold everything" is something you read
+   * before the first run instead of finding in production.
+   */
+  @Post('preview')
+  async previewDraft(
+    @Body(new ZodValidationPipe(bridgeDraftPreviewSchema)) dto: BridgeDraftPreviewDTO,
+  ): Promise<BridgePreview> {
+    // an id of its own, so nothing about the draft lands in (or is read from)
+    // the sink's per-bridge caches of a real bridge — and forgotten afterwards
+    const id = `draft:${randomUUID()}`;
+    const draft: ResolvedBridge = {
+      id,
+      name: dto.bridge.name,
+      source: dto.bridge.source,
+      destination: dto.bridge.destination,
+      transform: dto.bridge.transform,
+      delivery: dto.bridge.delivery,
+      trigger: dto.bridge.trigger,
+      enabled: dto.bridge.enabled,
+    };
+    try {
+      return await this.previewOf(draft, { sampleRow: dto.sampleRow, limit: dto.limit });
+    } finally {
+      this.databaseSink.forget(id);
+    }
+  }
+
+  private async previewOf(bridge: ResolvedBridge, dto: BridgePreviewDTO): Promise<BridgePreview> {
     const table = bridge.source.kind === 'table' ? bridge.source.table : '(query)';
     const now = new Date().toISOString();
 

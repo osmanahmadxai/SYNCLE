@@ -610,6 +610,18 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>POST /api/bridges/preview</code>
+              </td>
+              <td>
+                The same dry run for a bridge that is <em>not saved</em> —
+                body <code>{'{ bridge, sampleRow?, limit }'}</code>, where{' '}
+                <code>bridge</code> is exactly what <code>POST /api/bridges</code>{' '}
+                takes. This is what the builder&apos;s <strong>Dry run</strong>{' '}
+                button calls. Nothing is stored, created or delivered
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>POST /api/bridges/:id/jobs</code>
               </td>
               <td>

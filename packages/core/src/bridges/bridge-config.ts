@@ -227,6 +227,16 @@ export const bridgePreviewSchema = z.object({
   limit: z.coerce.number().int().min(1).max(10).default(3),
 });
 
+/**
+ * a dry run of a bridge that has not been saved (or of unsaved edits to one):
+ * what the builder shows before anything is created
+ */
+export const bridgeDraftPreviewSchema = z.object({
+  bridge: z.lazy(() => bridgeInputSchema),
+  sampleRow: z.record(z.string(), z.unknown()).optional(),
+  limit: z.coerce.number().int().min(1).max(10).default(3),
+});
+
 export const startJobSchema = z.object({
   /** resume a previously interrupted job instead of starting fresh */
   resumeJobId: z.string().optional(),
@@ -358,6 +368,7 @@ export interface BridgeSourceHold {
   checkedAt: string;
 }
 export type BridgePreviewDTO = z.infer<typeof bridgePreviewSchema>;
+export type BridgeDraftPreviewDTO = z.infer<typeof bridgeDraftPreviewSchema>;
 export type StartJobDTO = z.infer<typeof startJobSchema>;
 export type SkipDTO = z.infer<typeof skipSchema>;
 export type DeadLetterRetryDTO = z.infer<typeof deadLetterRetrySchema>;

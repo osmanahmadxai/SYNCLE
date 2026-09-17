@@ -163,6 +163,8 @@
     "kindWatch": "监听"
   },
   "bridgeBuilder": {
+    "dryRun": "试运行",
+    "dryRunHint": "查看此桥接将会执行的操作——不会保存、创建或投递任何内容",
     "namePlaceholder": "桥接名称",
     "cancel": "取消",
     "sendsAll": "发送 {count} 行 · {cols}/{total} 列",
@@ -300,5 +302,27 @@
     "warnTitle": "此桥接正在占用源端的变更日志",
     "criticalTitle": "源端需要处理",
     "holding": "（已占用 {size}）"
+  },
+  "dryRun": {
+    "title": "试运行",
+    "description": "按当前配置，此桥接将会执行的操作。尚未保存任何内容，未创建任何表，也未投递任何数据。",
+    "looking": "正在抽样源端并检查目标端…",
+    "warnings": "{count, plural, other {有 # 项需要先留意}}",
+    "noWarnings": "没有需要留意的问题。",
+    "request": "请求",
+    "exists": "已存在",
+    "unknown": "无法检查",
+    "willBeCreated": "将被创建",
+    "missing": "不存在——且不会自动创建",
+    "column": "列",
+    "sourceType": "源端类型",
+    "targetType": "创建为",
+    "key": "键",
+    "required": "必填",
+    "payloads": "请求体",
+    "rows": "将要写入的行",
+    "fromSource": "来自源端的真实数据",
+    "fromSample": "来自示例行",
+    "noRows": "源端暂无可显示的行。"
   }
 }

@@ -401,6 +401,21 @@ export default function Page() {
         table is never altered.
       </p>
 
+      <h3 id="dry-run">See it before it happens</h3>
+      <p>
+        The builder&apos;s <strong>Dry run</strong> button shows what the
+        bridge would do as it is set up right now, before it is saved: for
+        each database target, whether the table exists and — if a run would
+        create it — the table column by column, with the source&apos;s type
+        beside the type it becomes; every column the target cannot hold
+        faithfully, as a warning; and a few real rows from the source as they
+        would be written (or, for an HTTP destination, the rendered payloads
+        with the auth secret redacted). Nothing is saved, no table is
+        created, and nothing is delivered. The same check is available for a
+        saved bridge from the API — see the{' '}
+        <a href="/docs/api">preview endpoints</a>.
+      </p>
+
       <h3 id="value-fidelity">Values arrive as the values they were</h3>
       <p>
         The right column type is half of it; the drivers on either side also
