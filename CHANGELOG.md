@@ -9,6 +9,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Redis bridges got a great deal faster, in both directions — and a live bridge
 can no longer lose a row to a failed delivery.
 
+### Security
+
+- **Next.js 15.5.25** in the app and in the documentation site. 15.5.18 — what
+  the app shipped — is affected by two critical advisories (unauthenticated
+  remote code execution, one in the image optimizer) and eight more rated high
+  or moderate. If you run Syncle from an older image, update.
+- Patched releases of libraries pulled in by others, pinned with
+  `pnpm.overrides` inside their current major versions: `multer` 2.4 (six
+  denial-of-service advisories in multipart parsing), `qs` 6.16, `body-parser`
+  1.20.8, `nanoid` 3.3.18, `postcss` 8.5.23, `postcss-selector-parser` 6.1.3 and
+  `sharp` 0.35.4 (libvips / libheif). `mysql2` 3.24 (unbounded inflate of a
+  compressed protocol packet).
+- `pnpm audit --prod` is down from 49 findings (2 critical, 19 high) to 3
+  moderate ones, none of them reachable: `@nestjs/core`'s is in its
+  Server-Sent-Events stream and `file-type`'s in upload validation, and Syncle
+  has neither an SSE route nor a file upload. Both need a major-version upgrade
+  of NestJS, which is a change of its own.
+
 ### Fixed
 
 - **A failed delivery on a live bridge could lose rows for good.** Three
