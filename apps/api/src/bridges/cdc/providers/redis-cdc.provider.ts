@@ -16,7 +16,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
 import { BadRequestError } from '@syncle/core';
-import { nodeTlsOptions } from '@syncle/core/adapters';
+import { nodeTlsOptions, redisGlobMatch, redisKeyPattern } from '@syncle/core/adapters';
 import type {
   CdcOperation,
   CdcReadiness,
@@ -316,7 +316,7 @@ export class RedisCdcProvider implements CdcProvider {
       // channel: __keyevent@<db>__:<event>   message: <key>
       const event = channel.slice(channel.indexOf(':') + 1);
       if (isSyncleOwnKey(key)) return;
-      if (keyGlob && !this.globMatch(keyGlob, key)) return;
+      if (keyGlob && !redisGlobMatch(keyGlob, key)) return;
       const isDelete = DELETE_EVENTS.has(event);
       if (isDelete ? !wantsDelete : !wantsWrite) return;
 
@@ -455,24 +455,14 @@ export class RedisCdcProvider implements CdcProvider {
     }
   }
 
-  /** pull an optional key glob from the bridge source filters, if present */
+  /**
+   * the glob the bridge's source filters ask for, or null for every key. the
+   * same reading of them the adapter's `browse` uses, so that a bridge which
+   * copies its keys and then follows them is looking at one set of keys
+   */
   private keyPattern(bridge: ResolvedBridge): string | null {
     if (bridge.source.kind !== 'table') return null;
-    const filters = (bridge.source as { filters?: { column: string; value: unknown }[] }).filters;
-    const keyFilter = filters?.find((f) => f.column === 'key');
-    return keyFilter && typeof keyFilter.value === 'string' ? keyFilter.value : null;
-  }
-
-  /** minimal Redis-style glob match (`*` and `?`) */
-  private globMatch(glob: string, value: string): boolean {
-    const re = new RegExp(
-      '^' +
-        glob
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*/g, '.*')
-          .replace(/\?/g, '.') +
-        '$',
-    );
-    return re.test(value);
+    const pattern = redisKeyPattern(bridge.source.filters);
+    return pattern === '*' ? null : pattern;
   }
 }

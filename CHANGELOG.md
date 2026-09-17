@@ -331,6 +331,13 @@ can no longer lose a row to a failed delivery.
   other field — NULLs written over a good row, or a row the destination refused,
   which stopped the bridge. Such an update is now passed over; the delete is
   next in the stream.
+- **A Redis key filter meant one thing to a replay and another to a change
+  stream.** The replay read any filter on `key` as "contains"; the stream read
+  it as an exact glob. `equals` is now the glob as written (`user:*`), and
+  `contains` / `starts with` / `ends with` are what they say — for both. (The
+  data grid's `equals` on a key therefore no longer behaves like `contains`.)
+  The stream's matcher also understands `[a-c]`, `[^x]` and `\` escapes, as
+  Redis's own `MATCH` does.
 - **Editing a bridge in the builder deleted parts of it.** The builder could
   write exactly one source filter — the row selection — and rebuilt the rest of
   the configuration from what it has controls for. Saving a bridge that had been

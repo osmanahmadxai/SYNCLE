@@ -4,6 +4,7 @@
  * editor takes raw Redis commands, one per line
  */
 import { nodeTlsOptions } from '../tls-options';
+import { redisKeyPattern } from './redis-key-pattern';
 import Redis from 'ioredis';
 import type {
   AdapterCapabilities,
@@ -220,10 +221,7 @@ export class RedisAdapter implements DatabaseAdapter {
     const client = this.getClient();
     if (client.status !== 'ready') await client.connect().catch(() => {});
 
-    const match =
-      params.filters?.find((f) => f.column === 'key')?.value ?? '*';
-    const pattern =
-      typeof match === 'string' && match ? `*${match}*` : '*';
+    const pattern = redisKeyPattern(params.filters);
 
     const limit = Math.min(Math.max(params.limit, 1), 500);
     const started = performance.now();

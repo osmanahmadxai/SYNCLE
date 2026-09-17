@@ -28,6 +28,7 @@ export {
   normalizeMongoValue,
 } from './nosql/mongodb-adapter';
 export { describeConnectionString, withDatabase } from './connection-string';
+export { redisGlobMatch, redisKeyPattern } from './nosql/redis-key-pattern';
 export {
   describeTls,
   effectiveTls,
