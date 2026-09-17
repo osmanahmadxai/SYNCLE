@@ -100,6 +100,68 @@ export default function Page() {
         caption="The query editor, with the result set underneath."
       />
 
+      <h2 id="production-and-read-only">Production, and read-only</h2>
+      <p>
+        Two things can be said about a connection in its dialog, and both are
+        about not doing to one database what was meant for another.
+      </p>
+      <p>
+        <strong>Environment</strong> — production, staging or development —
+        is a label, and it is shown wherever the connection is: a red{' '}
+        <code>PROD</code> in the sidebar, next to the Run button of the query
+        editor, in the list a bridge&apos;s targets are picked from. Nobody
+        has the connection dialog open when they are about to run a{' '}
+        <code>DELETE</code>.
+      </p>
+      <p>
+        The query editor reads a statement before it sends it. Anything that{' '}
+        <strong>cannot be taken back</strong> — a <code>DROP</code>, a{' '}
+        <code>TRUNCATE</code>, a <code>DELETE</code> or <code>UPDATE</code>{' '}
+        with no <code>WHERE</code>, an <code>ALTER … DROP</code>, Redis&apos;s{' '}
+        <code>FLUSHALL</code> / <code>FLUSHDB</code>, a MongoDB pipeline
+        ending in <code>$out</code> — is confirmed first, on any connection.
+        On a connection labelled production, so is <em>any</em> write. The
+        reading ignores what is inside strings, quoted names and comments, so{' '}
+        <code>SELECT &apos;DROP TABLE users&apos;</code> is a read, and a{' '}
+        <code>DROP</code> behind a comment is still found.
+      </p>
+      <p>
+        <strong>Read-only</strong> goes further: nothing is written through
+        the connection. Not a row from the data grid, not a table, not a
+        restore — those routes answer <code>403</code> and name the
+        connection — and not a statement in the editor unless <em>every</em>{' '}
+        part of it is recognisably a read. That rule is an allowlist: what
+        Syncle cannot tell to be a read (<code>CALL</code>, <code>DO</code>,{' '}
+        <code>SET</code>, anything it does not know) is not run. And because
+        the text of a statement cannot know what a function called from a{' '}
+        <code>SELECT</code> does, the engine is asked to hold it to reading as
+        well: PostgreSQL and MySQL run it inside a <code>READ ONLY</code>{' '}
+        transaction, SQLite is asked whether the prepared statement writes.
+      </p>
+      <ul>
+        <li>
+          A read-only connection <strong>cannot be a bridge&apos;s
+          destination</strong>: refused when the bridge is saved, and a
+          connection that becomes read-only under a running bridge fails its
+          next delivery with a message that says why, writing nothing. The
+          guard sits where every write passes — the adapter itself — so it
+          holds for a replay, a live bridge and a dead-letter retry alike.
+        </li>
+        <li>
+          It <strong>can be a bridge&apos;s source</strong>, which is what
+          read-only is mostly for: mark production read-only and stream out
+          of it. A change-stream bridge still creates what the engine needs to
+          stream from — on PostgreSQL a publication and a replication slot.
+          They hold no data and change none.
+        </li>
+      </ul>
+      <Note>
+        Read-only is a guard against accidents, not a security boundary:
+        whoever can open Syncle can untick it. For a hard guarantee, connect
+        with a database role that cannot write — and keep the switch on
+        anyway, for the better error messages.
+      </Note>
+
       <h2 id="structure-and-the-er-diagram">Structure and the ER diagram</h2>
       <p>
         Structure shows the selected table&apos;s columns with primary-key and

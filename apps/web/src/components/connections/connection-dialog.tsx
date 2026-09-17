@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Loader2, PlugZap } from 'lucide-react';
 import { toast } from 'sonner';
-import type { ConnectionInputDTO, DatabaseEngine } from '@syncle/core';
+import type { ConnectionConfig, ConnectionInputDTO, DatabaseEngine } from '@syncle/core';
+
+type ConnectionEnvironment = NonNullable<ConnectionConfig['environment']>;
 import { api, ApiError } from '@/lib/api';
 import {
   useCreateConnection,
@@ -72,6 +74,8 @@ export function ConnectionDialog() {
   const [form, setForm] = useState<FormState>({ name: '' });
   const [tlsMode, setTlsMode] = useState<TlsMode>('disable');
   const [sshEnabled, setSshEnabled] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
+  const [environment, setEnvironment] = useState<ConnectionEnvironment | 'none'>('none');
   const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'privateKey'>(
     'password',
   );
@@ -89,6 +93,8 @@ export function ConnectionDialog() {
     setTlsMode('disable');
     setSshEnabled(false);
     setSshAuthMethod('password');
+    setReadOnly(false);
+    setEnvironment('none');
     if (!editing) return;
     void api.getConnection(editing).then(
       (c) => {
@@ -99,6 +105,8 @@ export function ConnectionDialog() {
         setTlsMode(c.tls?.mode ?? legacyTlsMode(c.engine, !!c.ssl, c.options));
         setSshEnabled(!!c.ssh?.enabled);
         setSshAuthMethod(c.ssh?.authMethod ?? 'password');
+        setReadOnly(c.readOnly === true);
+        setEnvironment(c.environment ?? 'none');
         setForm({
           name: c.name,
           host: c.host ?? '',
@@ -144,6 +152,8 @@ export function ConnectionDialog() {
       name: form.name?.trim() || engineMeta(engine).label,
       engine,
       ssl: tlsMode !== 'disable',
+      readOnly,
+      ...(environment !== 'none' ? { environment } : {}),
     };
     if (engine !== 'sqlite') {
       const verifies = tlsMode === 'verify-ca' || tlsMode === 'verify-full';
@@ -421,6 +431,36 @@ export function ConnectionDialog() {
               )}
             </div>
           )}
+
+          <div className="grid gap-3 rounded-md border p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label htmlFor="conn-environment">{t('environment')}</Label>
+                <p className="text-xs text-muted-foreground">{t('environmentHint')}</p>
+              </div>
+              <Select
+                value={environment}
+                onValueChange={(v) => setEnvironment(v as ConnectionEnvironment | 'none')}
+              >
+                <SelectTrigger id="conn-environment" className="h-8 w-40 shrink-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{t('environmentNone')}</SelectItem>
+                  <SelectItem value="production">{t('environmentProduction')}</SelectItem>
+                  <SelectItem value="staging">{t('environmentStaging')}</SelectItem>
+                  <SelectItem value="development">{t('environmentDevelopment')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label htmlFor="conn-readonly">{t('readOnly')}</Label>
+                <p className="text-xs text-muted-foreground">{t('readOnlyHint')}</p>
+              </div>
+              <Switch id="conn-readonly" checked={readOnly} onCheckedChange={setReadOnly} />
+            </div>
+          </div>
 
           {engine !== 'sqlite' && (
             <div className="rounded-md border">

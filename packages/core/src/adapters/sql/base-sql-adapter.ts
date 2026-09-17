@@ -35,7 +35,7 @@ import type {
   UpsertRowsParams,
 } from '../types';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { BadRequestError } from '../../errors';
+import { BadRequestError, QueryError } from '../../errors';
 
 /**
  * a single database connection borrowed from the driver pool for the lifetime
@@ -397,6 +397,37 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
       };
     }
     return result;
+  }
+
+  /** how this engine opens a transaction that cannot write; null = it has no such thing */
+  protected readOnlyBeginSql(): string | null {
+    return null;
+  }
+
+  /**
+   * the statement, inside a transaction the ENGINE holds to reading: a write
+   * anywhere in it — a function's, a trigger's, a CTE's — is the engine's own
+   * error, whatever the text looked like. always rolled back.
+   */
+  async queryReadOnly(statement: string, params?: unknown[]): Promise<QueryResult> {
+    const begin = this.readOnlyBeginSql();
+    if (!begin || !this.acquireTransactionConnection) {
+      throw new QueryError('This engine cannot run a statement in a read-only transaction.');
+    }
+    const conn = await this.acquireTransactionConnection();
+    try {
+      await conn.run(begin, []);
+      try {
+        const result = await conn.run(statement, params ?? []);
+        return result.rows.length > this.maxRows
+          ? { ...result, rows: result.rows.slice(0, this.maxRows), rowCount: this.maxRows, truncated: true }
+          : result;
+      } finally {
+        await conn.rollback().catch(() => undefined);
+      }
+    } finally {
+      conn.release();
+    }
   }
 
   async insertRow(p: InsertRowParams): Promise<QueryResult> {

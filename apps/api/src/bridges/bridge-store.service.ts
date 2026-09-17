@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { Bridge as BridgeRow } from '@prisma/client';
 import {
+  BadRequestError,
   type Bridge,
   type BridgeDestination,
   type BridgeInputDTO,
@@ -138,7 +139,28 @@ export class BridgeStoreService {
     return bridge;
   }
 
+  /**
+   * a bridge WRITES to its targets. one that points at a read-only connection
+   * would be saved, started, and fail on its first delivery: said now instead
+   */
+  private async assertTargetsWritable(destination: BridgeDestination): Promise<void> {
+    if (destination.kind !== 'database') return;
+    const ids = [...new Set(destination.targets.map((t) => t.connectionId))];
+    const readOnly = await this.prisma.connection.findMany({
+      where: { id: { in: ids }, readOnly: true },
+      select: { name: true },
+    });
+    if (readOnly.length > 0) {
+      const names = readOnly.map((c) => `"${c.name}"`).join(', ');
+      throw new BadRequestError(
+        `${names} ${readOnly.length === 1 ? 'is a read-only connection' : 'are read-only connections'}, and a bridge writes to its destination. ` +
+          'Pick another connection, or untick "Read-only" on it.',
+      );
+    }
+  }
+
   async create(input: BridgeInputDTO): Promise<Bridge> {
+    await this.assertTargetsWritable(input.destination);
     const { sanitized, secret } = this.splitSecret(input.destination);
     const row = await this.prisma.bridge.create({
       data: {
@@ -159,6 +181,7 @@ export class BridgeStoreService {
   }
 
   async update(id: string, input: BridgeInputDTO): Promise<Bridge> {
+    await this.assertTargetsWritable(input.destination);
     const existing = await this.getRow(id);
     const { sanitized, secret } = this.splitSecret(input.destination);
 

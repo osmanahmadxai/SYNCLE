@@ -85,6 +85,10 @@ model Connection {
   // it always said (see effectiveTls in @syncle/core)
   tlsJson             String?  @map("tls_json")
   tlsSecretsEnc       String?  @map("tls_secrets_enc")
+  // nothing is written through a read-only connection; `environment` is what
+  // the database IS (production | staging | development), shown wherever it is
+  readOnly            Boolean  @default(false) @map("read_only")
+  environment         String?
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 

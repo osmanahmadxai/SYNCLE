@@ -299,6 +299,10 @@ export class PostgresAdapter extends BaseSqlAdapter {
     return value ? 'TRUE' : 'FALSE';
   }
 
+  protected override readOnlyBeginSql(): string {
+    return 'BEGIN TRANSACTION READ ONLY';
+  }
+
   protected override hexLiteral(buf: Buffer): string {
     return `'\\x${buf.toString('hex')}'`;
   }

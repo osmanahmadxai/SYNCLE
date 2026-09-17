@@ -10,6 +10,7 @@ import { useTranslations } from 'next-intl';
 import type { TableSchema } from '@syncle/core';
 import { useConnections, useDatabases, useSchema } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+import { ConnectionBadges } from '@/components/connections/connection-badges';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -116,11 +117,14 @@ function DbTargetCard({
               </div>
             )}
             {connections?.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
+              // a bridge WRITES to its target: a read-only connection is shown,
+              // so that it is not mysteriously missing, and cannot be picked
+              <SelectItem key={c.id} value={c.id} disabled={c.readOnly === true}>
                 {c.name}
                 <span className="text-muted-foreground ml-1.5 text-[10px] uppercase">
                   {c.engine}
                 </span>
+                <ConnectionBadges connection={c} className="ml-1.5" />
               </SelectItem>
             ))}
           </SelectContent>

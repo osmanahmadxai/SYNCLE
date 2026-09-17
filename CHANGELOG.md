@@ -380,6 +380,29 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Production looks like production, and a connection can be read-only.**
+  - An **environment** label on a connection (production / staging /
+    development), shown wherever the connection is: the sidebar, next to the
+    query editor's Run button, the list a bridge's targets are picked from.
+  - The query editor **reads a statement before it sends it**. What cannot be
+    taken back — `DROP`, `TRUNCATE`, a `DELETE` or `UPDATE` with no `WHERE`,
+    `ALTER … DROP`, Redis `FLUSHALL` / `FLUSHDB`, a MongoDB `$out` — is
+    confirmed first, on any connection; on production, so is any write. Strings,
+    quoted names and comments are masked first, so a keyword inside one counts
+    for nothing and a `DROP` behind a comment is still found.
+  - **Read-only connections**: nothing is written through one. The data grid's
+    insert / update / delete, every DDL route and restore answer `403`, naming
+    the connection. The editor runs a statement only when every part of it is
+    recognisably a read (an allowlist: `CALL`, `DO`, `SET` and anything unknown
+    are not reads) — and then has the **engine** hold it to that, because the
+    text cannot know what a function called from a `SELECT` does: a `READ ONLY`
+    transaction on PostgreSQL and MySQL, the prepared statement's own answer on
+    SQLite. It cannot be a bridge's destination (refused at save; a connection
+    that becomes read-only under a bridge fails the next delivery, saying why) —
+    the guard is the adapter itself, so it holds for replays, live bridges and
+    dead-letter retries alike. It *can* be a bridge's source: marking production
+    read-only and streaming out of it is the point. A guard against accidents,
+    not a security boundary; the docs say so.
 - **Failure tooling.** Retry **one** failed delivery from its detail panel
   (`POST …/deliveries/:sequence/retry`; on a live bridge it retries the rows
   from the dead-letter queue, re-read from the source). **Download a job's

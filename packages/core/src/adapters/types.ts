@@ -135,6 +135,10 @@ export interface ConnectionConfig {
   engine: DatabaseEngine;
   /** optional accent color for the UI (hex) */
   color?: string;
+  /** nothing is written through this connection (see `connectionInputSchema.readOnly`) */
+  readOnly?: boolean;
+  /** what this database is: shown wherever the connection is */
+  environment?: 'production' | 'staging' | 'development';
   host?: string;
   port?: number;
   user?: string;
@@ -509,6 +513,15 @@ export interface DatabaseAdapter {
   browse(params: BrowseParams): Promise<BrowseResult>;
   /** run a user-authored statement in the engine's query language */
   query(statement: string, params?: unknown[]): Promise<QueryResult>;
+  /**
+   * run a statement the ENGINE will refuse if it writes: inside a READ ONLY
+   * transaction (PostgreSQL, MySQL), or after asking the prepared statement
+   * whether it writes (SQLite). what a read-only connection's editor uses, on
+   * top of reading the statement's text — the text can be wrong about a
+   * function's side effects; the engine is not. absent where the query dialect
+   * has no writes to begin with (MongoDB's, Redis's are filtered by command)
+   */
+  queryReadOnly?(statement: string, params?: unknown[]): Promise<QueryResult>;
 
   insertRow(params: InsertRowParams): Promise<QueryResult>;
   updateRow(params: UpdateRowParams): Promise<QueryResult>;

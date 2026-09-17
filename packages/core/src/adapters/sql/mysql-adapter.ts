@@ -231,6 +231,10 @@ export class MysqlAdapter extends BaseSqlAdapter {
   }
 
   /** borrow a pooled connection and drive its native transaction API */
+  protected override readOnlyBeginSql(): string {
+    return 'START TRANSACTION READ ONLY';
+  }
+
   protected override async acquireTransactionConnection(): Promise<SqlTransactionConnection> {
     const conn: PoolConnection = await this.getPool().getConnection();
     return {

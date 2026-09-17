@@ -10,6 +10,9 @@ import { toast } from 'sonner';
 import type { QueryLanguage, QueryResult } from '@syncle/core';
 import { api, ApiError } from '@/lib/api';
 import { useConnections, useDrivers, useSchema } from '@/lib/queries';
+import { statementVerdict } from '@/lib/statement-guard';
+import { useConfirm } from '@/components/confirm';
+import { ConnectionBadges } from '@/components/connections/connection-badges';
 import { useStudio } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import {
@@ -54,6 +57,7 @@ export function QueryEditor() {
   const { data: connections } = useConnections();
   const { data: drivers } = useDrivers();
   const conn = connections?.find((c) => c.id === activeConnectionId);
+  const confirm = useConfirm();
   const driver = drivers?.find((d) => d.engine === conn?.engine);
   const lang = driver?.capabilities.queryLanguage ?? 'sql';
 
@@ -92,6 +96,36 @@ export function QueryEditor() {
     const tabId = activeQueryTabId;
     const statement = editorRef.current?.getModel()?.getValue() ?? value;
     if (!statement.trim()) return;
+    if (conn) {
+      const verdict = statementVerdict(conn, statement);
+      if (verdict.action === 'refuse') {
+        toast.error(t('readOnlyRefused', { name: conn.name }), {
+          description: t('readOnlyRefusedWhy', { reasons: verdict.assessment.reasons.join(', ') }),
+        });
+        return;
+      }
+      if (verdict.action === 'confirm') {
+        const ok = await confirm({
+          title:
+            verdict.why === 'destructive'
+              ? t('confirmDestructiveTitle')
+              : t('confirmProductionTitle', { name: conn.name }),
+          description: (
+            <span className="space-y-2">
+              <span className="block">
+                {verdict.why === 'destructive'
+                  ? t('confirmDestructiveBody', { name: conn.name })
+                  : t('confirmProductionBody')}
+              </span>
+              <span className="block font-mono text-xs">{verdict.assessment.reasons.join(' · ')}</span>
+            </span>
+          ),
+          confirmText: t('runAnyway'),
+          destructive: true,
+        });
+        if (!ok) return;
+      }
+    }
     setRunningId(tabId);
     try {
       const res = await api.runQuery(
@@ -108,7 +142,7 @@ export function QueryEditor() {
     } finally {
       setRunningId(null);
     }
-  }, [activeConnectionId, activeDatabase, activeQueryTabId, value, t]);
+  }, [activeConnectionId, activeDatabase, activeQueryTabId, value, t, conn, confirm]);
 
   // Monaco keeps the command callback it was mounted with forever; go through
   // a ref so ⌘/Ctrl+Enter always runs against the current connection/tab
@@ -209,7 +243,9 @@ export function QueryEditor() {
             <Sparkles className="mr-1 h-4 w-4" /> {t('format')}
           </Button>
         )}
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          {/* what is about to be run against: said here, where the Run button is */}
+          <ConnectionBadges connection={conn} />
           {driver?.label} · {lang.toUpperCase()}
         </span>
       </div>

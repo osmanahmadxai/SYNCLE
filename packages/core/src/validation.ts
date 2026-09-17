@@ -73,6 +73,15 @@ export const connectionInputSchema = z
     workspaceId: z.string().optional(),
     engine: engineSchema,
     color: z.string().optional(),
+    /**
+     * nothing is written through this connection: no row, no table, no restore,
+     * no statement in the editor that is not recognisably a read — and it cannot
+     * be a bridge's destination. a guard against accidents, not a security
+     * boundary: for that, connect with a database role that cannot write
+     */
+    readOnly: z.boolean().optional(),
+    /** what this database is, so that production looks like production everywhere it is shown */
+    environment: z.enum(['production', 'staging', 'development']).optional(),
     host: z.string().optional(),
     port: z.coerce.number().int().positive().optional(),
     user: z.string().optional(),

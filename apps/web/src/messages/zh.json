@@ -105,7 +105,30 @@
     "tlsClientKeyHint": "PEM 格式。静态加密存储，之后不再显示。",
     "sshHostKey": "主机密钥指纹",
     "sshHostKeyHint": "SHA256:…，与 `ssh-keygen -lf` 的输出一致。留空则在首次连接时记录密钥；此后若密钥不同将被拒绝。",
-    "sshHostKeySeen": "SSH 主机提供的指纹为 {fingerprint}。它将随此连接保存，并从现在起进行校验。"
+    "sshHostKeySeen": "SSH 主机提供的指纹为 {fingerprint}。它将随此连接保存，并从现在起进行校验。",
+    "environment": "环境",
+    "environmentHint": "会在所有出现该连接的地方显示。对生产环境，查询编辑器在任何写入之前都会先询问。",
+    "environmentNone": "未设置",
+    "environmentProduction": "生产",
+    "environmentStaging": "预发布",
+    "environmentDevelopment": "开发",
+    "readOnly": "只读",
+    "readOnlyHint": "不会通过此连接写入任何内容：不写行、不建表、不恢复备份、不执行非读取语句——它也不能作为桥接的目标。但仍可作为桥接的源。这是防止误操作的保护；如需强保证，请使用无写权限的数据库角色。"
+  },
+  "connectionBadges": {
+    "production": {
+      "short": "生产",
+      "title": "生产环境"
+    },
+    "staging": {
+      "short": "预发",
+      "title": "预发布环境"
+    },
+    "development": {
+      "short": "开发",
+      "title": "开发环境"
+    },
+    "readOnly": "只读：不会通过此连接写入任何内容"
   },
   "workspaces": {
     "fallback": "工作区",
@@ -699,7 +722,14 @@
     "completion": {
       "table": "表",
       "column": "{table} 的列"
-    }
+    },
+    "readOnlyRefused": "“{name}”为只读",
+    "readOnlyRefusedWhy": "Syncle 无法确认这只是一次读取（{reasons}）。未发送任何内容。",
+    "confirmDestructiveTitle": "此操作无法撤销",
+    "confirmDestructiveBody": "在“{name}”上：",
+    "confirmProductionTitle": "“{name}”是生产环境",
+    "confirmProductionBody": "这条语句会写入：",
+    "runAnyway": "仍然执行"
   },
   "resultTable": {
     "empty": "运行查询以查看结果。",

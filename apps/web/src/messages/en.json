@@ -105,7 +105,30 @@
     "tlsClientKeyHint": "PEM. Encrypted at rest and never shown again.",
     "sshHostKey": "Host key fingerprint",
     "sshHostKeyHint": "SHA256:… as `ssh-keygen -lf` prints it. Leave empty to record the key on first connection; after that a different key is refused.",
-    "sshHostKeySeen": "The SSH host presented {fingerprint}. It will be saved with this connection and checked from now on."
+    "sshHostKeySeen": "The SSH host presented {fingerprint}. It will be saved with this connection and checked from now on.",
+    "environment": "Environment",
+    "environmentHint": "Shown next to the connection everywhere. On production, the query editor asks before any write.",
+    "environmentNone": "Not set",
+    "environmentProduction": "Production",
+    "environmentStaging": "Staging",
+    "environmentDevelopment": "Development",
+    "readOnly": "Read-only",
+    "readOnlyHint": "Nothing is written through this connection: no rows, no tables, no restore, no statement that is not a read — and it cannot be a bridge's destination. It can still be a bridge's source. A guard against accidents; for a hard guarantee, use a database role that cannot write."
+  },
+  "connectionBadges": {
+    "production": {
+      "short": "prod",
+      "title": "Production"
+    },
+    "staging": {
+      "short": "stg",
+      "title": "Staging"
+    },
+    "development": {
+      "short": "dev",
+      "title": "Development"
+    },
+    "readOnly": "Read-only: nothing is written through this connection"
   },
   "workspaces": {
     "fallback": "Workspace",
@@ -699,7 +722,14 @@
     "completion": {
       "table": "table",
       "column": "{table} column"
-    }
+    },
+    "readOnlyRefused": "\"{name}\" is read-only",
+    "readOnlyRefusedWhy": "This is not something Syncle can tell is only a read ({reasons}). Nothing was sent.",
+    "confirmDestructiveTitle": "This cannot be taken back",
+    "confirmDestructiveBody": "On \"{name}\":",
+    "confirmProductionTitle": "\"{name}\" is production",
+    "confirmProductionBody": "This statement writes:",
+    "runAnyway": "Run it"
   },
   "resultTable": {
     "empty": "Run a query to see results.",

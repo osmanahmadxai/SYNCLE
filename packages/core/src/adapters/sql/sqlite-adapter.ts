@@ -191,6 +191,25 @@ export class SqliteAdapter extends BaseSqlAdapter {
   }
 
   /**
+   * SQLite has no read-only transaction, and something better: a prepared
+   * statement says of itself whether it writes. (`prepare` takes ONE statement,
+   * so there is no second one riding along.)
+   */
+  override async queryReadOnly(statement: string, params?: unknown[]): Promise<QueryResult> {
+    const db = this.getDb();
+    let readonly: boolean;
+    try {
+      readonly = db.prepare(statement).readonly;
+    } catch (err) {
+      throw new QueryError((err as Error).message, { sql: statement });
+    }
+    if (!readonly) {
+      throw new QueryError('This connection is read-only, and SQLite says this statement writes.', { sql: statement });
+    }
+    return this.query(statement, params);
+  }
+
+  /**
    * SQLite is a single synchronous connection, so the "borrowed connection" is
    * just the same db handle guarded by explicit BEGIN/COMMIT/ROLLBACK. this is
    * a real transaction (better-sqlite3 executes statements synchronously, so no

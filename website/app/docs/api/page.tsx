@@ -410,7 +410,15 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 <code>POST /api/connections/:id/query?database=</code>
               </td>
               <td>
-                Ad-hoc query — <code>{'{ statement, params }'}</code>
+                Ad-hoc query — <code>{'{ statement, params }'}</code>. On a
+                connection saved with <code>readOnly: true</code> the
+                statement runs only when every part of it is recognisably a
+                read (otherwise 403), and the engine holds it to reading too;
+                every route below that writes answers 403 on such a
+                connection. See{' '}
+                <a href="/docs/workbench#production-and-read-only">
+                  production, and read-only
+                </a>
               </td>
             </tr>
             <tr>

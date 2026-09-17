@@ -11,6 +11,7 @@ import { runtimeConfig } from '../common/runtime-config';
 import type { ConnectionConfig, DatabaseAdapter } from '@syncle/core';
 import { SettingsStoreService } from '../settings/settings-store.service';
 import { ConnectionStoreService } from './connection-store.service';
+import { asReadOnly } from './read-only-adapter';
 import { SshTunnelService, type SshTunnel } from './ssh-tunnel.service';
 
 interface PoolEntry {
@@ -154,13 +155,17 @@ export class AdapterPoolService implements OnModuleDestroy {
       this.entries.delete(key);
       void entry.adapter.close().catch(() => {});
     });
+    // a read-only connection's adapter refuses to write, whoever asks. (an edit
+    // of the connection changes its revision, so unticking it takes effect on
+    // the next use)
+    const handed = config.readOnly ? asReadOnly(adapter, config.name) : adapter;
     this.entries.set(key, {
-      adapter,
+      adapter: handed,
       tunnel,
       revision: this.revisionOf(config),
       lastUsedAt: Date.now(),
     });
-    return adapter;
+    return handed;
   }
 
   /**

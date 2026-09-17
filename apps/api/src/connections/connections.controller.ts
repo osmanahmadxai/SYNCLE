@@ -12,6 +12,8 @@ import {
 import {
   type ConnectionConfig,
   ConflictError,
+  ForbiddenError,
+  assessStatement,
   backupSchema,
   browseSchema,
   connectionInputSchema,
@@ -49,6 +51,21 @@ export class ConnectionsController {
     private readonly pool: AdapterPoolService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * nothing is written through a connection marked read-only. checked here, at
+   * the door, for every route that writes — so the refusal names the
+   * connection and says how to lift it, instead of surfacing as whatever the
+   * engine or the adapter would have made of it
+   */
+  private async assertWritable(id: string, what: string): Promise<void> {
+    const conn = await this.store.get(id);
+    if (conn.readOnly) {
+      throw new ForbiddenError(
+        `"${conn.name}" is a read-only connection, so ${what}. Untick "Read-only" on the connection if that is what you mean to do.`,
+      );
+    }
+  }
 
   /* ----- CRUD ----- */
 
@@ -190,44 +207,62 @@ export class ConnectionsController {
   }
 
   @Post(':id/query')
-  query(
+  async query(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(querySchema)) dto: QueryDTO,
     @Query('database') database?: string,
   ) {
+    const conn = await this.store.get(id);
+    if (!conn.readOnly) {
+      return this.pool.withAdapter(id, database || undefined, (a) => a.query(dto.statement, dto.params));
+    }
+    // read-only: run it only when EVERY statement in it is recognisably a read
+    // (an allowlist: what is not known to be a read is not run) …
+    const assessed = assessStatement(conn.engine, dto.statement);
+    if (assessed.risk !== 'read') {
+      throw new ForbiddenError(
+        `"${conn.name}" is a read-only connection, and this is not something Syncle can tell is only a read (${assessed.reasons.join(', ')}). ` +
+          'Untick "Read-only" on the connection if that is what you mean to do.',
+      );
+    }
+    // … and then let the ENGINE hold it to that where it can: the text cannot
+    // know what a function called from a SELECT does; a read-only transaction can
     return this.pool.withAdapter(id, database || undefined, (a) =>
-      a.query(dto.statement, dto.params),
+      a.queryReadOnly ? a.queryReadOnly(dto.statement, dto.params) : a.query(dto.statement, dto.params),
     );
   }
 
   @Post(':id/rows')
-  insertRow(
+  async insertRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(insertRowSchema)) dto: InsertDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not inserted through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.insertRow(dto),
     );
   }
 
   @Patch(':id/rows')
-  updateRow(
+  async updateRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(updateRowSchema)) dto: UpdateDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not changed through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.updateRow(dto),
     );
   }
 
   @Delete(':id/rows')
-  deleteRow(
+  async deleteRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(deleteRowSchema)) dto: DeleteDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not deleted through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.deleteRow(dto),
     );
@@ -320,6 +355,12 @@ export class ConnectionsController {
     @Body(new ZodValidationPipe(restoreSchema)) dto: RestoreDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a backup is not restored through it');
+    await this.assertWritable(id, 'a table is not emptied through it');
+    await this.assertWritable(id, 'a table is not dropped through it');
+    await this.assertWritable(id, 'a table is not created through it');
+    await this.assertWritable(id, 'a database is not dropped through it');
+    await this.assertWritable(id, 'a database is not created through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.restore(dto.content, dto.format),
     );

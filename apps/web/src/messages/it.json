@@ -105,7 +105,30 @@
     "tlsClientKeyHint": "PEM. Cifrata a riposo e mai più mostrata.",
     "sshHostKey": "Impronta della chiave host",
     "sshHostKeyHint": "SHA256:… come la stampa `ssh-keygen -lf`. Lascia vuoto per registrare la chiave alla prima connessione; in seguito una chiave diversa viene rifiutata.",
-    "sshHostKeySeen": "L’host SSH ha presentato {fingerprint}. Verrà salvata con questa connessione e verificata d’ora in poi."
+    "sshHostKeySeen": "L’host SSH ha presentato {fingerprint}. Verrà salvata con questa connessione e verificata d’ora in poi.",
+    "environment": "Ambiente",
+    "environmentHint": "Mostrato accanto alla connessione ovunque. In produzione l'editor delle query chiede conferma prima di ogni scrittura.",
+    "environmentNone": "Non impostato",
+    "environmentProduction": "Produzione",
+    "environmentStaging": "Staging",
+    "environmentDevelopment": "Sviluppo",
+    "readOnly": "Sola lettura",
+    "readOnlyHint": "Non viene scritto nulla tramite questa connessione: né righe, né tabelle, né ripristini, né istruzioni che non siano una lettura — e non può essere la destinazione di un bridge. Può comunque esserne l'origine. È una protezione dagli errori; per una garanzia forte usa un ruolo del database che non può scrivere."
+  },
+  "connectionBadges": {
+    "production": {
+      "short": "prod",
+      "title": "Produzione"
+    },
+    "staging": {
+      "short": "stg",
+      "title": "Staging"
+    },
+    "development": {
+      "short": "dev",
+      "title": "Sviluppo"
+    },
+    "readOnly": "Sola lettura: non viene scritto nulla tramite questa connessione"
   },
   "workspaces": {
     "fallback": "Area di lavoro",
@@ -699,7 +722,14 @@
     "completion": {
       "table": "tabella",
       "column": "colonna di {table}"
-    }
+    },
+    "readOnlyRefused": "\"{name}\" è in sola lettura",
+    "readOnlyRefusedWhy": "Syncle non può stabilire che sia solo una lettura ({reasons}). Non è stato inviato nulla.",
+    "confirmDestructiveTitle": "Questa operazione non si può annullare",
+    "confirmDestructiveBody": "Su \"{name}\":",
+    "confirmProductionTitle": "\"{name}\" è produzione",
+    "confirmProductionBody": "Questa istruzione scrive:",
+    "runAnyway": "Esegui"
   },
   "resultTable": {
     "empty": "Esegui una query per vedere i risultati.",
