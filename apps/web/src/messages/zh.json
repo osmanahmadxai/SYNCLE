@@ -334,6 +334,32 @@
       "evolve": "同上，并且源表新增的列会被添加到由 Syncle 创建并原样填充（无列映射）的目标表中。始终为可空列；目标表中绝不会删除列或更改类型。",
       "continue": "旧的行为：消失的列会被写成 NULL。仅适用于无论源表如何变化都要跟随的目标。"
     },
+    "schedule": {
+      "insertWarning": "此桥接的某个目标处于仅插入模式。每次计划运行都会重新发送整个源，因此每一行都会被再次插入——或被表的主键拒绝。除非你确实想要每次运行都得到一份新副本，否则请使用带键列的 upsert。",
+      "title": "何时运行",
+      "onDemand": "当我点击运行时",
+      "onSchedule": "按计划",
+      "onDemandDesc": "只有在有人启动时，桥接才会运行。",
+      "scheduledDesc": "每到计划时间，都会完整重放整个源。仍然可以手动启动运行。",
+      "preset": "频率",
+      "presets": {
+        "hourly": "每小时",
+        "nightly": "每晚 02:00",
+        "weekdays": "工作日 02:00",
+        "weekly": "每周一 02:00",
+        "monthly": "每月 1 日 02:00",
+        "custom": "自定义"
+      },
+      "cron": "Cron 表达式",
+      "cronFields": "分  时  日  月  星期",
+      "timezone": "时区",
+      "timezoneHint": "表达式所依据的时区（按名称）：无论夏令时还是冬令时，那里的“02:00”始终是 02:00。",
+      "timezoneProblem": "这不是时区名称。请使用“Europe/Rome”或“UTC”这样的名称——不要用偏移量或缩写。",
+      "nextRuns": "接下来的运行（{zone}）：",
+      "enabled": "计划已开启",
+      "enabledHint": "关闭后表达式会保留以备后用。桥接本身被禁用时，计划也不会触发。",
+      "rules": "如果上一次运行仍在进行，就不会再启动一次：该次计划会被跳过，并给出提示。每次计划运行都从源的开头开始。"
+    },
     "hashStandIn": "此处的哈希值以占位符显示。试运行会显示真实值。",
     "cdcFromNow": "仅从现在开始的变更",
     "cdcFromBeginning": "先复制现有数据，再跟随变更",
@@ -469,6 +495,13 @@
     "edit": "编辑桥接",
     "accepted": "当前的表结构已成为此桥接的基准。",
     "couldNotAccept": "无法接受该变化"
+  },
+  "scheduleNotice": {
+    "next": "下次运行 {when}",
+    "off": "计划已关闭",
+    "notFiring": "未触发：桥接已被禁用，或保存时无法连接任务队列",
+    "skipped": "原定于 {when} 的运行已跳过：上一次运行仍在进行。",
+    "failed": "原定于 {when} 的运行未能启动：{error}"
   },
   "dryRun": {
     "title": "试运行",
@@ -739,6 +772,7 @@
     "downloadFailures": "失败记录："
   },
   "jobStrip": {
+    "scheduled": "由计划启动",
     "label": "此桥接的运行记录",
     "runs": "{count} 次运行",
     "tone": {

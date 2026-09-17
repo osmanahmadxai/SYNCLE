@@ -334,6 +334,32 @@
       "evolve": "Come sopra, e una colonna aggiunta all’origine viene aggiunta a una tabella di destinazione che Syncle crea e riempie così com’è (senza mappatura). Sempre come nullable; lì non viene mai eliminato né cambiato di tipo nulla.",
       "continue": "Il vecchio comportamento: una colonna che non c’è più viene scritta come NULL. Solo per una destinazione che deve seguire l’origine qualunque cosa faccia."
     },
+    "schedule": {
+      "insertWarning": "Una destinazione di questo bridge è in modalità di solo inserimento. Ogni esecuzione programmata invia di nuovo l’intera origine, quindi ogni riga verrebbe inserita di nuovo — o rifiutata dalla chiave della tabella. Usa upsert con colonne chiave, a meno che tu non voglia proprio una nuova copia a ogni esecuzione.",
+      "title": "Quando viene eseguito",
+      "onDemand": "Quando premo Esegui",
+      "onSchedule": "A orari programmati",
+      "onDemandDesc": "Il bridge viene eseguito quando qualcuno lo avvia, e non altrimenti.",
+      "scheduledDesc": "A ogni scadenza viene riletta l’intera origine. Le esecuzioni si possono comunque avviare a mano.",
+      "preset": "Ogni quanto",
+      "presets": {
+        "hourly": "Ogni ora",
+        "nightly": "Ogni notte alle 02:00",
+        "weekdays": "Nei giorni feriali alle 02:00",
+        "weekly": "Il lunedì alle 02:00",
+        "monthly": "Il 1º del mese alle 02:00",
+        "custom": "Personalizzato"
+      },
+      "cron": "Riga cron",
+      "cronFields": "minuto  ora  giorno-del-mese  mese  giorno-della-settimana",
+      "timezone": "Fuso orario",
+      "timezoneHint": "Il fuso in cui va intesa la riga, per nome: “02:00” resta le 02:00 lì, con l’ora legale e con quella solare.",
+      "timezoneProblem": "Non è il nome di un fuso orario. Usane uno come “Europe/Rome” o “UTC” — non uno scostamento né un’abbreviazione.",
+      "nextRuns": "Prossime esecuzioni ({zone}):",
+      "enabled": "Programmazione attiva",
+      "enabledHint": "Disattivata, la riga resta per dopo. È inattiva anche quando il bridge stesso è disabilitato.",
+      "rules": "Un’esecuzione non viene mai avviata accanto a una ancora in corso: quella scadenza viene saltata, e segnalata. Ogni esecuzione programmata riparte dall’inizio dell’origine."
+    },
     "hashStandIn": "Qui un valore con hash è mostrato come segnaposto. La prova a vuoto mostra quello reale.",
     "cdcFromNow": "Solo le modifiche da ora in poi",
     "cdcFromBeginning": "Copia ciò che c'è, poi segui le modifiche",
@@ -469,6 +495,13 @@
     "edit": "Modifica bridge",
     "accepted": "La tabella così com’è ora è quella per cui questo bridge è costruito.",
     "couldNotAccept": "Impossibile accettare la modifica"
+  },
+  "scheduleNotice": {
+    "next": "prossima esecuzione {when}",
+    "off": "programmazione disattivata",
+    "notFiring": "non attiva: il bridge è disabilitato, oppure la coda dei job non era raggiungibile al salvataggio",
+    "skipped": "L’esecuzione prevista per {when} è stata saltata: quella precedente era ancora in corso.",
+    "failed": "Non è stato possibile avviare l’esecuzione prevista per {when}: {error}"
   },
   "dryRun": {
     "title": "Prova a vuoto",
@@ -739,6 +772,7 @@
     "downloadFailures": "Errori:"
   },
   "jobStrip": {
+    "scheduled": "avviata dalla programmazione",
     "label": "Esecuzioni di questo bridge",
     "runs": "{count} esecuzioni",
     "tone": {

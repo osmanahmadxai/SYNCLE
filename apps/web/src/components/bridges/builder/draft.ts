@@ -91,6 +91,12 @@ export function blankDelivery(): Delivery {
   };
 }
 
+export interface ScheduleDraft {
+  cron: string;
+  timezone: string;
+  enabled: boolean;
+}
+
 export type SyncMode = 'oneTime' | 'live';
 export type TriggerKind = 'replay' | 'watch' | 'cdc';
 export type WatchStrategy = 'increment' | 'timestamp' | 'snapshot';
@@ -157,6 +163,11 @@ export interface BuilderDraft {
    * already holds first and then follow it (nothing is lost in between)
    */
   cdcStartFrom: 'now' | 'beginning';
+  /**
+   * a one-time bridge that runs by itself: a cron line, the zone it is meant
+   * in, and whether it is on. null = only when somebody presses Run
+   */
+  schedule: ScheduleDraft | null;
   /**
    * parts of a watch trigger the builder has no control for. they are carried
    * through an edit untouched: saving used to write the constants 500 / 50,000
@@ -232,6 +243,7 @@ export function initialDraft(
     pollSeconds: Math.max(1, Math.round(defaults.pollIntervalMs / 1000)),
     watchStartFrom: 'now',
     cdcStartFrom: 'now',
+    schedule: null,
     maxPerPoll: defaults.maxPerPoll,
     snapshotMaxTracked: 50_000,
     lookbackMs: 3000,
@@ -306,7 +318,9 @@ export type BuilderAction =
   | { type: 'patchDbTarget'; index: number; patch: Partial<DbTarget> }
   | { type: 'addDbTarget'; sourcePk: string | null }
   | { type: 'removeDbTarget'; index: number }
-  | { type: 'patchDelivery'; patch: Partial<Delivery> };
+  | { type: 'patchDelivery'; patch: Partial<Delivery> }
+  | { type: 'setSchedule'; schedule: ScheduleDraft | null }
+  | { type: 'patchSchedule'; patch: Partial<ScheduleDraft> };
 
 /**
  * conditions and steps name columns of ONE table. leaving it — for another
@@ -414,6 +428,10 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, watchStartFrom: action.startFrom };
     case 'setCdcStartFrom':
       return { ...d, cdcStartFrom: action.startFrom };
+    case 'setSchedule':
+      return { ...d, schedule: action.schedule };
+    case 'patchSchedule':
+      return d.schedule ? { ...d, schedule: { ...d.schedule, ...action.patch } } : d;
     case 'toggleCdcOp': {
       const next = new Set(d.cdcOps);
       if (next.has(action.op)) next.delete(action.op);

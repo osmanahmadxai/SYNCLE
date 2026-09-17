@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { filterSchema, sortSchema } from '../validation';
 import { columnTransformSchema } from './column-transforms';
+import { replayScheduleSchema } from './schedule';
 
 /* -------------------------------------------------------------------------- */
 /* Source, where rows are read from                                           */
@@ -263,8 +264,9 @@ export const watchStrategySchema = z.discriminatedUnion('strategy', [
 export const cdcOperationSchema = z.enum(['insert', 'update', 'delete', 'truncate']);
 
 export const bridgeTriggerSchema = z.discriminatedUnion('kind', [
-  // run on demand (replay the source when you press Run job)
-  z.object({ kind: z.literal('replay') }),
+  // run on demand (replay the source when you press Run job) — or, with a
+  // schedule, by itself: a fresh run at every tick
+  z.object({ kind: z.literal('replay'), schedule: replayScheduleSchema.optional() }),
   // continuously poll the source for new rows and deliver them live
   z.object({
     kind: z.literal('watch'),
@@ -618,6 +620,8 @@ export interface BridgeJob {
    * delivered and has had its details removed — it is not "still queued"
    */
   prunedBelowSequence: number | null;
+  /** who started it: somebody pressing Run, or the bridge's schedule */
+  startedBy: 'manual' | 'schedule';
 }
 
 export interface BridgeDelivery {

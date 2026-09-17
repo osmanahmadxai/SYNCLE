@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { JobDetail, JobStatusBadge } from './job-detail';
 import { JobStrip } from './job-strip';
 import { SchemaDriftNotice } from './schema-drift-notice';
+import { ScheduleNotice } from './schedule-notice';
 import { WorkspaceMap } from './workspace-map';
 
 export function BridgesView() {
@@ -300,6 +301,9 @@ function BridgePanel({
           </Button>
         </div>
       </div>
+
+      {/* a replay that runs by itself: when next, and whether the last tick started one */}
+      <ScheduleNotice bridgeId={bridgeId} enabled={!isWatch} />
 
       {/* the source table is not the one this bridge was built on; silent otherwise */}
       <SchemaDriftNotice

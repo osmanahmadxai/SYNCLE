@@ -6,3 +6,4 @@ export * from './value-map';
 export * from './watch';
 export * from './column-transforms';
 export * from './schema-drift';
+export * from './schedule';

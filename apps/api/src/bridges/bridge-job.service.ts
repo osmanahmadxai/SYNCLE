@@ -458,8 +458,20 @@ export class BridgeJobService implements OnModuleInit {
 
   async start(
     bridgeId: string,
-    opts: { resumeJobId?: string; jobId?: string; retryFailedOf?: string } = {},
+    opts: {
+      resumeJobId?: string;
+      jobId?: string;
+      retryFailedOf?: string;
+      /**
+       * a NEW run from the top, whatever became of the last one. pressing Run on
+       * a bridge whose last run stopped half-way picks that run up again; a
+       * schedule's tick must not — "every night" means the whole table every night
+       */
+      fresh?: boolean;
+      startedBy?: 'manual' | 'schedule';
+    } = {},
   ): Promise<BridgeJob> {
+    const startedBy = opts.startedBy ?? 'manual';
     const bridge = await this.store.get(bridgeId); // 404s if the bridge is gone
     // replay-only: watch/CDC bridges are live listeners with their own start
     // endpoint. pushing one through the replay queue would re-stream (and
@@ -483,7 +495,7 @@ export class BridgeJobService implements OnModuleInit {
       await ensureQueueReady(this.queue);
       const row = await this.prisma.bridgeJob.update({
         where: { id: draft.id },
-        data: { status: 'queued', startedAt: new Date() },
+        data: { status: 'queued', startedAt: new Date(), startedBy },
       });
       await this.enqueue(draft.id, bridgeId);
       return this.toJob(row);
@@ -505,7 +517,7 @@ export class BridgeJobService implements OnModuleInit {
       where: { bridgeId, status: { in: ['paused', 'canceled', 'interrupted', 'failed'] } },
       orderBy: { startedAt: 'desc' },
     });
-    if (latest) return this.resume(bridgeId, latest.id);
+    if (latest && !opts.fresh) return this.resume(bridgeId, latest.id);
 
     await ensureQueueReady(this.queue);
     const id = randomUUID();
@@ -518,6 +530,7 @@ export class BridgeJobService implements OnModuleInit {
         status: 'queued',
         configSnapshotJson: snapshotJson,
         totalCount: total,
+        startedBy,
       },
     });
     await this.enqueue(id, bridgeId);
@@ -1125,6 +1138,7 @@ export class BridgeJobService implements OnModuleInit {
       finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
       prunedDeliveries: row.prunedDeliveries,
       prunedBelowSequence: row.prunedBelowSequence,
+      startedBy: row.startedBy === 'schedule' ? 'schedule' : 'manual',
     };
   }
 

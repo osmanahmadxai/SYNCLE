@@ -1131,6 +1131,35 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>GET /api/bridges/:id/schedule</code>
+              </td>
+              <td>
+                A replay bridge&apos;s{' '}
+                <a href="/docs/bridges#scheduled-replays">schedule</a> —{' '}
+                <code>
+                  {'{ schedule, active, nextRuns, lastTickAt, lastOutcome, lastError }'}
+                </code>
+                . <code>active</code> is whether it is registered and firing;{' '}
+                <code>lastOutcome</code> is <code>started</code>,{' '}
+                <code>skipped-active</code> (the run before was still going)
+                or <code>failed</code>. The schedule itself is part of the
+                bridge: set it with <code>trigger.schedule</code> on{' '}
+                <code>POST</code>/<code>PUT /api/bridges</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/schedule-preview</code>
+              </td>
+              <td>
+                <code>{'{ cron, timezone }'}</code> →{' '}
+                <code>{'{ nextRuns: [5 ISO times] }'}</code>, worked out by the
+                library that fires schedules. <code>400</code> with the reason
+                for a line or a zone that cannot be used
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>POST /api/bridges/retention/run</code>
               </td>
               <td>

@@ -125,6 +125,8 @@ model Bridge {
   // later look at the table is compared with (schema drift). null = not yet seen
   sourceColumnsJson String?   @map("source_columns_json")
   sourceColumnsAt   DateTime? @map("source_columns_at")
+  // what became of the schedule's last tick ({ at, outcome, error }); null = never ticked
+  scheduleStateJson String?   @map("schedule_state_json")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
@@ -164,6 +166,9 @@ model BridgeJob {
   // row means "delivered, details removed" rather than "not delivered yet"
   prunedDeliveries    Int  @default(0) @map("pruned_deliveries")
   prunedBelowSequence Int? @map("pruned_below_sequence")
+
+  // 'manual' | 'schedule': somebody pressed Run, or the bridge's cron line did
+  startedBy String @default("manual") @map("started_by")
 
   bridge     Bridge           @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
   deliveries BridgeDelivery[]

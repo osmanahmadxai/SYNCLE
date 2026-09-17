@@ -44,6 +44,8 @@ import { incompleteFilter, incompleteTransform } from './builder/transform-optio
 import { PayloadSection } from './builder/payload-section';
 import { DestinationSection } from './builder/destination-section';
 import { DeliverySection } from './builder/delivery-section';
+import { ScheduleSection } from './builder/schedule-section';
+import { scheduleProblem } from './builder/schedule-options';
 
 export function BridgeBuilder() {
   const t = useTranslations('bridgeBuilder');
@@ -230,7 +232,9 @@ export function BridgeBuilder() {
     !watchNeedsColumn &&
     // a half-written condition or step is never dropped on save: it blocks it
     !draft.filters.some(incompleteFilter) &&
-    !draft.transforms.some(incompleteTransform);
+    !draft.transforms.some(incompleteTransform) &&
+    // a schedule that would be refused is not sent to be refused
+    !(draft.syncMode === 'oneTime' && scheduleProblem(draft.schedule));
 
   const [dryRun, setDryRun] = useState<{
     open: boolean;
@@ -392,6 +396,10 @@ export function BridgeBuilder() {
                 }
                 bridgeId={editing}
               />
+              {/* a one-time bridge can run by itself, on a cron line */}
+              {draft.syncMode === 'oneTime' && (
+                <ScheduleSection draft={draft} dispatch={dispatch} />
+              )}
               <FiltersSection
                 draft={draft}
                 dispatch={dispatch}

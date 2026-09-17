@@ -48,6 +48,71 @@ export default function Page() {
         migration, and it is the default for a new bridge.
       </p>
 
+      <h4 id="scheduled-replays">On a schedule</h4>
+      <p>
+        A replay bridge can also run by itself. In the builder, under{' '}
+        <em>When it runs</em>, choose <em>On a schedule</em> and give it a cron
+        line and the time zone the line is meant in — through the API,{' '}
+        <code>
+          {'trigger: { kind: "replay", schedule: { cron: "0 2 * * *", timezone: "Europe/Rome", enabled: true } }'}
+        </code>
+        . At every tick the <em>whole</em> source is replayed. Into a target
+        in upsert mode that brings the destination up to date; into one in
+        insert mode it inserts every row again, which the builder warns about —
+        a scheduled bridge almost always wants upsert and key columns.
+      </p>
+      <ul>
+        <li>
+          <strong>The line</strong> is the classic five fields —{' '}
+          <code>minute hour day-of-month month day-of-week</code> — with{' '}
+          <code>*</code>, lists (<code>1,15</code>), ranges (
+          <code>mon-fri</code>), steps (<code>*/15</code>,{' '}
+          <code>9-17/2</code>) and the names of months and days. No seconds, no{' '}
+          <code>@daily</code>, no <code>L</code> or <code>#</code>: once a minute
+          is the most a bridge is scheduled. When both day fields are
+          restricted, either one fires it, as in a crontab. The builder shows
+          the next runs as the server works them out, so what you see is what
+          will fire.
+        </li>
+        <li>
+          <strong>The zone</strong> is a name (<code>Europe/Rome</code>,{' '}
+          <code>UTC</code>), never an offset: “02:00” stays 02:00 there, summer
+          and winter. On the night the clocks go back the run happens once, not
+          twice; on the night they go forward a run due in the missing hour
+          happens an hour later, not never.
+        </li>
+        <li>
+          <strong>Never two at once.</strong> If the run before is still going
+          when the next is due, that tick is skipped — shown on the bridge, and
+          sent as a warning to{' '}
+          <a href="/docs/self-hosting#alerts">alert channels</a> subscribed to
+          bridge failures. If it keeps happening, the schedule is tighter than
+          the replay takes.
+        </li>
+        <li>
+          <strong>From the top, every time.</strong> Pressing Run on a bridge
+          whose last run stopped half-way picks that run up again. A scheduled
+          run does not: it is a new run of the whole source, and the stopped
+          one stays in the list as history. Runs the schedule started carry a
+          small calendar mark.
+        </li>
+        <li>
+          <strong>Off means off.</strong> A schedule fires only while it is
+          switched on <em>and</em> the bridge is enabled. A bridge that arrives
+          by <a href="#export-import">import, or as a duplicate</a>, keeps its
+          line but has it switched off, so that a file dropped onto production
+          does not start writing at two in the morning because staging did.
+        </li>
+        <li>
+          <strong>Restarts.</strong> The schedule lives in Redis beside the job
+          queue, and several API processes on one Redis fire it once between
+          them. If the API was down at the time of a tick, that one run happens
+          when it is back; earlier missed ticks are not made up. At every start
+          the schedules in Redis are compared with the bridges in the database
+          and put right.
+        </li>
+      </ul>
+
       <h3 id="watch">Watch</h3>
       <p>
         A watch bridge polls the source on a cursor and delivers whatever is

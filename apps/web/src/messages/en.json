@@ -334,6 +334,32 @@
       "evolve": "As above, and a column added to the source is added to a destination table Syncle creates and fills as-is (no column mapping). Always as nullable; nothing is ever dropped or retyped there.",
       "continue": "The old behaviour: a column that is gone is written as NULL. Only for a destination that is meant to follow the source whatever it does."
     },
+    "schedule": {
+      "insertWarning": "A target of this bridge is in insert mode. Every scheduled run sends the whole source again, so every row would be inserted again — or refused by the table’s key. Use upsert with key columns unless a fresh copy per run is what you want.",
+      "title": "When it runs",
+      "onDemand": "When I press Run",
+      "onSchedule": "On a schedule",
+      "onDemandDesc": "The bridge runs when somebody starts it, and not otherwise.",
+      "scheduledDesc": "The whole source is replayed at every tick. Runs can still be started by hand.",
+      "preset": "How often",
+      "presets": {
+        "hourly": "Every hour",
+        "nightly": "Every night at 02:00",
+        "weekdays": "Weekdays at 02:00",
+        "weekly": "Mondays at 02:00",
+        "monthly": "The 1st of the month at 02:00",
+        "custom": "Custom"
+      },
+      "cron": "Cron line",
+      "cronFields": "minute  hour  day-of-month  month  day-of-week",
+      "timezone": "Time zone",
+      "timezoneHint": "The zone the line is meant in, by name: “02:00” stays 02:00 there through summer and winter time.",
+      "timezoneProblem": "Not a time zone name. Use one like “Europe/Rome” or “UTC” — not an offset or an abbreviation.",
+      "nextRuns": "Next runs ({zone}):",
+      "enabled": "Schedule on",
+      "enabledHint": "Off keeps the line for later. It is also off while the bridge itself is disabled.",
+      "rules": "A run is never started beside one that is still going: that tick is skipped, and said. Every scheduled run starts from the top of the source."
+    },
     "hashStandIn": "A hashed value is shown as a stand-in here. Dry run shows the real one.",
     "cdcFromNow": "Only changes from now on",
     "cdcFromBeginning": "Copy what is there, then follow changes",
@@ -469,6 +495,13 @@
     "edit": "Edit bridge",
     "accepted": "The table as it is now is what this bridge is built for.",
     "couldNotAccept": "Could not accept the change"
+  },
+  "scheduleNotice": {
+    "next": "next run {when}",
+    "off": "schedule is off",
+    "notFiring": "not firing: the bridge is disabled, or the job queue was unreachable when it was saved",
+    "skipped": "The run due {when} was skipped: the one before it was still going.",
+    "failed": "The run due {when} could not be started: {error}"
   },
   "dryRun": {
     "title": "Dry run",
@@ -739,6 +772,7 @@
     "downloadFailures": "Failures:"
   },
   "jobStrip": {
+    "scheduled": "started by the schedule",
     "label": "Runs of this bridge",
     "runs": "{count} runs",
     "tone": {

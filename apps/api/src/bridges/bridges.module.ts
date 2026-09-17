@@ -8,6 +8,8 @@ import { BridgeJobProcessor } from './bridge-job.processor';
 import { TableReaderService } from './table-reader.service';
 import { BridgeTransferService } from './bridge-transfer.service';
 import { SchemaDriftService } from './schema-drift.service';
+import { BridgeScheduleService } from './bridge-schedule.service';
+import { BridgeScheduleProcessor } from './bridge-schedule.processor';
 import { BridgeJobService } from './bridge-job.service';
 import { BridgeCdcService } from './bridge-cdc.service';
 import { BridgeLifecycleService } from './bridge-lifecycle.service';
@@ -20,7 +22,7 @@ import { DeadLetterService } from './dead-letter.service';
 import { BridgeWatchService } from './bridge-watch.service';
 import { BridgesController } from './bridges.controller';
 import { JobRegistryService } from './job-registry.service';
-import { BRIDGE_JOBS_QUEUE, BRIDGE_WATCH_QUEUE } from './bridges.types';
+import { BRIDGE_JOBS_QUEUE, BRIDGE_SCHEDULE_QUEUE, BRIDGE_WATCH_QUEUE } from './bridges.types';
 import { CDC_PROVIDERS, type CdcProvider } from './cdc/cdc-provider';
 import { PostgresCdcProvider } from './cdc/providers/postgres-cdc.provider';
 import { MysqlCdcProvider } from './cdc/providers/mysql-cdc.provider';
@@ -33,6 +35,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     ConnectionsModule, // AdapterPoolService
     BullModule.registerQueue({ name: BRIDGE_JOBS_QUEUE }),
     BullModule.registerQueue({ name: BRIDGE_WATCH_QUEUE }),
+    BullModule.registerQueue({ name: BRIDGE_SCHEDULE_QUEUE }),
   ],
   controllers: [BridgesController],
   providers: [
@@ -51,6 +54,8 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     TableReaderService,
     BridgeTransferService,
     SchemaDriftService,
+    BridgeScheduleService,
+    BridgeScheduleProcessor,
     BridgeWatchProcessor,
     CdcSpoolService,
     DeadLetterService,

@@ -87,6 +87,7 @@ export function loadBridge(h: Bridge): BuilderDraft {
   } else {
     d.syncMode = 'oneTime';
     d.triggerKind = 'replay';
+    d.schedule = h.trigger.schedule ? { ...h.trigger.schedule } : null;
   }
   if (h.destination.kind === 'database') {
     d.destKind = 'database';
@@ -331,7 +332,16 @@ export function buildInput(
               startFrom: draft.watchStartFrom,
               maxPerPoll: draft.maxPerPoll,
             }
-          : { kind: 'replay' },
+          : draft.schedule
+            ? {
+                kind: 'replay',
+                schedule: {
+                  cron: draft.schedule.cron.trim().split(/\s+/).join(' '),
+                  timezone: draft.schedule.timezone.trim(),
+                  enabled: draft.schedule.enabled,
+                },
+              }
+            : { kind: 'replay' },
     enabled: draft.enabled,
   };
 }

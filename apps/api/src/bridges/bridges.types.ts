@@ -82,5 +82,11 @@ export interface BridgeWatchPayload {
   bridgeId: string;
 }
 
+/** the BullMQ job payload for a `bridge-schedule` tick: time for this bridge's scheduled replay */
+export interface BridgeSchedulePayload {
+  bridgeId: string;
+}
+
 export const BRIDGE_JOBS_QUEUE = 'bridge-jobs';
 export const BRIDGE_WATCH_QUEUE = 'bridge-watch';
+export const BRIDGE_SCHEDULE_QUEUE = 'bridge-schedule';

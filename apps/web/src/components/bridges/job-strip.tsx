@@ -7,6 +7,7 @@
  * in the API, and nowhere on the screen.
  */
 import { useTranslations } from 'next-intl';
+import { CalendarClock } from 'lucide-react';
 import type { BridgeJob } from '@syncle/core';
 import { cn } from '@/lib/utils';
 
@@ -66,7 +67,11 @@ export function JobStrip({
             key={job.id}
             onClick={() => onSelect(job.id)}
             aria-current={on ? 'true' : undefined}
-            title={t(`tone.${tone}`, { failed: job.failedCount })}
+            title={
+              job.startedBy === 'schedule'
+                ? `${t(`tone.${tone}`, { failed: job.failedCount })} · ${t('scheduled')}`
+                : t(`tone.${tone}`, { failed: job.failedCount })
+            }
             className={cn(
               'flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors',
               on
@@ -75,6 +80,13 @@ export function JobStrip({
             )}
           >
             <span className={cn('h-1.5 w-1.5 rounded-full', DOT[tone])} />
+            {/* started by the bridge's schedule, not by a person */}
+            {job.startedBy === 'schedule' && (
+              <CalendarClock
+                aria-label={t('scheduled')}
+                className="text-muted-foreground h-3 w-3"
+              />
+            )}
             {when.format(new Date(job.startedAt))}
             {job.failedCount > 0 && (
               <span className="text-red-600 dark:text-red-500">

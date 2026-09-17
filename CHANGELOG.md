@@ -394,6 +394,25 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **Scheduled replays.** A replay bridge can run by itself: *When it runs → On
+  a schedule* in the builder, `trigger.schedule { cron, timezone, enabled }` in
+  the API. Five-field cron with names, lists, ranges and steps; a named time
+  zone, so "02:00" is 02:00 there in summer and in winter (one run on the night
+  the hour repeats, one — an hour on — on the night it does not exist). The
+  builder shows the next runs as the server computes them, with the library
+  that fires them.
+  - A tick never starts a run beside one that is still going: it is skipped,
+    shown on the bridge and sent to alert channels as a warning.
+  - A scheduled run starts from the top. (Pressing Run on a bridge whose last
+    run stopped half-way resumes that run; "every night" must not.)
+  - The scheduler lives in Redis: it survives restarts, fires once between
+    several API processes, and is reconciled with the database at every start.
+    Deleting or disabling the bridge, or switching the schedule off, removes it.
+  - A bridge that is imported or duplicated keeps its line, switched off.
+  - Runs record who started them (`startedBy: manual | schedule`), marked in the
+    run list. New routes `GET /api/bridges/:id/schedule` and
+    `POST /api/bridges/schedule-preview`.
+
 - **Schema drift: a bridge knows when its source table changes.** New delivery
   setting `onSchemaChange`, in the builder as *When the source table changes*:
   - `stop` (default) — a column the bridge uses is gone: stop before writing.

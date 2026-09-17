@@ -45,6 +45,7 @@ import type {
   WorkspaceInputDTO,
   BridgeSourceHold,
   BridgeSchemaDrift,
+  BridgeScheduleStatus,
 } from '@syncle/core';
 
 /**
@@ -376,6 +377,14 @@ export const api = {
   /** what a CDC bridge is holding on its source; null when nothing */
   sourceHold: (id: string) =>
     request<BridgeSourceHold | null>(`/bridges/${id}/source-hold`),
+  /** when a cron line fires next, by the library that fires it; 400 with the reason if it cannot be used */
+  schedulePreview: (schedule: { cron: string; timezone: string }) =>
+    request<{ nextRuns: string[] }>('/bridges/schedule-preview', {
+      method: 'POST',
+      ...jsonBody(schedule),
+    }),
+  /** a bridge's schedule: is it firing, when next, what became of the last tick */
+  bridgeSchedule: (id: string) => request<BridgeScheduleStatus>(`/bridges/${id}/schedule`),
   /** has the source table changed since the bridge was set up? reads, changes nothing */
   schemaDrift: (id: string) => request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift`),
   /** refused (400, reason `schema-drift`) while the bridge still uses a column that is gone */

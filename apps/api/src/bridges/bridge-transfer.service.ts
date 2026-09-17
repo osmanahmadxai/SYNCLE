@@ -83,6 +83,23 @@ function remap(
   };
 }
 
+/**
+ * a bridge that arrives by import, or is made as a copy, keeps its schedule —
+ * switched off. a file dropped onto production must not start writing at two in
+ * the morning because staging did, and a copy made in order to be changed must
+ * not run beside its original, into the same table, before it has been
+ */
+export function withScheduleOff<T extends BridgeInputDTO['trigger']>(
+  trigger: T,
+): { trigger: T; wasOn: boolean } {
+  if (trigger.kind !== 'replay' || !trigger.schedule?.enabled)
+    return { trigger, wasOn: false };
+  return {
+    trigger: { ...trigger, schedule: { ...trigger.schedule, enabled: false } },
+    wasOn: true,
+  };
+}
+
 @Injectable()
 export class BridgeTransferService {
   constructor(
@@ -228,8 +245,15 @@ export class BridgeTransferService {
           `"${name}" posts to an endpoint that wants a credential, and credentials are not exported: it was imported switched off. Set the credential, then enable it.`,
         );
       }
+      const { trigger, wasOn } = withScheduleOff(bridge.trigger);
+      if (wasOn) {
+        warnings.push(
+          `"${name}" runs on a schedule (${bridge.trigger.kind === 'replay' ? bridge.trigger.schedule?.cron : ''}): it was imported with the schedule switched off. Look it over, then turn the schedule on.`,
+        );
+      }
       return {
         ...bridge,
+        trigger,
         name,
         workspaceId,
         enabled: needsCredential ? false : bridge.enabled,
@@ -261,8 +285,22 @@ export class BridgeTransferService {
     let name = `${row.name} (copy)`;
     for (let n = 2; taken.has(name); n++) name = `${row.name} (copy ${n})`;
     const { createdAt: _c, updatedAt: _u, ...rest } = row;
+    // the copy keeps the schedule's line, switched off, and none of its history
+    let triggerJson = row.triggerJson;
+    if (triggerJson) {
+      const { trigger } = withScheduleOff(
+        JSON.parse(triggerJson) as BridgeInputDTO['trigger'],
+      );
+      triggerJson = JSON.stringify(trigger);
+    }
     const copy = await this.prisma.bridge.create({
-      data: { ...rest, id: randomUUID(), name },
+      data: {
+        ...rest,
+        id: randomUUID(),
+        name,
+        triggerJson,
+        scheduleStateJson: null,
+      },
     });
     return this.store.get(copy.id);
   }

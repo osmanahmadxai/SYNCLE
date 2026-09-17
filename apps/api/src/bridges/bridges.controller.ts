@@ -27,7 +27,9 @@ import {
   type BridgeJob,
   type StartJobDTO,
   type SkipDTO,
+  type BridgeScheduleStatus,
   type BridgeSourceHold,
+  type ReplaySchedule,
   type CdcReadiness,
   type CdcReadinessDTO,
   type LiveStartDTO,
@@ -47,6 +49,7 @@ import {
   liveStartSchema,
   mapRow,
   renderRow,
+  replayScheduleSchema,
   skipSchema,
   startJobSchema,
 } from '@syncle/core';
@@ -63,6 +66,7 @@ import type { ResolvedBridge } from './bridges.types';
 import { shapeRows } from './row-shaping';
 import { BridgeTransferService } from './bridge-transfer.service';
 import { SchemaDriftService } from './schema-drift.service';
+import { BridgeScheduleService, nextRuns } from './bridge-schedule.service';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
@@ -83,6 +87,7 @@ export class BridgesController {
     private readonly retention: RetentionService,
     private readonly transfer: BridgeTransferService,
     private readonly drift: SchemaDriftService,
+    private readonly schedule: BridgeScheduleService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -103,7 +108,10 @@ export class BridgesController {
   async create(
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
   ): Promise<Bridge> {
+    // a cron line the firing library will not take is refused before anything is saved
+    this.schedule.assertUsable(dto);
     const bridge = await this.store.create(dto);
+    await this.syncSchedule(bridge);
     // the table as the builder showed it is what this bridge is built for. (an
     // imported or cloned bridge has nobody looking at the table: its first run records it)
     await this.store
@@ -132,6 +140,7 @@ export class BridgesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
   ): Promise<Bridge> {
+    this.schedule.assertUsable(dto);
     // stop a live listener BEFORE the config changes, routed by the OLD trigger
     // kind — routing by the new one after an edit (say cdc → watch) would leave
     // the old stream running as a zombie, delivering into a finalized job
@@ -159,6 +168,8 @@ export class BridgesController {
       if (moved) await this.cdc.abandon(id, beforeResolved);
     }
 
+    // a new line, a new zone, switched off, no longer a replay at all: Redis is told
+    await this.syncSchedule(bridge);
     // the destination may have changed; drop the sink's ensured-table cache
     this.databaseSink.forget(id);
     // whoever saved the bridge had the table as it IS in front of them: that is
@@ -200,6 +211,31 @@ export class BridgesController {
   }
 
   /* ----- payload preview (no delivery) ----- */
+
+  /* ----- scheduled replays ----- */
+
+  /**
+   * the bridge is saved either way: a queue that is down must not lose an edit.
+   * the schedule is put right at the next boot, and the bridge's page says
+   * meanwhile that it is not active
+   */
+  private async syncSchedule(bridge: Bridge): Promise<void> {
+    await this.schedule.sync(bridge).catch((err) =>
+      this.logger.warn(`Could not update the replay schedule of ${bridge.id}: ${(err as Error).message}`),
+    );
+  }
+
+  /** when would this line fire? for the builder, while it is being typed. 400 with the reason if it cannot be used */
+  @Post('schedule-preview')
+  @HttpCode(200)
+  schedulePreview(@Body(new ZodValidationPipe(replayScheduleSchema)) dto: ReplaySchedule): { nextRuns: string[] } {
+    return { nextRuns: nextRuns(dto, 5) };
+  }
+
+  @Get(':id/schedule')
+  scheduleStatus(@Param('id') id: string): Promise<BridgeScheduleStatus> {
+    return this.schedule.status(id);
+  }
 
   /* ----- schema drift: has the source table changed since the bridge was set up? ----- */
 

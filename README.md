@@ -134,6 +134,11 @@ The rest is the same whichever destination and trigger you pick:
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
+- **Run it on a schedule.** A replay bridge takes a cron line and a named time
+  zone, and replays its source by itself — nightly, hourly, on weekdays. Never
+  two runs at once (a tick that finds one still going is skipped, and said),
+  always from the top, once per tick however many API processes share the
+  Redis, and correct across daylight saving.
 - **Survive a schema change.** Rename or drop a column a bridge maps and the
   bridge stops *before* it writes `NULL` over what the destination holds, naming
   the column. A harmless change — a column added, a type changed — is shown on

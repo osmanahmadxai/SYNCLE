@@ -24,7 +24,12 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
-import { BRIDGE_JOBS_QUEUE, BRIDGE_WATCH_QUEUE, type ResolvedBridge } from '../../bridges.types';
+import {
+  BRIDGE_JOBS_QUEUE,
+  BRIDGE_SCHEDULE_QUEUE,
+  BRIDGE_WATCH_QUEUE,
+  type ResolvedBridge,
+} from '../../bridges.types';
 import { SPOOL_KEY_PREFIX } from '../cdc-spool.service';
 import type {
   CdcProvider,
@@ -103,6 +108,7 @@ const OWN_KEY_PREFIXES = [
   // BullMQ's default prefix; Syncle sets none of its own
   `bull:${BRIDGE_JOBS_QUEUE}:`,
   `bull:${BRIDGE_WATCH_QUEUE}:`,
+  `bull:${BRIDGE_SCHEDULE_QUEUE}:`,
 ];
 
 @Injectable()

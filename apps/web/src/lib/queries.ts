@@ -46,6 +46,7 @@ export const queryKeys = {
   deadLetters: (id: string) => ['bridges', id, 'deadLetters'] as const,
   sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
   schemaDrift: (id: string) => ['bridges', id, 'schemaDrift'] as const,
+  bridgeSchedule: (id: string) => ['bridges', id, 'schedule'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -502,6 +503,33 @@ export function useSourceHold(bridgeId: string | null, enabled: boolean) {
     refetchInterval: 30_000,
     // the source may be unreachable; that is reported elsewhere, louder
     retry: false,
+  });
+}
+
+/**
+ * a bridge's replay schedule: whether it is firing, when next, and what became
+ * of the last tick. (under `bridges`, so saving the bridge refreshes it)
+ */
+export function useBridgeSchedule(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.bridgeSchedule(bridgeId) : ['bridgeSchedule', 'none'],
+    queryFn: () => api.bridgeSchedule(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/** the next fires of a line being typed in the builder. only asked for a line that has the shape of one */
+export function useSchedulePreview(schedule: { cron: string; timezone: string } | null) {
+  return useQuery({
+    queryKey: ['schedulePreview', schedule?.cron ?? '', schedule?.timezone ?? ''],
+    queryFn: () => api.schedulePreview(schedule as { cron: string; timezone: string }),
+    enabled: !!schedule,
+    staleTime: 30_000,
+    retry: false,
+    // a line the server has refused is not asked about again because the section re-mounted
+    retryOnMount: false,
   });
 }
 
