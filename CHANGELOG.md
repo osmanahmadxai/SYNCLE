@@ -297,6 +297,10 @@ can no longer lose a row to a failed delivery.
   not report a truncate as a change, asking for it is refused at start.
 - The CDC readiness check shows which columns the table identifies rows by, and
   warns about tables that can only report inserts.
+- **Command palette** (⌘K / Ctrl+K, or the search box in the sidebar): go to any
+  bridge or connection — by name, or by what it is ("cdc", "postgres") — create
+  one, open the data sources or Settings, switch workspace or theme. `cmdk` had
+  been a dependency since the first release with nothing using it.
 - **Dry run in the builder.** Before a bridge is saved: the table each database
   target would be created as, column by column with the source type beside the
   type it becomes; every column the target cannot hold faithfully; and real

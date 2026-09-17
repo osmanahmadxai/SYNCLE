@@ -16,6 +16,7 @@
     "toggle": "切换主题"
   },
   "nav": {
+    "search": "搜索或执行命令…",
     "dataSources": "数据源",
     "docs": "文档"
   },
@@ -324,5 +325,26 @@
     "fromSource": "来自源端的真实数据",
     "fromSample": "来自示例行",
     "noRows": "源端暂无可显示的行。"
+  },
+  "palette": {
+    "title": "命令面板",
+    "placeholder": "跳转到桥接或连接，或输入命令…",
+    "nothing": "没有匹配项。",
+    "newBridge": "新建桥接",
+    "newConnection": "新建连接",
+    "dataSources": "打开数据源",
+    "settings": "设置",
+    "editBridge": "编辑此桥接",
+    "lightTheme": "切换到浅色主题",
+    "darkTheme": "切换到深色主题",
+    "docs": "打开文档",
+    "switchTo": "切换到工作区 {name}",
+    "editConnection": "编辑连接 {name}",
+    "group": {
+      "actions": "操作",
+      "bridges": "桥接",
+      "connections": "连接",
+      "workspaces": "工作区"
+    }
   }
 }

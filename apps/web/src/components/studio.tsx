@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { useTranslations } from 'next-intl';
-import { BookOpen, Database } from 'lucide-react';
+import { BookOpen, Database, Search } from 'lucide-react';
 import { useStudio } from '@/lib/store';
 import { createUrlSync, type UrlState } from '@/lib/url-state';
 import {
@@ -21,6 +21,7 @@ import { BridgesView } from '@/components/bridges/bridges-view';
 import { BridgeList } from '@/components/bridges/bridge-list';
 import { BridgeBuilder } from '@/components/bridges/bridge-builder';
 import { DataSourcesManager } from '@/components/data-sources-manager';
+import { CommandPalette } from '@/components/command-palette';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 /**
@@ -39,6 +40,7 @@ export function Studio() {
     openBridgeEditor,
     closeBridgeEditor,
     closeDataSources,
+    setPaletteOpen,
   } = useStudio();
 
   // the UI's place lives in the URL, in both directions. it used to be written
@@ -46,6 +48,13 @@ export function Studio() {
   // Back left Syncle instead of returning to the bridge you were on, and
   // Forward into the app changed the address bar and nothing else
   const sync = useRef<ReturnType<typeof createUrlSync> | null>(null);
+
+  // the key the palette really answers to on this machine. decided after
+  // mount: the server cannot know, and guessing would mismatch on hydration
+  const [shortcut, setShortcut] = useState('Ctrl K');
+  useEffect(() => {
+    if (/mac|iphone|ipad/i.test(navigator.platform)) setShortcut('⌘K');
+  }, []);
 
   useEffect(() => {
     const created = createUrlSync(
@@ -160,6 +169,21 @@ export function Studio() {
               <WorkspaceSwitcher />
             </div>
             <Separator />
+            {/* the palette's visible door: nobody finds a shortcut they were never shown */}
+            <div className="px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                className="text-muted-foreground hover:bg-accent/50 flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-xs transition-colors"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span className="truncate">{t('search')}</span>
+                <kbd className="bg-muted ml-auto rounded px-1.5 py-0.5 font-mono text-[10px]">
+                  {shortcut}
+                </kbd>
+              </button>
+            </div>
+            <Separator />
             <BridgeList />
           </div>
         </ResizablePanel>
@@ -175,6 +199,7 @@ export function Studio() {
       <ConnectionDialog />
       <BridgeBuilder />
       <DataSourcesManager />
+      <CommandPalette />
     </>
   );
 }

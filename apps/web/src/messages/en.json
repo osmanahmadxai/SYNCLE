@@ -16,6 +16,7 @@
     "toggle": "Toggle theme"
   },
   "nav": {
+    "search": "Search or run a command…",
     "dataSources": "Data sources",
     "docs": "Docs"
   },
@@ -324,5 +325,26 @@
     "fromSource": "real rows from the source",
     "fromSample": "from a sample row",
     "noRows": "The source has no rows to show yet."
+  },
+  "palette": {
+    "title": "Command palette",
+    "placeholder": "Go to a bridge or a connection, or type a command…",
+    "nothing": "Nothing matches.",
+    "newBridge": "New bridge",
+    "newConnection": "New connection",
+    "dataSources": "Open data sources",
+    "settings": "Settings",
+    "editBridge": "Edit this bridge",
+    "lightTheme": "Switch to the light theme",
+    "darkTheme": "Switch to the dark theme",
+    "docs": "Open the documentation",
+    "switchTo": "Switch to workspace {name}",
+    "editConnection": "Edit connection {name}",
+    "group": {
+      "actions": "Actions",
+      "bridges": "Bridges",
+      "connections": "Connections",
+      "workspaces": "Workspaces"
+    }
   }
 }

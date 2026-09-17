@@ -136,6 +136,19 @@ export default function Page() {
         itself, not your machine.
       </p>
 
+      <h2 id="getting-around">Getting around</h2>
+      <p>
+        <kbd>⌘K</kbd> (<kbd>Ctrl</kbd>+<kbd>K</kbd> on Windows and Linux), or
+        the search box at the top of the sidebar, opens the command palette:
+        type a bridge&apos;s or a connection&apos;s name to go to it — or what
+        it <em>is</em>, such as <code>cdc</code> or <code>postgres</code> — or
+        pick an action: new bridge, new connection, data sources, settings,
+        switch workspace or theme. The bridge you have open, the data sources
+        surface and the builder are part of the URL, so a reload lands where
+        you were and the browser&apos;s Back and Forward buttons move between
+        them.
+      </p>
+
       <h2 id="where-next">Where next</h2>
       <p>
         <a href="/docs/bridges">How bridges work</a> explains trigger modes,

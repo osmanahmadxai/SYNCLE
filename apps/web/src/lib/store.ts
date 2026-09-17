@@ -86,6 +86,15 @@ interface StudioState {
 
   openConnectionDialog: (editingId?: string | null) => void;
   closeConnectionDialog: () => void;
+
+  /** the command palette (⌘K), so a button can open it as well as the keys */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
+
+  /** the Settings dialog; in the store so anything can open it (the palette) */
+  settings: { open: boolean; tab: string };
+  openSettings: (tab?: string) => void;
+  closeSettings: () => void;
 }
 
 const initial = freshTabs();
@@ -132,6 +141,14 @@ export const useStudio = create<StudioState>((set) => ({
     set({ bridgeEditor: { open: false, editingId: null, seed: null } }),
   openDataSources: () => set({ dataSourcesOpen: true }),
   closeDataSources: () => set({ dataSourcesOpen: false }),
+
+  paletteOpen: false,
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
+
+  settings: { open: false, tab: 'account' },
+  openSettings: (tab = 'account') => set({ settings: { open: true, tab } }),
+  closeSettings: () =>
+    set((s) => ({ settings: { ...s.settings, open: false } })),
 
   // actually switching workspace drops the selected bridge, table and
   // connection (they live in another one); re-setting the same id is a no-op

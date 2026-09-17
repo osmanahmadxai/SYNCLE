@@ -16,6 +16,7 @@
     "toggle": "Cambia tema"
   },
   "nav": {
+    "search": "Cerca o esegui un comando…",
     "dataSources": "Origini dati",
     "docs": "Documentazione"
   },
@@ -324,5 +325,26 @@
     "fromSource": "righe reali dall'origine",
     "fromSample": "da una riga di esempio",
     "noRows": "L'origine non ha ancora righe da mostrare."
+  },
+  "palette": {
+    "title": "Tavolozza dei comandi",
+    "placeholder": "Vai a un bridge o a una connessione, oppure scrivi un comando…",
+    "nothing": "Nessun risultato.",
+    "newBridge": "Nuovo bridge",
+    "newConnection": "Nuova connessione",
+    "dataSources": "Apri le sorgenti dati",
+    "settings": "Impostazioni",
+    "editBridge": "Modifica questo bridge",
+    "lightTheme": "Passa al tema chiaro",
+    "darkTheme": "Passa al tema scuro",
+    "docs": "Apri la documentazione",
+    "switchTo": "Passa allo spazio di lavoro {name}",
+    "editConnection": "Modifica la connessione {name}",
+    "group": {
+      "actions": "Azioni",
+      "bridges": "Bridge",
+      "connections": "Connessioni",
+      "workspaces": "Spazi di lavoro"
+    }
   }
 }
