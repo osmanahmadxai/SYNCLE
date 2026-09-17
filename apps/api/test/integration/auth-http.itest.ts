@@ -1,0 +1,262 @@
+/**
+ * Authentication, over real HTTP, against the application exactly as production
+ * configures it (configureApp). Until now the only evidence that the API was
+ * protected at all was reading the code.
+ */
+import 'reflect-metadata';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { applyTestEnv } from './env';
+
+applyTestEnv();
+
+let app: any;
+let base: string;
+let auth: any;
+let prisma: any;
+
+const PUBLIC = new Set([
+  'GET /api/health',
+  'GET /api/auth/status',
+  'POST /api/auth/setup',
+  'POST /api/auth/login',
+]);
+
+beforeAll(async () => {
+  const { NestFactory } = await import('@nestjs/core');
+  const { AppModule } = await import('../../src/app.module');
+  const { configureApp } = await import('../../src/configure-app');
+  const { AuthService } = await import('../../src/auth/auth.service');
+  const { PrismaService } = await import('../../src/common/prisma.service');
+  app = await NestFactory.create(AppModule, {
+    logger: false,
+    bodyParser: false,
+  });
+  configureApp(app);
+  await app.listen(0, '127.0.0.1');
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}`;
+  auth = app.get(AuthService);
+  prisma = app.get(PrismaService);
+  // a fresh instance: no operator account yet (this store is the test one)
+  await prisma.appUser.deleteMany({});
+  await auth.onModuleInit();
+}, 120_000);
+
+afterAll(async () => {
+  await prisma?.appUser.deleteMany({}).catch(() => undefined);
+  await app?.close().catch(() => undefined);
+});
+
+const call = (
+  method: string,
+  path: string,
+  init: {
+    body?: unknown;
+    cookie?: string;
+    headers?: Record<string, string>;
+  } = {},
+) =>
+  fetch(`${base}${path}`, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      ...(init.cookie ? { cookie: init.cookie } : {}),
+      ...init.headers,
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    redirect: 'manual',
+  });
+
+/** every route the application registered: [METHOD, path with :params filled in] */
+function routes(): Array<[string, string]> {
+  const router =
+    app.getHttpAdapter().getInstance()._router ??
+    app.getHttpAdapter().getInstance().router;
+  const found: Array<[string, string]> = [];
+  for (const layer of router.stack as Array<{
+    route?: { path: string; methods: Record<string, boolean> };
+  }>) {
+    if (!layer.route) continue;
+    for (const method of Object.keys(layer.route.methods)) {
+      if (method === '_all' || method === 'options' || method === 'head')
+        continue;
+      found.push([
+        method.toUpperCase(),
+        layer.route.path.replace(/:[A-Za-z]+\??/g, 'x'),
+      ]);
+    }
+  }
+  return found;
+}
+
+describe('without a session', () => {
+  it('every route answers 401, except the four that are meant to be open', async () => {
+    const all = routes();
+    // the walk has to be finding the API, or this proves nothing
+    expect(all.length).toBeGreaterThan(40);
+    expect(all.some(([m, p]) => m === 'GET' && p === '/api/connections')).toBe(
+      true,
+    );
+
+    const open: string[] = [];
+    for (const [method, path] of all) {
+      if (PUBLIC.has(`${method} ${path}`)) continue;
+      const res = await call(method, path, {
+        body: method === 'GET' || method === 'DELETE' ? undefined : {},
+      });
+      if (res.status !== 401) open.push(`${method} ${path} -> ${res.status}`);
+    }
+    // a stray @Public(), or a route registered outside the guard, shows up here
+    expect(open).toEqual([]);
+  });
+
+  it('the open ones say nothing they should not', async () => {
+    const health = await (await call('GET', '/api/health')).json();
+    expect(health).toEqual({ data: { ok: true } });
+    const status = await (await call('GET', '/api/auth/status')).json();
+    expect(status.data).toEqual({
+      needsSetup: true,
+      authenticated: false,
+      user: null,
+    });
+    expect(JSON.stringify(status)).not.toMatch(/version|token/i);
+  });
+
+  it('a forged or mangled cookie is no session', async () => {
+    for (const cookie of [
+      'db_session=abc',
+      'db_session=',
+      'db_session=%%%',
+      'other=1',
+    ]) {
+      expect((await call('GET', '/api/connections', { cookie })).status).toBe(
+        401,
+      );
+    }
+  });
+
+  it('does not tell another origin it may read the API with credentials', async () => {
+    const res = await call('GET', '/api/health', {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).not.toBe(
+      'https://evil.example',
+    );
+    expect(res.headers.get('access-control-allow-origin')).not.toBe('*');
+  });
+});
+
+describe('setup, sign in, sign out', () => {
+  let cookie = '';
+
+  it('needs the token from the server console', async () => {
+    const wrong = await call('POST', '/api/auth/setup', {
+      body: {
+        username: 'admin',
+        password: 'correct horse battery',
+        setupToken: 'nope-nope-nope',
+      },
+    });
+    expect(wrong.status).toBe(401);
+
+    const token = (auth as { setupToken: string }).setupToken;
+    const res = await call('POST', '/api/auth/setup', {
+      body: {
+        username: 'admin',
+        password: 'correct horse battery',
+        setupToken: token,
+      },
+    });
+    expect(res.status).toBe(201);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toMatch(/^db_session=/);
+    expect(setCookie).toMatch(/HttpOnly/i);
+    expect(setCookie).toMatch(/SameSite=Lax/i);
+    // plain HTTP here: a Secure cookie would be dropped by the browser
+    expect(setCookie).not.toMatch(/;\s*Secure/i);
+    cookie = setCookie.split(';')[0]!;
+    const body = await res.json();
+    expect(JSON.stringify(body)).not.toMatch(/passwordHash|correct horse/);
+  });
+
+  it('marks the cookie Secure when the browser came over HTTPS', async () => {
+    const res = await call('POST', '/api/auth/login', {
+      body: { username: 'admin', password: 'correct horse battery' },
+      headers: { 'x-forwarded-proto': 'https' },
+    });
+    expect(res.status).toBe(201);
+    expect(res.headers.get('set-cookie')).toMatch(/;\s*Secure/i);
+  });
+
+  it('cannot be set up a second time', async () => {
+    const res = await call('POST', '/api/auth/setup', {
+      body: {
+        username: 'intruder',
+        password: 'a long enough password',
+        setupToken: 'anything-at-all',
+      },
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it('the cookie opens the API, and signing out closes it', async () => {
+    expect((await call('GET', '/api/auth/me', { cookie })).status).toBe(200);
+    expect((await call('GET', '/api/connections', { cookie })).status).toBe(
+      200,
+    );
+    const version = await (
+      await call('GET', '/api/version', { cookie })
+    ).json();
+    expect(version.data.version).toMatch(/^\d+\.\d+\.\d+/);
+
+    const out = await call('POST', '/api/auth/logout', { cookie });
+    expect(out.status).toBe(201);
+    expect(out.headers.get('set-cookie')).toMatch(/db_session=;/);
+  });
+
+  it('a password change ends the sessions that came before it', async () => {
+    const login = await call('POST', '/api/auth/login', {
+      body: { username: 'admin', password: 'correct horse battery' },
+    });
+    const old = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const changed = await call('POST', '/api/auth/change-password', {
+      cookie: old,
+      body: {
+        currentPassword: 'correct horse battery',
+        newPassword: 'a different long password',
+      },
+    });
+    expect(changed.status).toBe(201);
+    const renewed = (changed.headers.get('set-cookie') ?? '').split(';')[0]!;
+    expect((await call('GET', '/api/auth/me', { cookie: old })).status).toBe(
+      401,
+    );
+    expect(
+      (await call('GET', '/api/auth/me', { cookie: renewed })).status,
+    ).toBe(200);
+  });
+});
+
+describe('guessing the password', () => {
+  it('is stopped even when every attempt claims to come from somewhere new', async () => {
+    // `trust proxy` makes req.ip the left-most X-Forwarded-For entry, and the
+    // web proxy relays that header as the browser sent it. keyed on address
+    // alone the lockout never fired: this loop could run for ever
+    const statuses: number[] = [];
+    for (let i = 0; i < 14; i++) {
+      const res = await call('POST', '/api/auth/login', {
+        body: { username: 'admin', password: `guess-number-${i}` },
+        headers: { 'x-forwarded-for': `198.51.100.${i}` },
+      });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 10)).toEqual(Array(10).fill(401));
+    expect(statuses.slice(10)).toEqual(Array(4).fill(429));
+    const body = await (
+      await call('POST', '/api/auth/login', {
+        body: { username: 'admin', password: 'x' },
+        headers: { 'x-forwarded-for': '198.51.100.250' },
+      })
+    ).json();
+    expect(body.error.code).toBe('RATE_LIMITED');
+  });
+});

@@ -73,6 +73,19 @@ export class AuthService implements OnModuleInit {
   private setupToken: string | null = null;
   /** per-ip:username lockout against online password guessing */
   private readonly loginLimiter = new AttemptLimiter();
+  /**
+   * …and per user name alone, whatever address the attempt claims to come from.
+   *
+   * the address is `req.ip`, and with `trust proxy` on that is the left-most
+   * X-Forwarded-For entry — which the bundled web proxy relays exactly as the
+   * browser sent it. so a guesser who puts a new made-up address in that header
+   * on every attempt got a fresh key every time, and the lockout above never
+   * fired: unlimited guesses. this one cannot be dodged. it is deliberately
+   * gentle — ten failures, then at most a minute — because the one person it
+   * can inconvenience is the operator, while a guesser is held to about one
+   * attempt a minute: 1,440 a day against a password.
+   */
+  private readonly usernameLimiter = new AttemptLimiter(10, 5_000, 60_000);
   /** per-ip lockout against setup-token guessing */
   private readonly setupLimiter = new AttemptLimiter(5, 60_000);
 
@@ -146,7 +159,9 @@ export class AuthService implements OnModuleInit {
 
   async login(username: string, password: string, ip: string): Promise<AppUser> {
     const key = `${ip}:${username}`;
+    const nameKey = `user:${username.trim().toLowerCase()}`;
     this.assertNotLocked(this.loginLimiter, key);
+    this.assertNotLocked(this.usernameLimiter, nameKey);
     const user = await this.prisma.appUser.findUnique({ where: { username } });
     // verify against a decoy hash even when the user is missing, so a wrong
     // username and a wrong password take the same time (no user enumeration)
@@ -156,9 +171,11 @@ export class AuthService implements OnModuleInit {
     );
     if (!user || !ok) {
       this.loginLimiter.fail(key);
+      this.usernameLimiter.fail(nameKey);
       throw new UnauthorizedError('Incorrect username or password.');
     }
     this.loginLimiter.succeed(key);
+    this.usernameLimiter.succeed(nameKey);
     return user;
   }
 
@@ -216,6 +233,7 @@ export class AuthService implements OnModuleInit {
    * setup. Same reasoning as the ready banner in main.ts.
    */
   private printSetupBanner(token: string): void {
+    // eslint-disable-next-line no-console -- on purpose, see above: it must print whatever the log level
     console.log(this.setupBanner(token));
   }
 
@@ -284,6 +302,11 @@ export class AuthService implements OnModuleInit {
    * the configured TTL.
    */
   async userFromRequest(req: Request): Promise<AppUser | null> {
+    return (await this.sessionFromRequest(req))?.user ?? null;
+  }
+
+  /** the user a request's cookie stands for, and how old that cookie is */
+  async sessionFromRequest(req: Request): Promise<{ user: AppUser; ageSec: number } | null> {
     const token = readCookie(req, SESSION_COOKIE);
     if (!token) return null;
     const payload = this.crypto.verifyToken<SessionPayload>(token);
@@ -297,7 +320,27 @@ export class AuthService implements OnModuleInit {
       where: { id: payload.uid },
     });
     if (!user || user.sessionVersion !== payload.v) return null;
-    return user;
+    return { user, ageSec };
+  }
+
+  /**
+   * the timeout is described everywhere — the setting, its hint, the docs — as
+   * minutes of INACTIVITY. it was nothing of the kind: the cookie's issue time
+   * was set at login and never again, so a session ended that long after
+   * signing in however busy it had been. with the setting at 15 minutes an
+   * operator was thrown out every quarter of an hour, mid-edit.
+   *
+   * an active session is given a fresh cookie once it is a tenth of the way
+   * through its life (and at least a minute old, so that a page making twenty
+   * requests does not get twenty cookies).
+   */
+  async renewIfDue(res: Response, session: { user: AppUser; ageSec: number }): Promise<boolean> {
+    const ttlSec = (await this.settings.resolved()).sessionTtlMinutes * 60;
+    if (session.ageSec < Math.max(60, ttlSec / 10)) return false;
+    // headers can no longer be set once a handler has started streaming
+    if (res.headersSent) return false;
+    await this.issueSession(res, session.user);
+    return true;
   }
 
   toAuthUser(user: AppUser): AuthUser {
@@ -356,7 +399,14 @@ function readCookie(req: Request, name: string): string | null {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
     if (part.slice(0, eq).trim() === name) {
-      return decodeURIComponent(part.slice(eq + 1).trim());
+      // whatever the client sent. `%%%` is not valid percent-encoding, and
+      // decodeURIComponent THROWS on it — which turned a junk cookie into a 500
+      // from every route instead of a 401
+      try {
+        return decodeURIComponent(part.slice(eq + 1).trim());
+      } catch {
+        return null;
+      }
     }
   }
   return null;

@@ -13,7 +13,6 @@ import type {
   UpsertRowsParams,
   AdapterCapabilities,
   ColumnSchema,
-  ConnectionConfig,
   DatabaseSchema,
   ForeignKeySchema,
   IndexSchema,

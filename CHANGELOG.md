@@ -205,6 +205,22 @@ can no longer lose a row to a failed delivery.
   chosen database now goes into the string. (The PostgreSQL change stream
   already did this, without encoding the name; it shares the helper now, and
   honours a TLS setting chosen beside a connection string, which it ignored.)
+- **The login lockout could be walked around.** Attempts were counted per
+  address and user name, and the address is `req.ip` — with `trust proxy` on,
+  the left-most `X-Forwarded-For` entry, which the bundled web proxy relays
+  exactly as the browser sent it. A guesser who put a new made-up address in
+  that header on every attempt got a fresh counter every time and was never
+  locked out. Failures are now also counted per user name, from anywhere: ten,
+  then a pause that doubles up to a minute — about one guess a minute. The
+  lockout table also forgot nothing until a key succeeded, which a made-up user
+  name never does; it is bounded now.
+- **The session timeout was not an inactivity timeout**, though the setting, its
+  hint and the docs all said so: the cookie's issue time was set at sign-in and
+  never again, so a session ended that long after signing in however busy it
+  had been. With it set to 15 minutes an operator was thrown out every quarter
+  of an hour, mid-edit. An active session is now renewed.
+- A malformed session cookie (`db_session=%%%`) made every route answer 500
+  instead of 401: `decodeURIComponent` throws on it.
 - **Half the interface ignored the language setting.** The data sources surface
   (schema tree, data grid, row editor, query editor, structure view, create
   table / database), the job view, the whole delivery timeline, the Settings
@@ -323,6 +339,19 @@ can no longer lose a row to a failed delivery.
   dialog — what a hosted database usually hands you. The adapters always
   accepted one; only MongoDB's form had a field for it. Stored encrypted and
   redacted like a password.
+- **Tests for authentication**, which had none: setup token, hashing, sign-in,
+  both throttles, cookie flags, tampering, expiry and renewal, the guard — and,
+  over real HTTP against the app exactly as production configures it, that every
+  one of the 60-odd routes answers 401 without a session except the four that
+  are meant to be open. A stray `@Public()` now fails a test.
+- **CI runs what matters.** The end-to-end suite against real PostgreSQL, MySQL,
+  MongoDB and Redis runs on every pull request, with the CDC spool off and on,
+  in a non-UTC time zone — every data-loss bug in this release was found by that
+  suite and none of it ran in CI. The API and core packages are linted
+  (type-aware ESLint: an unawaited promise is an error) where only the web app
+  was; coverage has floors; the web app's unit tests, which the coverage step
+  silently skipped, run; and Dependabot watches npm, the docs site, the Actions
+  and the base image, leaving the two patched packages alone.
 - **A running instance can say which version it is**: `GET /api/version`, and
   the bottom of the Settings dialog. The release build bakes the tag into the
   image (`SYNCLE_VERSION`), and a source checkout reads its package.json — which

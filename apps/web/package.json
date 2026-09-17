@@ -8,7 +8,8 @@
     "start": "node scripts/next-with-port.mjs start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",

@@ -10,7 +10,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { UnauthorizedError } from '@syncle/core';
 import { AuthService } from './auth.service';
 import { IS_PUBLIC } from './public.decorator';
@@ -27,10 +27,16 @@ export class AuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    const req = context.switchToHttp().getRequest<Request & { user?: unknown }>();
+    const http = context.switchToHttp();
+    const req = http.getRequest<Request & { user?: unknown }>();
 
-    const user = await this.auth.userFromRequest(req);
-    if (user) req.user = user;
+    const session = await this.auth.sessionFromRequest(req);
+    const user = session?.user ?? null;
+    if (session) {
+      req.user = session.user;
+      // using the app IS the activity the timeout counts from
+      await this.auth.renewIfDue(http.getResponse<Response>(), session).catch(() => undefined);
+    }
 
     if (isPublic) return true;
     if (!user) throw new UnauthorizedError();

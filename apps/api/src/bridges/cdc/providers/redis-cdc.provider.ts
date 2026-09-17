@@ -27,7 +27,6 @@ import type {
 import { BRIDGE_JOBS_QUEUE, BRIDGE_WATCH_QUEUE, type ResolvedBridge } from '../../bridges.types';
 import { SPOOL_KEY_PREFIX } from '../cdc-spool.service';
 import type {
-  CdcChange,
   CdcProvider,
   CdcStreamContext,
   CdcStreamHandle,

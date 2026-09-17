@@ -16,7 +16,6 @@ import {
   AppError,
   BadRequestError,
   ConflictError,
-  NotFoundError,
   advanceCursor,
   emptyCursor,
   rowKey,

@@ -52,6 +52,65 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # The end-to-end suite: real PostgreSQL, MySQL, MongoDB and Redis (plus a
+  # TLS-only instance of each, and an SSH server the tests start themselves).
+  # Every data-loss bug fixed in this project was found by a test here and none
+  # by a unit test — and none of it ran in CI, so a pull request could break a
+  # change stream and still go green.
+  #
+  # Twice: with the CDC spool off (the default) and on. They are different
+  # pipelines between the reader and the destination, and the spool one was
+  # broken for a Redis source for months without anything noticing.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        spool: ['off', 'on']
+    env:
+      # not UTC, on purpose: the timestamp bugs only showed up where the
+      # process's zone and UTC disagree
+      TZ: Asia/Kabul
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core
+        run: pnpm build:core
+
+      # `certs` is a one-shot service the TLS servers depend on; it is started
+      # through them rather than named here, because --wait treats a container
+      # that has exited — even successfully — as not up
+      - name: Start the databases
+        run: >
+          docker compose -f docker-compose.test.yml up -d --wait --wait-timeout 240
+          pg mysql mongo redis pg-tls mysql-tls mongo-tls redis-tls
+
+      - name: Integration tests (spool ${{ matrix.spool }})
+        run: pnpm --filter @syncle/api test:integration
+        env:
+          SYNCLE_CDC_SPOOL: ${{ matrix.spool == 'on' && 'on' || '' }}
+
+      - name: Database logs
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs --no-color --tail 200
+
+      - name: Stop the databases
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
   # the installer path (`syncle up`) builds this image on user machines —
   # keep it green in CI so a broken Dockerfile can't reach them
   docker:

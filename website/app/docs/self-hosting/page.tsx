@@ -20,11 +20,24 @@ export default function Page() {
         first run, guarded by a one-time setup token, with no signup (the{' '}
         <a href="/docs/quickstart">quickstart</a> walks through it). The
         password is hashed with scrypt, and the session is a signed httpOnly
-        cookie named <code>db_session</code> that expires after one week by
-        default; the length is configurable in-app under Settings › Security.
-        Login and setup attempts are rate-limited. Changing the password bumps
-        the account&apos;s session version, which instantly invalidates every
-        outstanding cookie on every device.
+        cookie named <code>db_session</code> that expires after one week{' '}
+        <em>of inactivity</em> by default — using the app renews it — with the
+        length configurable in-app under Settings › Security. Changing the
+        password bumps the account&apos;s session version, which instantly
+        invalidates every outstanding cookie on every device.
+      </p>
+      <p>
+        Sign-in attempts are throttled twice over. Five failures from one
+        address for one user name lock that pair out, for 30 seconds and
+        doubling up to 15 minutes. And ten failures for a user name{' '}
+        <em>from anywhere</em> pause sign-in for that name for a few seconds,
+        doubling up to one minute. The second exists because the first can be
+        dodged: the address is taken from <code>X-Forwarded-For</code>, which
+        a client can set to anything it likes, so a guesser who changed it on
+        every attempt was never locked out. The per-name throttle holds such
+        a guesser to about one attempt a minute, at the cost of making the
+        operator wait up to a minute during an attack. Setup attempts are
+        limited per address, and the setup token is 72 random bits.
       </p>
       <p>
         What Syncle does not ship: TLS. It serves plain HTTP, and the security

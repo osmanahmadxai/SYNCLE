@@ -4,8 +4,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { AppExceptionFilter } from './common/app-exception.filter';
-import { TransformInterceptor } from './common/transform.interceptor';
+import { configureApp } from './configure-app';
 import { runtimeConfig } from './common/runtime-config';
 
 const logger = new Logger('Bootstrap');
@@ -32,15 +31,7 @@ async function bootstrap(): Promise<void> {
     bodyParser: false,
   });
 
-  app.useBodyParser('json', { limit: '50mb' });
-  // the web app proxies /api to here, so X-Forwarded-Proto is what tells us
-  // the scheme the *browser* used — which decides whether the session cookie
-  // is marked Secure. without this every request looks like plain HTTP
-  app.set('trust proxy', true);
-  app.setGlobalPrefix('api');
-  app.enableCors({ origin: runtimeConfig.webOrigin, credentials: true });
-  app.useGlobalFilters(new AppExceptionFilter());
-  app.useGlobalInterceptors(new TransformInterceptor());
+  configureApp(app);
   app.enableShutdownHooks();
 
   await app.listen(runtimeConfig.port);
@@ -49,6 +40,7 @@ async function bootstrap(): Promise<void> {
   // URLs here, the web one first since that's the one you actually open. the
   // plain console.log so it always shows regardless of the nest log level
   const webPort = process.env.WEB_PORT?.trim() || '3002';
+  // eslint-disable-next-line no-console -- on purpose, see above
   console.log(
     `\n  Syncle · ready\n\n` +
       `    Web  http://localhost:${webPort}   ← open this\n` +
