@@ -198,6 +198,12 @@ can no longer lose a row to a failed delivery.
   cannot be reached from this side — the first query timed out on a connection
   that had "tested" fine. A tunnelled connection now talks only to the address
   it was given.
+- **The browser's Back button left Syncle** instead of returning to the bridge
+  you were on. The app wrote its place into the URL with `replaceState`, so the
+  whole session was a single history entry, and nothing listened for
+  `popstate`, so Forward back into the app changed the address bar and nothing
+  else. Opening a bridge, the data sources or the builder is now a history
+  entry; Back and Forward move between them; a reload still lands where it was.
 - **On a Docker install, almost no setting could be changed.** The compose file
   listed the API's environment by hand and passed two variables through, so the
   CDC spool, the batch sizes, the dead-letter limits and everything since were

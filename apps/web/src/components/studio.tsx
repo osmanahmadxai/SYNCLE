@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { useTranslations } from 'next-intl';
 import { BookOpen, Database } from 'lucide-react';
 import { useStudio } from '@/lib/store';
+import { createUrlSync, type UrlState } from '@/lib/url-state';
 import {
   ResizableHandle,
   ResizablePanel,
@@ -36,33 +37,70 @@ export function Studio() {
     openDataSources,
     bridgeEditor,
     openBridgeEditor,
+    closeBridgeEditor,
+    closeDataSources,
   } = useStudio();
 
-  // restore UI state from the URL on load and keep the URL in sync, so a
-  // refresh keeps you on the same bridge/surface instead of bouncing to root
+  // the UI's place lives in the URL, in both directions. it used to be written
+  // with replaceState and read once: the whole app was ONE history entry, so
+  // Back left Syncle instead of returning to the bridge you were on, and
+  // Forward into the app changed the address bar and nothing else
+  const sync = useRef<ReturnType<typeof createUrlSync> | null>(null);
+
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const bridge = p.get('bridge');
-    if (bridge) selectBridge(bridge);
-    if (p.get('data') === '1') openDataSources();
-    const edit = p.get('edit');
-    if (edit) openBridgeEditor({ editingId: edit });
+    const created = createUrlSync(
+      {
+        search: () => window.location.search,
+        pathname: () => window.location.pathname,
+        push: (url) => window.history.pushState(null, '', url),
+        replace: (url) => window.history.replaceState(null, '', url),
+        onPop: (listener) => {
+          window.addEventListener('popstate', listener);
+          return () => window.removeEventListener('popstate', listener);
+        },
+      },
+      {
+        // the store itself, not this render's snapshot of it
+        get: () => {
+          const now = useStudio.getState();
+          return {
+            bridge: now.selectedBridgeId,
+            data: now.dataSourcesOpen,
+            edit: now.bridgeEditor.open
+              ? (now.bridgeEditor.editingId ?? 'new')
+              : null,
+          };
+        },
+        apply: (state: UrlState) => {
+          const now = useStudio.getState();
+          if (now.selectedBridgeId !== state.bridge) selectBridge(state.bridge);
+          if (state.data && !now.dataSourcesOpen) openDataSources();
+          if (!state.data && now.dataSourcesOpen) closeDataSources();
+          const editing = now.bridgeEditor.open
+            ? (now.bridgeEditor.editingId ?? 'new')
+            : null;
+          if (state.edit === editing) return;
+          if (state.edit === null) closeBridgeEditor();
+          else
+            openBridgeEditor(
+              state.edit === 'new' ? undefined : { editingId: state.edit },
+            );
+        },
+      },
+    );
+    sync.current = created;
+    return created.start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const p = new URLSearchParams();
-    if (selectedBridgeId) p.set('bridge', selectedBridgeId);
-    if (dataSourcesOpen) p.set('data', '1');
-    if (bridgeEditor.open && bridgeEditor.editingId)
-      p.set('edit', bridgeEditor.editingId);
-    const qs = p.toString();
-    window.history.replaceState(
-      null,
-      '',
-      qs ? `?${qs}` : window.location.pathname,
-    );
-  }, [selectedBridgeId, dataSourcesOpen, bridgeEditor.open, bridgeEditor.editingId]);
+    sync.current?.write();
+  }, [
+    selectedBridgeId,
+    dataSourcesOpen,
+    bridgeEditor.open,
+    bridgeEditor.editingId,
+  ]);
 
   return (
     <>
