@@ -305,6 +305,50 @@ describe('an engine that pages by its own cursor (Redis)', () => {
     expect(calls[1]!.cursor).toBe('0');
   });
 
+  it('keeps an order the bridge asks for — paged by OFFSET, never by a key read back from a row', async () => {
+    const { adapter, calls } = scanned(PAGES, STARTS);
+    adapter.browse = async (p: BrowseParams) => {
+      calls.push(p);
+      const rows = [{ key: 'a' }, { key: 'b' }, { key: 'c' }].slice(
+        p.offset,
+        p.offset + p.limit,
+      );
+      return {
+        columns: [],
+        rows,
+        rowCount: rows.length,
+        executionMs: 0,
+        total: 3,
+        hasMore: p.offset + p.limit < 3,
+        primaryKey: ['key'],
+      } as unknown as BrowseResult;
+    };
+    const sort = [{ column: 'value', direction: 'desc' }];
+    const order = await reader(adapter).resolveOrder(bridgeOf({ sort }));
+    expect(order).toEqual({ sort, total: 3, keysetColumn: null });
+    const items = await all(
+      reader(adapter).rows(bridgeOf({ sort }), {
+        startOffset: 0,
+        resumeKey: null,
+      }),
+    );
+    expect(items.map((i) => i.row.key)).toEqual(['a', 'b', 'c']);
+    expect(
+      calls
+        .slice(1)
+        .every((c) => c.cursor === undefined && (c.filters ?? []).length === 0),
+    ).toBe(true);
+    expect(calls.slice(2).map((c) => c.offset)).toEqual([0, 2]);
+  });
+
+  it('…but "by the key, ascending" is the engine’s own order: what the builder always sends', async () => {
+    const { adapter } = scanned(PAGES, STARTS);
+    const sort = [{ column: 'key', direction: 'asc' }];
+    expect(
+      (await reader(adapter).resolveOrder(bridgeOf({ sort }))).cursorPaging,
+    ).toBe(true);
+  });
+
   it('needs no key and no sort', async () => {
     const { adapter } = scanned(PAGES, STARTS);
     expect(await reader(adapter).resolveOrder(bridgeOf())).toEqual({

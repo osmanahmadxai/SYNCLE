@@ -5,6 +5,7 @@
  */
 import { mongoTlsOptions } from '../tls-options';
 import {
+  BSON,
   Binary,
   Decimal128,
   Double,
@@ -14,6 +15,7 @@ import {
   ObjectId,
   Timestamp,
   UUID,
+  type Collection,
   type Db,
 } from 'mongodb';
 import type {
@@ -61,6 +63,8 @@ export const MONGODB_CAPABILITIES: AdapterCapabilities = {
   ddl: true,
   manageDatabases: false,
   backupFormats: ['json'],
+  // see browseFrom: a read of EVERY document pages by the typed `_id`
+  cursorPaging: true,
 };
 
 const SAMPLE_SIZE = 50;
@@ -246,6 +250,7 @@ export class MongodbAdapter implements DatabaseAdapter {
     const coll = db.collection(params.table);
     const limit = Math.min(Math.max(params.limit, 1), 1000);
     const filter = buildMongoFilter(params.filters);
+    if (params.cursor !== undefined) return this.browseFrom(coll, params.cursor, filter, limit);
     const sort: Record<string, 1 | -1> = {};
     for (const s of params.sort ?? []) {
       sort[s.column] = s.direction === 'desc' ? -1 : 1;
@@ -277,6 +282,62 @@ export class MongodbAdapter implements DatabaseAdapter {
       estimated: !hasFilters,
       hasMore,
       primaryKey: ['_id'],
+    };
+  }
+
+  /**
+   * one page of a read that means to see every document, in `_id` order, after
+   * the `_id` the cursor holds.
+   *
+   * the cursor is that `_id` AS BSON (canonical extended JSON), not as the text
+   * a row shows it as. rows carry an ObjectId as its 24 hex characters, and a
+   * reader that paged by "`_id` greater than the last row's" was asking MongoDB
+   * to compare ObjectIds with a string: nothing is greater than a value of
+   * another type, page two was empty, and a replay of any collection ended —
+   * `completed` — 200 documents in.
+   *
+   * a comparison only matches its own BSON type, so the documents whose `_id`
+   * is of a type that sorts LATER are asked for by type: a collection that
+   * mixes kinds of `_id` is still read to the end.
+   */
+  private async browseFrom(
+    coll: Collection,
+    cursor: string,
+    filter: Record<string, unknown>,
+    limit: number,
+  ): Promise<BrowseResult> {
+    const started = performance.now();
+    let after: unknown;
+    if (cursor && cursor !== '0') {
+      try {
+        after = (BSON.EJSON.parse(cursor, { relaxed: false }) as { id: unknown }).id;
+      } catch {
+        throw new BadRequestError('That is not a cursor this collection handed out.');
+      }
+    }
+    const clauses = [filter, after === undefined ? {} : afterId(after)].filter((c) => Object.keys(c).length > 0);
+    const query = clauses.length > 1 ? { $and: clauses } : (clauses[0] ?? {});
+    const probed = await coll.find(query).sort({ _id: 1 }).limit(limit + 1).toArray();
+    const hasMore = probed.length > limit;
+    const docs = hasMore ? probed.slice(0, limit) : probed;
+    const hasFilters = Object.keys(filter).length > 0;
+    const total = hasFilters
+      ? await coll.countDocuments(filter).catch(() => null)
+      : await coll.estimatedDocumentCount().catch(() => null);
+    const rows = docs.map(normalizeDoc);
+    return {
+      columns: inferColumns(docs).map((c) => ({ name: c.name })),
+      rows,
+      rowCount: rows.length,
+      executionMs: Math.round(performance.now() - started),
+      command: 'find',
+      total,
+      estimated: !hasFilters,
+      hasMore,
+      primaryKey: ['_id'],
+      nextCursor: hasMore
+        ? BSON.EJSON.stringify({ id: docs[docs.length - 1]!._id }, { relaxed: false })
+        : null,
     };
   }
 
@@ -722,48 +783,113 @@ function scalarValue(f: FilterSpec): unknown {
   return v;
 }
 
-function buildMongoFilter(
+/**
+ * BSON types in the order MongoDB sorts them, as far as an `_id` can be one.
+ * numbers compare with each other whatever their width, so they are one group
+ */
+const ID_TYPE_ORDER: string[][] = [
+  ['null'],
+  ['int', 'long', 'double', 'decimal'],
+  ['string', 'symbol'],
+  ['object'],
+  ['binData'],
+  ['objectId'],
+  ['bool'],
+  ['date'],
+  ['timestamp'],
+];
+
+function idTypeGroup(v: unknown): number {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number' || typeof v === 'bigint') return 1;
+  if (v instanceof Int32 || v instanceof Long || v instanceof Double || v instanceof Decimal128) return 1;
+  if (typeof v === 'string') return 2;
+  if (v instanceof Binary) return 4;
+  if (v instanceof ObjectId) return 5;
+  if (typeof v === 'boolean') return 6;
+  if (v instanceof Date) return 7;
+  if (v instanceof Timestamp) return 8;
+  return 3;
+}
+
+/** every document that sorts after `_id: last`, whatever type its own `_id` is */
+export function afterId(last: unknown): Record<string, unknown> {
+  const later = ID_TYPE_ORDER.slice(idTypeGroup(last) + 1).flat();
+  const greater = { _id: { $gt: last } };
+  return later.length ? { $or: [greater, { _id: { $type: later } }] } : greater;
+}
+
+/**
+ * the forms an `_id` written as text may have in the collection. a row shows an
+ * ObjectId as its 24 hex characters, and that text comes back in filters — the
+ * keys of the rows picked in the builder, the keys a dead-letter retry re-reads
+ * its rows by. compared as the string it looks like, it matches nothing: an
+ * ObjectId is not a string. (a collection MAY key its documents by such a
+ * string, so that form is kept beside the ObjectId rather than replaced by it.)
+ */
+function idForms(column: string, v: unknown): unknown[] {
+  return column === '_id' && typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v)
+    ? [new ObjectId(v), v]
+    : [v];
+}
+
+function comparison(column: string, op: '$lt' | '$lte' | '$gt' | '$gte', v: unknown): Record<string, unknown> {
+  const forms = idForms(column, v);
+  if (forms.length === 1) return { [column]: { [op]: v } };
+  // a comparison matches its own BSON type only: ask once per form
+  return { $or: forms.map((form) => ({ [column]: { [op]: form } })) };
+}
+
+export function buildMongoFilter(
   filters: FilterSpec[] | undefined,
 ): Record<string, unknown> {
   if (!filters || filters.length === 0) return {};
-  const query: Record<string, unknown> = {};
+  // one clause per filter, ANDed. they used to be assigned into ONE object by
+  // column, so of "age >= 18" and "age < 65" only the last survived
+  const clauses: Record<string, unknown>[] = [];
   for (const f of filters) {
     switch (f.operator) {
-      case 'eq':
-        query[f.column] = scalarValue(f);
+      case 'eq': {
+        const forms = idForms(f.column, scalarValue(f));
+        clauses.push({ [f.column]: forms.length === 1 ? forms[0] : { $in: forms } });
         break;
-      case 'neq':
-        query[f.column] = { $ne: scalarValue(f) };
+      }
+      case 'neq': {
+        const forms = idForms(f.column, scalarValue(f));
+        clauses.push({ [f.column]: forms.length === 1 ? { $ne: forms[0] } : { $nin: forms } });
         break;
+      }
       case 'lt':
-        query[f.column] = { $lt: scalarValue(f) };
+        clauses.push(comparison(f.column, '$lt', scalarValue(f)));
         break;
       case 'lte':
-        query[f.column] = { $lte: scalarValue(f) };
+        clauses.push(comparison(f.column, '$lte', scalarValue(f)));
         break;
       case 'gt':
-        query[f.column] = { $gt: scalarValue(f) };
+        clauses.push(comparison(f.column, '$gt', scalarValue(f)));
         break;
       case 'gte':
-        query[f.column] = { $gte: scalarValue(f) };
+        clauses.push(comparison(f.column, '$gte', scalarValue(f)));
         break;
       case 'contains':
-        query[f.column] = { $regex: escapeRegex(f.value), $options: 'i' };
+        clauses.push({ [f.column]: { $regex: escapeRegex(f.value), $options: 'i' } });
         break;
       case 'startsWith':
-        query[f.column] = { $regex: `^${escapeRegex(f.value)}`, $options: 'i' };
+        clauses.push({ [f.column]: { $regex: `^${escapeRegex(f.value)}`, $options: 'i' } });
         break;
       case 'endsWith':
-        query[f.column] = { $regex: `${escapeRegex(f.value)}$`, $options: 'i' };
+        clauses.push({ [f.column]: { $regex: `${escapeRegex(f.value)}$`, $options: 'i' } });
         break;
       case 'isNull':
-        query[f.column] = null;
+        clauses.push({ [f.column]: null });
         break;
       case 'notNull':
-        query[f.column] = { $ne: null };
+        clauses.push({ [f.column]: { $ne: null } });
         break;
       case 'in':
-        query[f.column] = { $in: Array.isArray(f.value) ? f.value : [] };
+        clauses.push({
+          [f.column]: { $in: (Array.isArray(f.value) ? f.value : []).flatMap((v) => idForms(f.column, v)) },
+        });
         break;
       default:
         throw new BadRequestError(
@@ -771,7 +897,7 @@ function buildMongoFilter(
         );
     }
   }
-  return query;
+  return clauses.length === 1 ? clauses[0]! : { $and: clauses };
 }
 
 function finalize(

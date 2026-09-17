@@ -152,3 +152,47 @@ describe('a resume token older than the oplog', () => {
     await handle.stop();
   });
 });
+
+describe('an update whose document is gone by the time it is looked up', () => {
+  it('is passed, not delivered as an update of nothing; the delete that follows is delivered', async () => {
+    fake.state.scripts = [
+      {
+        changes: [
+          { _id: { _data: 't1' }, operationType: 'update', documentKey: { _id: 7 }, fullDocument: { _id: 7, name: 'a' } },
+          // deleted before updateLookup ran: no fullDocument
+          { _id: { _data: 't2' }, operationType: 'update', documentKey: { _id: 7 } },
+          { _id: { _data: 't3' }, operationType: 'replace', documentKey: { _id: 7 }, fullDocument: null },
+          { _id: { _data: 't4' }, operationType: 'delete', documentKey: { _id: 7 }, fullDocumentBeforeChange: { _id: 7, name: 'a' } },
+        ],
+      },
+    ];
+    const seen: string[] = [];
+    const provider = new MongodbCdcProvider();
+    const handle = await provider.startStream({
+      bridgeId: 'b1',
+      bridge,
+      conn,
+      fromCursor: null,
+      handlers: {
+        onChange: async (c) => {
+          seen.push(`${c.op}:${JSON.stringify(c.row)}`);
+        },
+        onSkip: async (cursor) => {
+          seen.push(`skip:${cursor}`);
+        },
+        onError: (err) => {
+          seen.push(`error:${err.message}`);
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    await handle.stop();
+    expect(seen).toEqual([
+      'update:{"_id":7,"name":"a"}',
+      'skip:{"_data":"t2"}',
+      'skip:{"_data":"t3"}',
+      'delete:{"_id":7,"name":"a"}',
+    ]);
+  });
+});
+

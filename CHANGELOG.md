@@ -307,6 +307,30 @@ can no longer lose a row to a failed delivery.
   - Syncle's own keys (its job queues, a bridge's spool) are left out of a
     replay when the Redis being read is the one Syncle runs on, as they already
     were from a change stream.
+- **On MongoDB, nothing that looked a document up by its `_id` found it.** A row
+  shows an ObjectId as its 24 hex characters, and that text is what came back in
+  every filter on `_id`. MongoDB does not compare an ObjectId with a string, so
+  each of these matched nothing, without an error:
+  - a **replay ended — `completed` — after its first page** (200 documents) of
+    any collection keyed by ObjectId, which is nearly every collection;
+  - a bridge over **rows picked in the builder** delivered none of them;
+  - a **dead-letter retry** could not find the document it was retrying, took it
+    for deleted at the source, and resolved the entry *without ever delivering
+    it*.
+
+  A filter on `_id` now looks for the ObjectId the text shows (and for the text,
+  which a collection may legitimately use as a key). A read of a whole
+  collection pages by the typed `_id` itself, and still reaches the end of a
+  collection whose `_id`s are of several kinds.
+- **Two conditions on one MongoDB field left only the second.** `age >= 18` and
+  `age < 65` were written into one object under the same key; the bridge ran
+  with `age < 65` alone. Conditions are ANDed.
+- **MongoDB change stream: an update of a document deleted a moment later was
+  delivered as an update to nothing.** The document is looked up after the
+  event; when it was already gone, the row that went out held the `_id` and no
+  other field — NULLs written over a good row, or a row the destination refused,
+  which stopped the bridge. Such an update is now passed over; the delete is
+  next in the stream.
 - **Editing a bridge in the builder deleted parts of it.** The builder could
   write exactly one source filter — the row selection — and rebuilt the rest of
   the configuration from what it has controls for. Saving a bridge that had been

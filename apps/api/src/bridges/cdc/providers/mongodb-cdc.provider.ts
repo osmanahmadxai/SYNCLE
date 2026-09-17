@@ -151,6 +151,41 @@ export class MongodbCdcProvider implements CdcProvider {
     /* no-op */
   }
 
+  /**
+   * a resume token for "now": a change stream is opened, asked once for
+   * whatever it has (nothing — it has only just been opened), and the token the
+   * server hands back with that empty answer is kept. a stream started after it
+   * delivers every change made from this moment on
+   */
+  async capturePosition(
+    _bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+  ): Promise<string | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
+    try {
+      await client.connect();
+      const collection = client.db(src.database || conn.database || 'test').collection(src.table);
+      const stream = collection.watch([], {});
+      try {
+        await stream.tryNext();
+        const token: unknown = stream.resumeToken;
+        if (!token) {
+          throw new Error(
+            'MongoDB did not hand out a resume token for an empty change stream (this needs MongoDB 4.0.7 or later)',
+          );
+        }
+        return this.serializeToken(token);
+      } finally {
+        await stream.close().catch(() => undefined);
+      }
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }
+
   /* ----- the stream ----- */
 
   async startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle> {
@@ -193,7 +228,8 @@ export class MongodbCdcProvider implements CdcProvider {
           for await (const change of stream as AsyncIterable<ChangeStreamDocument>) {
             if (stopped) break;
             const mapped = this.mapChange(change);
-            if (mapped) await handlers.onChange(mapped);
+            if (mapped && 'skip' in mapped) await handlers.onSkip?.(mapped.skip);
+            else if (mapped) await handlers.onChange(mapped);
             resumeToken = (change as { _id?: unknown })._id ?? resumeToken;
           }
           // iterator ended without error (e.g. closed by stop())
@@ -241,15 +277,23 @@ export class MongodbCdcProvider implements CdcProvider {
     };
   }
 
-  /** map a change-stream event into the normalized shape, or null to skip */
-  private mapChange(change: ChangeStreamDocument): CdcChange | null {
+  /**
+   * map a change-stream event into the normalized shape; `skip` for one that is
+   * passed without being delivered, null for one that is not ours at all
+   */
+  private mapChange(change: ChangeStreamDocument): CdcChange | { skip: string } | null {
     const cursor = this.serializeToken((change as { _id?: unknown })._id);
     switch (change.operationType) {
       case 'insert':
       case 'update':
       case 'replace': {
         const full = (change as { fullDocument?: Record<string, unknown> }).fullDocument;
-        // on update the doc may have been deleted before updateLookup ran
+        // an update's document is looked up AFTER the event, and may be gone by
+        // then: deleted a moment later. what was delivered in that case was the
+        // `_id` on its own, as an "update" — a row of NULLs written over a good
+        // one, or refused by the destination, which stopped the bridge. there
+        // is nothing to update it TO; the delete is next in the stream
+        if (!full && change.operationType !== 'insert') return { skip: cursor };
         const row =
           full ?? ((change as { documentKey?: Record<string, unknown> }).documentKey ?? {});
         // replace behaves like an overwrite, so report it as an update

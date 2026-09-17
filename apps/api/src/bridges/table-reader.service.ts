@@ -77,7 +77,19 @@ export class TableReaderService {
     );
     const singlePk =
       probe.primaryKey.length === 1 ? probe.primaryKey[0]! : null;
-    if (cursorPaging) {
+    // the engine's cursor runs in the engine's own order (Redis: none; MongoDB:
+    // `_id`). an order the bridge asks for itself is kept — and then paged by
+    // OFFSET, never by `key > last`: on these engines a key read back from a
+    // row is not the key as the engine holds it (an ObjectId comes out as text)
+    const s = src.sort ?? [];
+    const ownOrder =
+      s.length > 0 &&
+      !(
+        s.length === 1 &&
+        s[0]!.column === singlePk &&
+        s[0]!.direction === 'asc'
+      );
+    if (cursorPaging && !ownOrder) {
       return {
         sort: [],
         total: probe.total,
@@ -85,15 +97,16 @@ export class TableReaderService {
         cursorPaging: true,
       };
     }
+    if (cursorPaging)
+      return { sort: s, total: probe.total, keysetColumn: null };
 
-    if (src.sort && src.sort.length > 0) {
+    if (s.length > 0) {
       // keyset only if the caller's order is exactly the (unique) primary key asc
-      const s = src.sort;
       const keyset =
         s.length === 1 && s[0]!.column === singlePk && s[0]!.direction === 'asc'
           ? singlePk
           : null;
-      return { sort: src.sort, total: probe.total, keysetColumn: keyset };
+      return { sort: s, total: probe.total, keysetColumn: keyset };
     }
     if (probe.primaryKey.length > 0) {
       return {
