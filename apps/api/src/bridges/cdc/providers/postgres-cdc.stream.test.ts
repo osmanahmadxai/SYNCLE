@@ -79,11 +79,21 @@ async function emit(lsn: string, msg: Record<string, unknown>): Promise<void> {
   await handler!(lsn, msg);
 }
 
-const bridgeWith = (operations: string[]) =>
+const TO_A_TABLE_KEYED_ON_ID = {
+  kind: 'database',
+  targets: [
+    { connectionId: 'd', table: 'users_copy', keyColumns: ['id'], mapping: [] },
+  ],
+};
+const bridgeWith = (
+  operations: string[],
+  destination: unknown = TO_A_TABLE_KEYED_ON_ID,
+) =>
   ({
     id: 'b1',
     source: { kind: 'table', connectionId: 'c', table: 'users' },
     trigger: { kind: 'cdc', operations },
+    destination,
   }) as never;
 const conn = { engine: 'postgres', host: 'h', port: 5432 } as never;
 const relation = { name: 'users', schema: 'public', keyColumns: ['id'] };
@@ -102,15 +112,24 @@ async function start(
     onSkip?: (cursor: string) => Promise<void>;
     onNotice?: (message: string, cursor: string) => Promise<void>;
   },
-  opts: { operations?: string[]; fromCursor?: string | null } = {},
+  opts: {
+    operations?: string[];
+    fromCursor?: string | null;
+    destination?: unknown;
+    primaryKey?: string[] | null;
+  } = {},
 ) {
   // no pool: the slot's own position cannot be looked up, which is best-effort
   const provider = new PostgresCdcProvider({} as never, NOT_SHARED);
   const handle = await provider.startStream({
     bridgeId: 'b1',
-    bridge: bridgeWith(opts.operations ?? ['insert', 'update']),
+    bridge: bridgeWith(
+      opts.operations ?? ['insert', 'update'],
+      opts.destination,
+    ),
     conn,
     fromCursor: opts.fromCursor ?? null,
+    primaryKey: opts.primaryKey,
     handlers: {
       onChange: handlers.onChange ?? (async () => undefined),
       onSkip: handlers.onSkip,
@@ -527,6 +546,118 @@ describe('postgres stream changes', () => {
     expect(changes.map((c) => c.op)).toEqual(['update']);
     expect(changes[0]).not.toHaveProperty('keyChanged');
     await handle.stop();
+  });
+
+  describe('under REPLICA IDENTITY FULL, where PostgreSQL marks EVERY column as an identity column', () => {
+    // what the server really sends for such a table: not the primary key
+    const whole = {
+      name: 'users',
+      schema: 'public',
+      keyColumns: ['id', 'email', 'name'],
+    };
+    const update = (
+      old: Record<string, unknown>,
+      now: Record<string, unknown>,
+    ) => ({ tag: 'update', relation: whole, old, new: now });
+    const run = async (
+      opts: { destination?: unknown; primaryKey?: string[] | null },
+      msg: Record<string, unknown>,
+    ) => {
+      const changes: Array<{
+        op: string;
+        cursor: string;
+        keyChanged?: boolean;
+        row: unknown;
+      }> = [];
+      const handle = await start(
+        { onChange: async (c) => void changes.push(c as never) },
+        { operations: ['insert', 'update', 'delete'], ...opts },
+      );
+      await emit('0/10', begin('0/90'));
+      await emit('0/20', msg);
+      await handle.stop();
+      return changes;
+    };
+    const row = { id: 1, email: 'a@example.test', name: 'a' };
+
+    it('an ordinary UPDATE is an update — not the row leaving and coming back', async () => {
+      const changes = await run(
+        { primaryKey: ['id'] },
+        update(row, { ...row, name: 'b' }),
+      );
+      expect(changes.map((c) => c.op)).toEqual(['update']);
+      expect(changes[0]).not.toHaveProperty('keyChanged');
+      // its position is the one it always had: a cursor saved before this was put right still means the same
+      expect(changes[0]!.cursor).toBe('0/90#0/20.1');
+    });
+
+    it('a change of the primary key is still the row moving', async () => {
+      const changes = await run(
+        { primaryKey: ['id'] },
+        update(row, { ...row, id: 2 }),
+      );
+      expect(changes).toEqual([
+        { op: 'delete', row, cursor: '0/90#0/20.0' },
+        {
+          op: 'update',
+          row: { ...row, id: 2 },
+          cursor: '0/90#0/20.1',
+          keyChanged: true,
+        },
+      ]);
+    });
+
+    it('so is a change of the column a target is KEYED on, primary key or not', async () => {
+      const keyedOnEmail = {
+        kind: 'database',
+        targets: [
+          {
+            connectionId: 'd',
+            table: 't',
+            keyColumns: ['mail'],
+            mapping: [{ source: 'email', target: 'mail' }],
+          },
+        ],
+      };
+      const moved = await run(
+        { destination: keyedOnEmail, primaryKey: ['id'] },
+        update(row, { ...row, email: 'b@example.test' }),
+      );
+      expect(moved.map((c) => c.op)).toEqual(['delete', 'update']);
+      const stayed = await run(
+        { destination: keyedOnEmail, primaryKey: ['id'] },
+        update(row, { ...row, name: 'b' }),
+      );
+      expect(stayed.map((c) => c.op)).toEqual(['update']);
+    });
+
+    it('a webhook is never told of a delete that did not happen', async () => {
+      const http = { kind: 'http', url: 'https://example.test' };
+      expect(
+        (
+          await run(
+            { destination: http, primaryKey: null },
+            update(row, { ...row, name: 'b' }),
+          )
+        ).map((c) => c.op),
+      ).toEqual(['update']);
+      expect(
+        (
+          await run(
+            { destination: http, primaryKey: ['id'] },
+            update(row, { ...row, name: 'b' }),
+          )
+        ).map((c) => c.op),
+      ).toEqual(['update']);
+      expect(
+        (
+          await run(
+            { destination: http, primaryKey: ['id'] },
+            update(row, { ...row, id: 5 }),
+          )
+        ).map((c) => c.op),
+      ).toEqual(['delete', 'update']);
+    });
   });
 
   it('a delete carries only the columns the message really has', async () => {

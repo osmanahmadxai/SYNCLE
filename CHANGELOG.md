@@ -171,7 +171,11 @@ can no longer lose a row to a failed delivery.
   whose key changed) it is read back from the source.
 - **An `UPDATE` of a primary key left the old row at the destination for ever**:
   the new row was upserted under its new key and nothing removed the old one.
-  It is now a delete of the old key followed by the new row.
+  It is now a delete of the old key followed by the new row. "The key" is what
+  identifies the row where it is going — the table's primary key and the columns
+  the bridge's targets are keyed on — not what PostgreSQL calls the identity: a
+  table with `REPLICA IDENTITY FULL` has every column marked as one, and an
+  ordinary `UPDATE` there is an update, not a delete and an update.
 - **A partitioned PostgreSQL table streamed nothing at all.** Its changes are
   logged against the partitions, arrived under the partitions' names, and were
   discarded as another table's. Publications are now created with

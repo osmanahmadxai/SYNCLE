@@ -203,12 +203,25 @@ describe('an UPDATE that changes the primary key', () => {
       const r = await dstRows(b.dest);
       return r.length === 1 && Number(r[0]!.id) === 9 ? r : null;
     });
-    // an ordinary update must not be mistaken for a move
+    // an ordinary update must not be mistaken for a move. (it was: PostgreSQL
+    // marks EVERY column of such a table as an identity column, so every update
+    // "changed the identity" and was delivered as a DELETE followed by the
+    // update — the end state the same, which is all this test used to look at)
+    const opsSoFar = async () => {
+      const j = await job(b.bridgeId);
+      const all = await app.prisma.bridgeDelivery.findMany({
+        where: { jobId: j.id },
+        orderBy: { sequence: 'asc' },
+      });
+      return all.map((d: { op: string | null }) => d.op);
+    };
+    expect(await opsSoFar()).toEqual(['insert', 'delete', 'update']);
     await src(`UPDATE "${b.source}" SET name = 'b' WHERE id = 9`);
     await waitFor('the update', async () =>
       (await dstRows(b.dest))[0]?.name === 'b' ? true : null,
     );
     expect(await dstRows(b.dest)).toHaveLength(1);
+    expect(await opsSoFar()).toEqual(['insert', 'delete', 'update', 'update']);
   });
 });
 

@@ -109,6 +109,8 @@ export interface CdcStreamContext {
    * provider never sees it
    */
   snapshot?: boolean;
+  /** the source table's primary key, where the orchestrator could find one */
+  primaryKey?: readonly string[] | null;
   handlers: CdcStreamHandlers;
 }
 

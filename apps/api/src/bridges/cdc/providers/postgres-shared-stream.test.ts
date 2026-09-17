@@ -110,6 +110,12 @@ function rig(positions: Record<string, string>) {
     bridgeId: string,
     table: string,
     fromCursor: string | null = null,
+    /** what the member's bridge writes to, and the primary key its orchestrator found */
+    to: {
+      keyColumns?: string[];
+      http?: boolean;
+      primaryKey?: string[] | null;
+    } = {},
   ) => {
     got[bridgeId] = [];
     const handle = await service.open(
@@ -124,12 +130,28 @@ function rig(positions: Record<string, string>) {
             startFrom: 'now',
             slot: 'shared',
           },
+          destination: to.http
+            ? { kind: 'http', url: 'https://example.test' }
+            : {
+                kind: 'database',
+                targets: [
+                  {
+                    connectionId: 'd',
+                    table: `${table}_copy`,
+                    keyColumns: to.keyColumns ?? ['id'],
+                    mapping: [],
+                  },
+                ],
+              },
         } as never,
         conn: {} as never,
         fromCursor,
+        primaryKey: to.primaryKey === undefined ? ['id'] : to.primaryKey,
         handlers: {
           onChange: async (c: CdcChange) =>
-            void got[bridgeId]!.push(`${c.op}:${String(c.row.id)}`),
+            void got[bridgeId]!.push(
+              `${c.op}:${String(c.row.id)}${c.keyChanged ? ':moved' : ''}`,
+            ),
           onSkip: async (cursor: string) =>
             void got[bridgeId]!.push(`skip:${cursor}`),
           onError: () => undefined,
@@ -246,6 +268,57 @@ describe('who is handed what', () => {
       'insert:3',
       'skip:0/200#c:0/210',
     ]);
+  });
+});
+
+describe('a table that sends whole rows (REPLICA IDENTITY FULL), read by members keyed differently', () => {
+  // PostgreSQL marks EVERY column of such a table as an identity column
+  const relation = {
+    schema: 'public',
+    name: 'users',
+    keyColumns: ['id', 'email', 'name'],
+  };
+  const row = { id: 1, email: 'a@example.test', name: 'a' };
+  const update = (now: Record<string, unknown>) => ({
+    tag: 'update',
+    relation,
+    old: row,
+    new: now,
+  });
+
+  it('an ordinary UPDATE is an update for everybody; a move is a move only for the member whose key moved', async () => {
+    const r = rig({ byId: '0/100', byEmail: '0/100', hook: '0/100' });
+    await r.open('byId', 'users');
+    await r.open('byEmail', 'users', null, { keyColumns: ['email'] });
+    await r.open('hook', 'users', null, { http: true });
+    await settle();
+    const reader = readers[0]!;
+
+    await reader.send('0/200', { tag: 'begin', commitLsn: '0/200' });
+    await reader.send('0/1A0', update({ ...row, name: 'b' }));
+    expect(r.got.byId).toEqual(['update:1']);
+    expect(r.got.byEmail).toEqual(['update:1']);
+    expect(r.got.hook).toEqual(['update:1']);
+
+    await reader.send('0/1B0', update({ ...row, email: 'b@example.test' }));
+    expect(r.got.byId).toEqual(['update:1', 'update:1']);
+    expect(r.got.byEmail).toEqual(['update:1', 'delete:1', 'update:1:moved']);
+    expect(r.got.hook).toEqual(['update:1', 'update:1']);
+  });
+
+  it('a member that was NOT handed the old row is not left waiting for it', async () => {
+    const r = rig({ byId: '0/100', byEmail: '0/100' });
+    await r.open('byId', 'users');
+    await r.open('byEmail', 'users', null, { keyColumns: ['email'] });
+    await settle();
+    const reader = readers[0]!;
+    await reader.send('0/200', { tag: 'begin', commitLsn: '0/200' });
+    await reader.send('0/1B0', update({ ...row, email: 'b@example.test' }));
+    await reader.send('0/1C0', { tag: 'insert', relation, new: { id: 2 } });
+    // byId was handed no delete, and still takes the insert that follows: the
+    // position it skipped is not one it is waiting for
+    expect(r.got.byId).toEqual(['update:1', 'insert:2']);
+    expect(r.got.byEmail).toEqual(['delete:1', 'update:1:moved', 'insert:2']);
   });
 });
 

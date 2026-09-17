@@ -859,6 +859,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         conn: route.conn,
         fromCursor: startCursor,
         snapshot: copiesFirst(bridge, cursorJson),
+        primaryKey: stream.primaryKey,
         handlers: {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
           onSkip: (cursor) => this.handleSkip(bridgeId, cursor),

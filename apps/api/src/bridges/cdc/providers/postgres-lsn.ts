@@ -4,7 +4,11 @@
  * shared-slot reader, which must agree on them to the byte — a cursor means the
  * same whichever of the two handed it out.
  */
-import { UNCHANGED } from '@syncle/core';
+import {
+  UNCHANGED,
+  sourceColumnFor,
+  type BridgeDestination,
+} from '@syncle/core';
 
 /**
  * Where a Postgres change sits in the stream.
@@ -198,4 +202,77 @@ export function clientIsDrained(service: unknown): boolean {
     s._messageQueue.length === 0 &&
     s._processing === false
   );
+}
+
+/**
+ * Has this UPDATE moved the row — changed what identifies it, so that the old
+ * row has to leave the destination before the new one arrives?
+ *
+ * PostgreSQL sends the old row's KEY (`key`) only when the identity columns
+ * changed: that is a move by definition. Under REPLICA IDENTITY FULL it sends
+ * the whole old row (`old`) with EVERY update, and marks every column of the
+ * table as an identity column — so "did an identity column change?" is true of
+ * every update there is, and each one was delivered as a DELETE followed by the
+ * update: twice the deliveries, a webhook told of a delete that never happened,
+ * and at a destination with ON DELETE CASCADE the row's children gone.
+ *
+ * What identifies the row where it is GOING is what counts: the table's primary
+ * key, and the columns the bridge's targets are keyed on.
+ */
+/**
+ * does this UPDATE take a position for an old row leaving, whether or not
+ * anybody is handed one? decided by the MESSAGE alone — never by who is
+ * reading — so that a cursor means the same thing to every member of a shared
+ * slot, and the same thing it meant before a bridge was upgraded or edited
+ */
+export function reservesOldRow(
+  msg: {
+    key?: Record<string, unknown> | null;
+    old?: Record<string, unknown> | null;
+    new?: Record<string, unknown>;
+  },
+  identityColumns: readonly string[],
+  same: (a: unknown, b: unknown) => boolean,
+): boolean {
+  const before = msg.key ?? msg.old;
+  return (
+    !!before &&
+    identityColumns.some(
+      (c) => before[c] !== undefined && !same(before[c], msg.new?.[c]),
+    )
+  );
+}
+
+export function rowMoved(
+  msg: {
+    key?: Record<string, unknown> | null;
+    old?: Record<string, unknown> | null;
+    new?: Record<string, unknown>;
+  },
+  identityColumns: readonly string[],
+  identifying: ReadonlySet<string>,
+  same: (a: unknown, b: unknown) => boolean,
+): boolean {
+  const before = msg.key ?? msg.old;
+  if (!before) return false;
+  const columns = msg.key
+    ? identityColumns
+    : identityColumns.filter((c) => identifying.has(c));
+  return columns.some(
+    (c) => before[c] !== undefined && !same(before[c], msg.new?.[c]),
+  );
+}
+
+/** the source columns that identify a row where a bridge sends it: the primary key, and what its targets are keyed on */
+export function identifyingColumns(
+  destination: BridgeDestination,
+  primaryKey: readonly string[] | null | undefined,
+): Set<string> {
+  const columns = new Set<string>(primaryKey ?? []);
+  if (destination.kind === 'database') {
+    for (const target of destination.targets)
+      for (const key of target.keyColumns)
+        columns.add(sourceColumnFor(key, target.mapping));
+  }
+  return columns;
 }

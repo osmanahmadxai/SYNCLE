@@ -60,18 +60,20 @@ import type { ResolvedBridge } from '../../bridges.types';
 import {
   backoffMs,
   delay,
-  type CdcChange,
   type CdcSourceHold,
   type CdcStreamContext,
   type CdcStreamHandle,
 } from '../cdc-provider';
 import {
   clientIsDrained,
+  identifyingColumns,
   lsnAfter,
   lsnForClient,
   normalizeLsn,
   parsePgCursor,
   present,
+  reservesOldRow,
+  rowMoved,
   sameValue,
   withUnchanged,
 } from './postgres-lsn';
@@ -83,6 +85,8 @@ interface Member {
   schema: string;
   table: string;
   ops: Set<CdcOperation>;
+  /** the source columns that identify a row where THIS member's bridge sends it (see rowMoved) */
+  identifying: Set<string>;
   handlers: CdcStreamContext['handlers'];
   /** the highest cursor handed to this member: anything at or before it has been had */
   highest: string | null;
@@ -375,37 +379,40 @@ class SharedStream {
           );
           return;
         }
-        // an UPDATE that changes the row's key is the row MOVING: the old one goes first
-        let keyChanged = false;
-        if (msg.tag === 'update' && relation) {
-          const before = msg.key ?? msg.old;
-          const moved =
-            !!before &&
-            (relation.keyColumns ?? []).some(
-              (c) =>
-                before[c] !== undefined && !sameValue(before[c], msg.new?.[c]),
-            );
-          if (moved) {
-            const cursor = at();
-            const row = present(before);
-            await each(
-              cursor,
-              (m) => mine(m) && m.ops.has('update'),
-              (m) => m.handlers.onChange({ op: 'delete', row, cursor }),
-            );
-            keyChanged = true;
-          }
+        // an UPDATE that changes what identifies the row is the row MOVING: the
+        // old one goes first. what identifies it is each member's own affair
+        // (its targets' keys), so one member may see a move where another sees
+        // an ordinary update
+        const before = msg.key ?? msg.old;
+        const movedFor = (m: Member): boolean =>
+          msg.tag === 'update' &&
+          !!relation &&
+          !!before &&
+          rowMoved(msg, relation.keyColumns ?? [], m.identifying, sameValue);
+        if (
+          msg.tag === 'update' &&
+          relation &&
+          before &&
+          reservesOldRow(msg, relation.keyColumns ?? [], sameValue)
+        ) {
+          const cursor = at(); // taken whoever is handed it: see reservesOldRow
+          const row = present(before);
+          await each(
+            cursor,
+            (m) => mine(m) && m.ops.has('update') && movedFor(m),
+            (m) => m.handlers.onChange({ op: 'delete', row, cursor }),
+          );
         }
         const cursor = at();
-        const change: CdcChange = {
-          op,
-          row: withUnchanged(msg.new ?? {}),
-          cursor,
-          ...(keyChanged ? { keyChanged } : {}),
-        };
+        const row = withUnchanged(msg.new ?? {});
         await each(cursor, mine, (m) =>
           m.ops.has(op)
-            ? m.handlers.onChange(change)
+            ? m.handlers.onChange({
+                op,
+                row,
+                cursor,
+                ...(movedFor(m) ? { keyChanged: true } : {}),
+              })
             : (m.handlers.onSkip?.(cursor) ?? Promise.resolve()),
         );
       })();
@@ -871,6 +878,7 @@ export class PgSharedSlotService {
         schema: src.schema || 'public',
         table: src.table,
         ops: new Set(operations),
+        identifying: identifyingColumns(bridge.destination, ctx.primaryKey),
         handlers,
         // what it has had: its saved cursor, or — never having read — everything before it joined
         highest: ctx.fromCursor ?? row.confirmedLsn,

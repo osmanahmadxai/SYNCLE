@@ -23,7 +23,19 @@ import {
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { nodeTlsOptions, withDatabase } from '@syncle/core/adapters';
 import { AdapterPoolService } from '../../../connections/adapter-pool.service';
-import { clientIsDrained, lsnAfter, lsnForClient, normalizeLsn, parsePgCursor, present, sameValue, withUnchanged } from './postgres-lsn';
+import {
+  clientIsDrained,
+  identifyingColumns,
+  lsnAfter,
+  lsnForClient,
+  normalizeLsn,
+  parsePgCursor,
+  present,
+  reservesOldRow,
+  rowMoved,
+  sameValue,
+  withUnchanged,
+} from './postgres-lsn';
 import { PgSharedSlotService } from './postgres-shared-slot';
 import type { ResolvedBridge } from '../../bridges.types';
 import {
@@ -598,6 +610,7 @@ export class PostgresCdcProvider implements CdcProvider {
     const src = bridge.source;
     const ops = new Set<CdcOperation>(bridge.trigger.operations);
     const schema = src.schema || 'public';
+    const identifying = identifyingColumns(bridge.destination, ctx.primaryKey);
 
     const plugin = new PgoutputPlugin({
       protoVersion: 1,
@@ -741,12 +754,14 @@ export class PostgresCdcProvider implements CdcProvider {
           if (msg.tag === 'update') {
             const before = msg.key ?? msg.old;
             const identityColumns = msg.relation.keyColumns ?? [];
-            const moved =
-              !!before &&
-              identityColumns.some((c) => before[c] !== undefined && !sameValue(before[c], msg.new?.[c]));
-            if (moved) {
-              await hand({ op: 'delete', row: present(before), cursor: at() });
-              keyChanged = true;
+            if (before && reservesOldRow(msg, identityColumns, sameValue)) {
+              const cursor = at(); // taken either way: see reservesOldRow
+              // (not "did an identity column change": under REPLICA IDENTITY FULL
+              // every column is one, and every update would be a move — see rowMoved)
+              if (rowMoved(msg, identityColumns, identifying, sameValue)) {
+                await hand({ op: 'delete', row: present(before), cursor });
+                keyChanged = true;
+              }
             }
           }
 
