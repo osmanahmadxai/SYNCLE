@@ -848,6 +848,29 @@ export class BridgeJobService implements OnModuleInit {
     ]);
   }
 
+  /**
+   * put a notice on the timeline: a `skipped` cell of zero rows whose text says
+   * what happened. used for things a bridge deliberately did not apply, which
+   * must be visible where deliveries are. idempotent per sequence, so a replay
+   * after a crash rewrites the same cell instead of adding another.
+   */
+  async recordNotice(jobId: string, sequence: number, message: string): Promise<void> {
+    await this.prisma.bridgeDelivery.upsert({
+      where: { jobId_sequence: { jobId, sequence } },
+      create: {
+        id: randomUUID(),
+        jobId,
+        sequence,
+        rowIndex: sequence,
+        rowCount: 0,
+        status: 'skipped',
+        attempts: 0,
+        error: message,
+      },
+      update: { status: 'skipped', error: message },
+    });
+  }
+
   async finalize(
     jobId: string,
     status: BridgeJobStatus,

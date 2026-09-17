@@ -61,6 +61,20 @@ export default function Page() {
         is the one prerequisite that cannot be automated, because it needs the
         restart.
       </p>
+      <p>
+        If the bridge will not <em>start</em> and the message mentions a{' '}
+        <strong>replica identity</strong>, the table has no primary key.
+        PostgreSQL can then only report inserts for it — and publishing
+        updates or deletes for such a table would make <code>UPDATE</code>{' '}
+        and <code>DELETE</code> on it fail in your own database, which is why
+        Syncle refuses instead of going ahead. Capture inserts only, add a
+        primary key, or run{' '}
+        <code>ALTER TABLE your_table REPLICA IDENTITY FULL;</code>. A refusal
+        that says <em>deletes cannot reach</em> a target is the same rule seen
+        from the other side: a delete carries only the source&apos;s key, so
+        the target has to be keyed on it. Both are explained under{' '}
+        <a href="/docs/cdc#postgres-table">what the table needs</a>.
+      </p>
 
       <h3 id="cdc-mysql">MySQL and MariaDB</h3>
       <p>
@@ -122,6 +136,17 @@ export default function Page() {
         is simply absent from the next poll and indistinguishable from one that
         was never there. Deletes need a CDC trigger, which reads them from the
         change log.
+      </p>
+      <p>
+        On a CDC bridge, check that <code>delete</code> is among its
+        operations, and that the target has key columns — an append-only
+        (<code>insert</code> mode) target records rows and has nothing to
+        delete by, so it never applies deletes. A <code>TRUNCATE</code> is not
+        a delete of every row: it is its own event, PostgreSQL-only and off by
+        default. When the source is truncated the timeline says so in an
+        amber entry, and the destination keeps its rows unless the bridge
+        captures <code>truncate</code> — see{' '}
+        <a href="/docs/cdc#operations">operations</a>.
       </p>
 
       <h2 id="cannot-connect">A connection will not test</h2>

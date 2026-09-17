@@ -179,6 +179,23 @@ describe('loadBridge', () => {
     expect([...d.cdcOps]).toEqual(['insert', 'delete']);
   });
 
+  it('keeps the opt-in truncate operation through a load and a save', () => {
+    const d = loadBridge(
+      httpBridge({
+        trigger: { kind: 'cdc', operations: ['insert', 'truncate'] },
+      }),
+    );
+    expect(d.cdcOps.has('truncate')).toBe(true);
+    expect(buildInput(d, ctx()).trigger).toEqual({
+      kind: 'cdc',
+      operations: ['insert', 'truncate'],
+    });
+  });
+
+  it('does not switch truncate on for a new bridge: it empties a table', () => {
+    expect(initialDraft().cdcOps.has('truncate')).toBe(false);
+  });
+
   it('hydrates header auth into the separate name/value fields', () => {
     const d = loadBridge(
       httpBridge({

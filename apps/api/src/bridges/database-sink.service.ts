@@ -29,6 +29,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  UnsupportedError,
   mapRow,
   planTargetTable,
   rowConverterFor,
@@ -114,6 +115,11 @@ export class DatabaseSinkService {
       }
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
+        if (op === 'truncate') {
+          summaries.push(`${label}: ${await this.truncate(target)}`);
+          succeeded.push(key);
+          continue;
+        }
         const convert = await this.converterFor(bridge, target);
         const affected = await this.writeRows(
           target,
@@ -149,6 +155,23 @@ export class DatabaseSinkService {
     };
   }
 
+  /** empty one target, as the source was emptied */
+  private async truncate(target: DatabaseTarget): Promise<string> {
+    return this.pool.withAdapter(target.connectionId, target.database, async (adapter) => {
+      try {
+        await adapter.truncateTable(target.table, target.schema);
+        return 'truncated';
+      } catch (err) {
+        // a key-value store has no table to empty; say so rather than fail a
+        // bridge over an operation its destination has no word for
+        if (err instanceof UnsupportedError) {
+          return 'truncate not applied (this engine has no tables to truncate)';
+        }
+        throw err;
+      }
+    });
+  }
+
   /** write every row to one target, returning the affected-row count */
   private async writeRows(
     target: DatabaseTarget,
@@ -177,6 +200,21 @@ export class DatabaseSinkService {
 
           if (op === 'delete') {
             const identities = mapped.map((m) => pick(m, target.keyColumns));
+            // a delete that does not say WHICH row is not a smaller delete: it
+            // matches nothing, reports "deleted 0", and the row stays for ever.
+            // that is a failure, and it has to look like one
+            for (const identity of identities) {
+              const blank = target.keyColumns.find(
+                (k) => identity[k] === undefined || identity[k] === null,
+              );
+              if (blank !== undefined) {
+                throw new Error(
+                  `the delete carries no value for key column "${blank}", so it cannot say which row to remove. ` +
+                    'The source only sends its own key with a delete: key this target on that, ' +
+                    'or make the source send whole rows (PostgreSQL: REPLICA IDENTITY FULL; MongoDB: pre-images).',
+                );
+              }
+            }
             if (adapter.deleteRows) {
               const res = await adapter.deleteRows({ schema, table, identities });
               affected += res.affectedRows ?? 0;

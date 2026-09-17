@@ -176,7 +176,13 @@ export const watchStrategySchema = z.discriminatedUnion('strategy', [
   }),
 ]);
 
-export const cdcOperationSchema = z.enum(['insert', 'update', 'delete']);
+/**
+ * `truncate` is a change of its own kind: it carries no row, and applying it
+ * empties the destination. it is never among the defaults — a bridge mirrors a
+ * TRUNCATE only when it was asked to — but it is never silent either: a
+ * truncate that is not applied leaves a notice on the bridge's timeline.
+ */
+export const cdcOperationSchema = z.enum(['insert', 'update', 'delete', 'truncate']);
 
 export const bridgeTriggerSchema = z.discriminatedUnion('kind', [
   // run on demand (replay the source when you press Run job)

@@ -11,12 +11,15 @@
  * logic, now behind the {@link CdcProvider} interface.
  */
 import { Injectable, Logger } from '@nestjs/common';
-import type {
-  CdcOperation,
-  CdcReadiness,
-  CdcReadinessDTO,
-  ConnectionConfig,
-  DatabaseEngine,
+import {
+  BadRequestError,
+  UNCHANGED,
+  sourceColumnFor,
+  type CdcOperation,
+  type CdcReadiness,
+  type CdcReadinessDTO,
+  type ConnectionConfig,
+  type DatabaseEngine,
 } from '@syncle/core';
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { nodeTlsOptions } from '@syncle/core/adapters';
@@ -31,25 +34,173 @@ import {
   type CdcStreamHandle,
 } from '../cdc-provider';
 
-/** compare Postgres LSNs ("H/L" hex). true if `a` is strictly after `b` */
+/**
+ * Where a Postgres change sits in the stream.
+ *
+ * It is NOT the change's own LSN, which is what this used to be. Two things are
+ * wrong with that, and both lost rows with nothing erroring:
+ *
+ *  1. Postgres tags every change with the WAL position it was written at, but
+ *     streams whole transactions in COMMIT order. A transaction that started
+ *     early and committed late arrives after ones with HIGHER positions, and a
+ *     "highest position seen" watermark discards its rows as already processed.
+ *     Measured with two overlapping transactions: rows [1, 2, 3] written,
+ *     [2, 3] delivered.
+ *  2. Positions are not unique. COPY writes a couple of hundred rows per WAL
+ *     record and every one of them carries that record's LSN, so as soon as a
+ *     batch boundary fell inside a record the rest of it compared as "not after
+ *     the watermark". Measured: COPY of 3000 rows, 1412 delivered.
+ *
+ * What IS ordered and unique: the transaction's commit position, then the
+ * change's position within it, then its ordinal among changes sharing that
+ * position. So a cursor is
+ *
+ *     <commitLsn>#<changeLsn>.<n>      a change
+ *     <commitLsn>#c:<commitEndLsn>     the end of a transaction
+ *
+ * The commit LSN comes from the transaction's BEGIN message. The end marker
+ * sorts after every change of its transaction and carries the position that may
+ * be confirmed to the server. All three parts are read off the WAL, so a
+ * transaction the server sends again (after a restart) gets the same cursors
+ * whatever the publication or the bridge's settings have become since.
+ *
+ * A bare `H/L` is a cursor saved before this existed: "everything that was sent
+ * before this position". Any transaction committing at or after it is accepted
+ * whole, which can re-deliver a few rows once after an upgrade (upserts absorb
+ * that) and can never skip one.
+ */
+export interface PgPosition {
+  /** the transaction's commit LSN (or the bare LSN of a legacy cursor) */
+  commit: bigint;
+  /** the change's own LSN; -1 for a legacy cursor, END for a transaction's end */
+  change: bigint;
+  /** ordinal among the changes sharing `change` */
+  ordinal: number;
+  /** the position that may be confirmed to the server once this one is durable */
+  ack: string | null;
+}
+
+const END = 1n << 64n;
+
+function lsnValue(text: string): bigint {
+  const [h, lo, ...rest] = text.split('/');
+  if (!h || !lo || rest.length || !/^[0-9a-f]{1,8}$/i.test(h) || !/^[0-9a-f]{1,8}$/i.test(lo)) {
+    throw new Error('invalid LSN');
+  }
+  return (BigInt('0x' + h) << 32n) | BigInt('0x' + lo);
+}
+
+/** the form Postgres prints: `16/B374D848` */
+export function formatLsn(value: bigint): string {
+  return `${(value >> 32n).toString(16).toUpperCase()}/${(value & 0xffffffffn).toString(16).toUpperCase()}`;
+}
+
+export function parsePgCursor(cursor: string): PgPosition | null {
+  try {
+    const hash = cursor.indexOf('#');
+    if (hash < 0) return { commit: lsnValue(cursor), change: -1n, ordinal: 0, ack: cursor };
+    const commit = lsnValue(cursor.slice(0, hash));
+    const rest = cursor.slice(hash + 1);
+    if (rest.startsWith('c:')) {
+      const end = rest.slice(2);
+      lsnValue(end); // validates
+      return { commit, change: END, ordinal: 0, ack: end };
+    }
+    const dot = rest.lastIndexOf('.');
+    if (dot < 0) return null;
+    const ordinal = Number(rest.slice(dot + 1));
+    if (!Number.isInteger(ordinal) || ordinal < 0) return null;
+    return { commit, change: lsnValue(rest.slice(0, dot)), ordinal, ack: null };
+  } catch {
+    return null;
+  }
+}
+
+/** true if position `a` is strictly after `b` (either cursor format) */
 export function lsnAfter(a: string, b: string | null): boolean {
   if (!b) return true;
+  const pa = parsePgCursor(a);
+  const pb = parsePgCursor(b);
+  // be conservative: treat a parse failure as "not after" to avoid dupes
+  if (!pa || !pb) return false;
+  if (pa.commit !== pb.commit) return pa.commit > pb.commit;
+  if (pa.change !== pb.change) return pa.change > pb.change;
+  return pa.ordinal > pb.ordinal;
+}
+
+/** `00000001/BD940508` (as the protocol messages print it) -> `1/BD940508` */
+function normalizeLsn(lsn: string): string {
   try {
-    const big = (l: string) => {
-      const [h, lo] = l.split('/');
-      if (!h || !lo) throw new Error('invalid LSN');
-      return (BigInt('0x' + h) << 32n) | BigInt('0x' + lo);
-    };
-    return big(a) > big(b);
+    return formatLsn(lsnValue(lsn));
   } catch {
-    // be conservative: treat a parse failure as "not after" to avoid dupes
-    return false;
+    return lsn;
   }
+}
+
+/**
+ * the LSN to hand the replication client so that the server is told exactly
+ * `lsn`. the client sends `lsn + 1` ("last byte + 1"), but the positions
+ * Postgres reports are ALREADY one past the last byte: a commit's end is where
+ * the next record starts. one byte further is inside that next record — and
+ * when that is another transaction's commit, Postgres treats the transaction
+ * as confirmed and never sends it again. measured with two transactions
+ * committing back to back and a restart between them: the second was gone.
+ */
+export function lsnForClient(lsn: string): string | null {
+  try {
+    const value = lsnValue(lsn);
+    return value > 0n ? formatLsn(value - 1n) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * a value the message did not include comes out of the decoder as `undefined`:
+ * a large column an UPDATE did not touch. mark it, so it is left alone at the
+ * destination instead of being written as NULL (see UNCHANGED in @syncle/core).
+ * under REPLICA IDENTITY FULL the decoder fills these from the old row, so there
+ * is nothing to mark.
+ */
+function withUnchanged(row: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const [k, v] of Object.entries(row)) {
+    if (v === undefined) (out ??= { ...row })[k] = UNCHANGED;
+  }
+  return out ?? row;
+}
+
+/** an old-row image, minus the columns it does not actually carry */
+function present(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) if (v !== undefined) out[k] = v;
+  return out;
+}
+
+/** decoded values compare by content: two Dates or Buffers are never `===` */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a instanceof Uint8Array && b instanceof Uint8Array) return Buffer.compare(a, b) === 0;
+  if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
+}
+
+/** what identifies a row in the table's change messages */
+interface ReplicaIdentity {
+  /** 'd' default (primary key) · 'i' an index · 'f' the whole row · 'n' nothing */
+  kind: 'd' | 'i' | 'f' | 'n';
+  /** columns an UPDATE/DELETE's old-row image carries; empty = it carries none */
+  columns: string[];
+  partitioned: boolean;
+  serverVersion: number;
 }
 
 @Injectable()
 export class PostgresCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'postgres';
+  readonly capturesTruncate = true;
   private readonly logger = new Logger('BridgeCdc:pg');
 
   constructor(private readonly pool: AdapterPoolService) {}
@@ -89,6 +240,42 @@ export class PostgresCdcProvider implements CdcProvider {
           `Grant replication to the connection's role:  ALTER ROLE "${conn.user ?? 'your_user'}" REPLICATION;`,
         );
       }
+      // table-level facts. they do not block readiness on their own — what a
+      // bridge may capture depends on its operations, which `provision` checks —
+      // but whoever is building the bridge should see them now, not at start
+      try {
+        const identity = await this.replicaIdentity(dto.connectionId, dto.database, dto.schema, dto.table);
+        const described =
+          identity.kind === 'f'
+            ? 'the whole row (REPLICA IDENTITY FULL)'
+            : identity.columns.length
+              ? identity.columns.join(', ')
+              : 'none';
+        checks.push({
+          label: 'table has a replica identity',
+          ok: identity.columns.length > 0 || identity.kind === 'f',
+          detail: `identifies rows by: ${described}`,
+        });
+        if (identity.columns.length === 0 && identity.kind !== 'f') {
+          instructions.push(
+            'This table has no primary key and no replica identity, so only INSERTs can be captured from it. ' +
+              'To capture updates and deletes, add a primary key, or run:  ' +
+              `ALTER TABLE ${this.qualified(dto.schema, dto.table)} REPLICA IDENTITY FULL;`,
+          );
+        }
+        if (identity.partitioned && identity.serverVersion < 130000) {
+          checks.push({
+            label: 'partitioned table (needs PostgreSQL 13+)',
+            ok: false,
+            detail: 'changes are reported under the partitions’ names on this server version',
+          });
+          instructions.push(
+            'This is a partitioned table on PostgreSQL 12 or older, where a publication cannot report changes under the parent’s name. Bridge each partition separately, or upgrade to 13+.',
+          );
+        }
+      } catch {
+        /* the table may not exist yet while the bridge is being drafted */
+      }
       return { engine: 'postgres', supported: true, ready: logical && canReplicate, checks, instructions };
     } catch (err) {
       return {
@@ -113,13 +300,132 @@ export class PostgresCdcProvider implements CdcProvider {
     return `"${id.replace(/"/g, '""')}"`;
   }
 
+  private qualified(schema: string | undefined, table: string): string {
+    return `${this.quoteIdent(schema || 'public')}.${this.quoteIdent(table)}`;
+  }
+
+  /** how the table identifies a row in its UPDATE/DELETE messages */
+  private async replicaIdentity(
+    connectionId: string,
+    database: string | undefined,
+    schema: string | undefined,
+    table: string,
+  ): Promise<ReplicaIdentity> {
+    return this.pool.withAdapter(connectionId, database, async (a) => {
+      const res = await a.query(
+        `select c.relreplident as kind, c.relkind,
+                current_setting('server_version_num')::int as version,
+                coalesce((
+                  -- ::text: the driver does not parse a name[] and hands back the string '{id}'
+                  select array_agg(att.attname::text order by k.ord)
+                  from pg_index i
+                  cross join lateral unnest(i.indkey) with ordinality as k(attnum, ord)
+                  join pg_attribute att on att.attrelid = i.indrelid and att.attnum = k.attnum
+                  where i.indrelid = c.oid
+                    and case c.relreplident when 'd' then i.indisprimary
+                                            when 'i' then i.indisreplident
+                                            else false end
+                ), '{}'::text[]) as columns
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = $1 and c.relname = $2`,
+        [schema || 'public', table],
+      );
+      const row = res.rows[0] as
+        | { kind?: string; relkind?: string; version?: number; columns?: string[] }
+        | undefined;
+      if (!row) throw new Error(`Table ${this.qualified(schema, table)} was not found.`);
+      return {
+        kind: (row.kind as ReplicaIdentity['kind']) ?? 'd',
+        columns: Array.isArray(row.columns) ? row.columns : [],
+        partitioned: row.relkind === 'p',
+        serverVersion: Number(row.version ?? 0),
+      };
+    });
+  }
+
+  /**
+   * refuse, BEFORE anything is created on the source, a bridge this table
+   * cannot serve. both refusals are about harm that would otherwise be silent:
+   *
+   * 1. publishing UPDATE/DELETE for a table with no replica identity makes
+   *    those statements FAIL at the source ("cannot update table … because it
+   *    does not have a replica identity and publishes updates"). creating the
+   *    publication would break the application that owns the database.
+   * 2. a DELETE message carries only the replica-identity columns. a target
+   *    keyed on any other column is handed a delete with no key in it, which
+   *    matches nothing: the row stays at the destination for ever, no error.
+   */
+  private assertServable(bridge: ResolvedBridge, identity: ReplicaIdentity): void {
+    if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') return;
+    const table = this.qualified(bridge.source.schema, bridge.source.table);
+    const ops = new Set<CdcOperation>(bridge.trigger.operations);
+    const full = identity.kind === 'f';
+
+    if ((ops.has('update') || ops.has('delete')) && !full && identity.columns.length === 0) {
+      throw new BadRequestError(
+        `${table} has no primary key and no replica identity, so PostgreSQL can only report INSERTs for it — ` +
+          'and publishing updates or deletes for such a table would make UPDATE and DELETE on it fail in your database. ' +
+          'Either capture inserts only, add a primary key, or run:  ' +
+          `ALTER TABLE ${table} REPLICA IDENTITY FULL;`,
+      );
+    }
+    if (identity.partitioned && identity.serverVersion < 130000) {
+      throw new BadRequestError(
+        `${table} is partitioned, and PostgreSQL ${Math.floor(identity.serverVersion / 10000)} reports its changes under the partitions' names. ` +
+          'Bridge each partition separately, or upgrade the server to 13+.',
+      );
+    }
+    if (!ops.has('delete') || full || bridge.destination.kind !== 'database') return;
+
+    const carried = new Set(identity.columns);
+    for (const target of bridge.destination.targets) {
+      const missing = target.keyColumns
+        .map((key) => sourceColumnFor(key, target.mapping))
+        .filter((column) => !carried.has(column));
+      if (missing.length > 0) {
+        throw new BadRequestError(
+          `Deletes cannot reach ${target.table}: it is keyed on ${target.keyColumns.join(', ')}, ` +
+            `but a DELETE on ${table} only carries ${identity.columns.join(', ')} ` +
+            `(${missing.join(', ')} would be missing). Key the target on ${identity.columns.join(', ')}, ` +
+            'stop capturing deletes, or have the table send whole rows:  ' +
+            `ALTER TABLE ${table} REPLICA IDENTITY FULL;`,
+        );
+      }
+    }
+  }
+
   async provision(bridgeId: string, bridge: ResolvedBridge): Promise<void> {
-    if (bridge.source.kind !== 'table') return;
+    if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') return;
     const src = bridge.source;
     const schema = src.schema || 'public';
     const pub = this.pubName(bridgeId);
     const slot = this.slotName(bridgeId);
     const target = `${this.quoteIdent(schema)}.${this.quoteIdent(src.table)}`;
+
+    const identity = await this.replicaIdentity(src.connectionId, src.database, src.schema, src.table);
+    this.assertServable(bridge, identity);
+
+    // publish ONLY what the bridge captures. a publication that publishes
+    // updates imposes the replica-identity requirement on the table even if
+    // nobody reads them, so "insert only" has to mean insert only on the server
+    // …with one exception: truncate is ALWAYS published. it costs the table
+    // nothing (no replica identity is needed for it), and a bridge that is not
+    // told about a TRUNCATE cannot even say that its destination has stopped
+    // matching — whether it is APPLIED is still the bridge's own choice
+    const publish = (['insert', 'update', 'delete', 'truncate'] as const)
+      .filter(
+        (op) =>
+          op === 'truncate' ||
+          (bridge.trigger.kind === 'cdc' && bridge.trigger.operations.includes(op)),
+      )
+      .join(', ');
+    // a partitioned table's changes are logged against its PARTITIONS; without
+    // this they arrive under the partition's name and are discarded as another
+    // table's — a partitioned source streamed nothing at all. harmless otherwise
+    const options =
+      `publish = '${publish}'` +
+      (identity.serverVersion >= 130000 ? ', publish_via_partition_root = true' : '');
 
     await this.pool.withAdapter(src.connectionId, src.database, async (a) => {
       // check the publication exists and points at the correct table. if the
@@ -136,10 +442,17 @@ export class PostgresCdcProvider implements CdcProvider {
         | { schemaname?: string; tablename?: string }
         | undefined;
       if (pubInfo.rows.length === 0) {
-        await a.query(`CREATE PUBLICATION ${this.quoteIdent(pub)} FOR TABLE ${target}`);
-      } else if (existing?.schemaname !== schema || existing?.tablename !== src.table) {
-        await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET TABLE ${target}`);
-        this.logger.log(`Updated CDC publication "${pub}" to target table "${schema}"."${src.table}"`);
+        await a.query(
+          `CREATE PUBLICATION ${this.quoteIdent(pub)} FOR TABLE ${target} WITH (${options})`,
+        );
+      } else {
+        if (existing?.schemaname !== schema || existing?.tablename !== src.table) {
+          await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET TABLE ${target}`);
+          this.logger.log(`Updated CDC publication "${pub}" to target table "${schema}"."${src.table}"`);
+        }
+        // publications made before this existed publish everything and never
+        // set the partition option; and the bridge's operations may have changed
+        await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET (${options})`);
       }
 
       const hasSlot = await a.query(
@@ -209,7 +522,15 @@ export class PostgresCdcProvider implements CdcProvider {
     // highest LSN the orchestrator has durably checkpointed (seeded from the
     // resume cursor). this is the ONLY position we ever confirm to the server,
     // so the slot can never advance past a change that isn't persisted yet
-    let ackedLsn: string | null = ctx.fromCursor;
+    let ackedLsn: string | null = await this.confirmedPosition(
+      bridgeId,
+      src,
+      ctx.fromCursor ? (parsePgCursor(ctx.fromCursor)?.ack ?? null) : null,
+    );
+    // the transaction being decoded: its commit LSN (from BEGIN), and the last
+    // change position handed out with how many changes have shared it. every
+    // change's cursor is derived from these
+    let txn: { commit: string; lsn: string; shared: number } | null = null;
     // surface each distinct failure ONCE (a slot already in use, bad auth, …)
     // instead of spamming onError on every backoff retry
     let lastReported: string | null = null;
@@ -220,6 +541,8 @@ export class PostgresCdcProvider implements CdcProvider {
     };
 
     const makeService = (): LogicalReplicationService => {
+      // a reconnect starts over at a transaction's BEGIN
+      txn = null;
       const service = new LogicalReplicationService(this.clientConfig(conn, src.database), {
         // manual acknowledge: auto-ack confirms an LSN on receipt, so a crash
         // between receipt and the orchestrator persisting the cursor would
@@ -248,29 +571,105 @@ export class PostgresCdcProvider implements CdcProvider {
           lsn: string,
           msg: {
             tag: string;
-            relation?: { name: string; schema: string };
+            commitLsn?: string;
+            commitEndLsn?: string;
+            relation?: { name: string; schema: string; keyColumns?: string[] };
+            relations?: Array<{ name: string; schema: string } | undefined>;
             new?: Record<string, unknown>;
-            old?: Record<string, unknown>;
-            key?: Record<string, unknown>;
+            old?: Record<string, unknown> | null;
+            key?: Record<string, unknown> | null;
           },
         ) => {
           // data is flowing, so the subscription is healthy: reset the backoff
           attempt = 0;
           lastReported = null;
-          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') {
-            await skip(lsn);
+
+          if (msg.tag === 'begin') {
+            txn = msg.commitLsn ? { commit: normalizeLsn(msg.commitLsn), lsn: '', shared: 0 } : null;
             return;
           }
+          if (msg.tag === 'commit') {
+            const commit = msg.commitLsn ? normalizeLsn(msg.commitLsn) : txn?.commit;
+            txn = null;
+            // the end of the transaction: the one position that, once everything
+            // before it is durable, may be confirmed to the server
+            if (commit) await skip(`${commit}#c:${normalizeLsn(msg.commitEndLsn ?? lsn)}`);
+            return;
+          }
+          // the position of the change being handled; each call is a new one.
+          // the bare `lsn` is only a fallback for a change that arrives outside
+          // a transaction, which pgoutput never sends
+          const at = (): string => {
+            if (!txn) return lsn;
+            txn.shared = txn.lsn === lsn ? txn.shared + 1 : 0;
+            txn.lsn = lsn;
+            return `${txn.commit}#${lsn}.${txn.shared}`;
+          };
+
+          if (msg.tag === 'truncate') {
+            const ours = (msg.relations ?? []).some(
+              (r) => r?.name === src.table && r?.schema === schema,
+            );
+            if (!ours) return void (await skip(at()));
+            if (ops.has('truncate')) {
+              await handlers.onChange({ op: 'truncate', row: {}, cursor: at() });
+            } else if (handlers.onNotice) {
+              // emptying someone's destination is not something to do on a
+              // default. but a destination that has silently stopped matching
+              // its source is not acceptable either: say so, on the timeline
+              await handlers.onNotice(
+                `${schema}.${src.table} was TRUNCATEd at the source. That was not applied to the destination, ` +
+                  'which still holds the rows: this bridge does not capture truncates. ' +
+                  'Add "truncate" to its operations to mirror them.',
+                at(),
+              );
+            } else {
+              await skip(at());
+            }
+            return;
+          }
+
+          // relation / type / origin / message: descriptions of what follows,
+          // tagged with the NEXT change's position. they are not positions of
+          // their own — treating one as passed is treating that change as done
+          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') return;
+
           if (!ops.has(msg.tag as CdcOperation)) {
-            await skip(lsn);
+            await skip(at());
             return;
           }
           if (!msg.relation || msg.relation.name !== src.table || msg.relation.schema !== schema) {
-            await skip(lsn);
+            await skip(at());
             return;
           }
-          const row = msg.tag === 'delete' ? (msg.old ?? msg.key ?? {}) : (msg.new ?? {});
-          const change: CdcChange = { op: msg.tag as CdcOperation, row, cursor: lsn };
+          if (msg.tag === 'delete') {
+            await handlers.onChange({ op: 'delete', row: present(msg.old ?? msg.key ?? {}), cursor: at() });
+            return;
+          }
+
+          // an UPDATE that changes the row's key is the row MOVING. the old-row
+          // image is there exactly when that can have happened: `key` when the
+          // identity columns changed, `old` under REPLICA IDENTITY FULL. writing
+          // the new row alone left the old one at the destination for ever
+          let keyChanged = false;
+          if (msg.tag === 'update') {
+            const before = msg.key ?? msg.old;
+            const identityColumns = msg.relation.keyColumns ?? [];
+            const moved =
+              !!before &&
+              identityColumns.some((c) => before[c] !== undefined && !sameValue(before[c], msg.new?.[c]));
+            if (moved) {
+              await handlers.onChange({ op: 'delete', row: present(before), cursor: at() });
+              keyChanged = true;
+            }
+          }
+
+          const change: CdcChange = {
+            op: msg.tag as CdcOperation,
+            row: withUnchanged(msg.new ?? {}),
+            cursor: at(),
+            ...(keyChanged ? { keyChanged } : {}),
+          };
           await handlers.onChange(change);
         },
       );
@@ -279,9 +678,8 @@ export class PostgresCdcProvider implements CdcProvider {
       // traffic. reply with the last PERSISTED position (the server ignores
       // stale ones) or wal_sender_timeout would kill an idle stream
       service.on('heartbeat', (_lsn: string, _ts: number, shouldRespond: boolean) => {
-        if (shouldRespond && ackedLsn) {
-          void service.acknowledge(ackedLsn).catch(() => undefined);
-        }
+        const at = ackedLsn && lsnForClient(ackedLsn);
+        if (shouldRespond && at) void service.acknowledge(at).catch(() => undefined);
       });
 
       service.on('error', (err: Error) => report(err));
@@ -316,14 +714,51 @@ export class PostgresCdcProvider implements CdcProvider {
       // called by the orchestrator once the cursor for this change is durably
       // persisted: only now may the slot's confirmed LSN move past the change
       ack: async (cursor: string) => {
-        ackedLsn = cursor;
-        await current?.acknowledge(cursor).catch(() => undefined);
+        // a position INSIDE a transaction confirms nothing: the server can only
+        // be told "everything up to here is safe" at a transaction's end. after
+        // a restart it re-sends the unfinished transaction whole, and the
+        // watermark drops the changes already delivered
+        const confirm = parsePgCursor(cursor)?.ack;
+        const at = confirm && lsnForClient(confirm);
+        if (!confirm || !at) return;
+        ackedLsn = confirm;
+        await current?.acknowledge(at).catch(() => undefined);
       },
       stop: async () => {
         stopped = true;
         await current?.stop().catch(() => undefined);
       },
     };
+  }
+
+  /**
+   * what keepalives are answered with until the first transaction is confirmed:
+   * the further of the saved cursor and what the slot already holds. answering
+   * with the slot's own position changes nothing on the server, but NOT
+   * answering gets an idle stream disconnected every wal_sender_timeout — a
+   * bridge started on a quiet table, or resumed in the middle of a transaction,
+   * had nothing to answer with
+   */
+  private async confirmedPosition(
+    bridgeId: string,
+    src: { connectionId: string; database?: string },
+    fromCursor: string | null,
+  ): Promise<string | null> {
+    let slot: string | null = null;
+    try {
+      const res = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+        a.query(
+          `select confirmed_flush_lsn::text as lsn from pg_replication_slots where slot_name = $1`,
+          [this.slotName(bridgeId)],
+        ),
+      );
+      const value = res.rows[0]?.lsn;
+      slot = typeof value === 'string' && value ? value : null;
+    } catch {
+      slot = null; // best effort: the saved cursor alone is what it used to be
+    }
+    if (!slot || !fromCursor) return slot ?? fromCursor;
+    return lsnAfter(slot, fromCursor) ? slot : fromCursor;
   }
 
   private clientConfig(conn: ConnectionConfig, database?: string) {

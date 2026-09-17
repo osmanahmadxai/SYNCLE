@@ -98,6 +98,64 @@ can no longer lose a row to a failed delivery.
   bridge from the job's config snapshot, which came back with an empty id — and
   the sink caches source columns by bridge id, so every replay shared one slot.
   Deliveries then failed with `column … does not exist`.
+- **PostgreSQL CDC lost rows without a single error**, in ways that only show
+  up under real traffic. Each was reproduced on the previous release before it
+  was fixed, and each now has a test against a real server.
+  - **Bulk loads.** `COPY` writes a couple of hundred rows per WAL record, and
+    every one of them is reported at that record's position. The stream used
+    the position both as the cursor and to drop "already processed" changes
+    after a reconnect, so once a batch boundary fell inside a record, the rest
+    of that record looked like duplicates. Measured: `COPY` of 3,000 rows into
+    a tracked table, 1,412 delivered.
+  - **Overlapping transactions.** PostgreSQL streams transactions in *commit*
+    order, but tags each change with where it was *written*. A transaction that
+    started first and committed last therefore arrives carrying lower positions
+    than changes already seen, and was discarded as old. Measured with two
+    sessions: rows 1, 2, 3 written; 2 and 3 delivered.
+  - **A restart between two transactions that committed back to back** lost the
+    second one. The replication client confirms `position + 1`, but a commit's
+    end position is already one past its last byte — so the extra byte reached
+    into the next commit record, and PostgreSQL considered that transaction
+    confirmed as well and never sent it again.
+
+  A change's position is now its transaction's commit position, then its own,
+  then its ordinal among changes sharing a record: ordered the way PostgreSQL
+  streams, unique per row, and the same if the server sends the transaction
+  again — so a stop in the middle of a large transaction resumes in the middle.
+  Only the end of a transaction is ever confirmed to the server, at exactly its
+  end. Cursors saved by earlier versions are still understood; the first start
+  after upgrading may deliver the last transaction once more.
+- **An `UPDATE` that did not touch a large column wiped it at the destination.**
+  PostgreSQL stores large values out of line (TOAST) and leaves them out of an
+  update that did not change them; "not sent" was read as `NULL`. The column is
+  now left out of the write, so the destination keeps its copy — through the
+  dead-letter queue and the spool as well. Where the value itself is needed (a
+  source filter on that column, an HTTP payload, a Redis destination, a row
+  whose key changed) it is read back from the source.
+- **An `UPDATE` of a primary key left the old row at the destination for ever**:
+  the new row was upserted under its new key and nothing removed the old one.
+  It is now a delete of the old key followed by the new row.
+- **A partitioned PostgreSQL table streamed nothing at all.** Its changes are
+  logged against the partitions, arrived under the partitions' names, and were
+  discarded as another table's. Publications are now created with
+  `publish_via_partition_root` (PostgreSQL 13+; on 12 the bridge is refused
+  with an explanation instead of sitting silent).
+- **Starting a CDC bridge could break the source application.** Publishing
+  updates or deletes for a table with no primary key and no replica identity
+  makes every `UPDATE` and `DELETE` on it fail, in the owner's database. Syncle
+  now checks before it creates anything and refuses, saying what to do
+  (capture inserts only, add a key, or `REPLICA IDENTITY FULL`). A publication
+  also now publishes only the operations the bridge captures, and is brought up
+  to date when they are edited — it used to keep whatever it was created with.
+- A delete that carries no value for the target's key column reported
+  "deleted 0" and succeeded, leaving the row behind. That happens when a target
+  is keyed on a column PostgreSQL does not send with a delete (it sends only
+  the replica identity). The bridge is now refused at start, and a delete
+  without its key is a failed delivery rather than a green tick.
+- A PostgreSQL CDC bridge on a table nobody was writing to was disconnected by
+  the server every `wal_sender_timeout` (60 s by default) and reconnected: with
+  nothing confirmed yet it had nothing to answer keepalives with. It now
+  answers with the slot's own position.
 - A delete reaching a target with no key columns (an `insert`-mode, append-only
   target) failed the whole delivery: there was nothing to delete by, and the
   empty `WHERE` was rejected by every engine. Such a target now simply does not
@@ -128,6 +186,15 @@ can no longer lose a row to a failed delivery.
     (`SYNCLE_DEAD_LETTER_MAX_ROWS`, 10,000).
 - The builder offers **On failure** for watch and CDC bridges, where it was
   previously hidden and fixed to `continue`.
+- **`TRUNCATE` is no longer invisible** (PostgreSQL sources). By default the
+  destination keeps its rows and the timeline gets an entry saying the source
+  was truncated and that it was not applied — before, the two simply stopped
+  matching and nothing said so. Add `truncate` to a bridge's operations to
+  empty the destination tables too; it is delivered alone and in order, so rows
+  inserted after the truncate are still there afterwards. On engines that do
+  not report a truncate as a change, asking for it is refused at start.
+- The CDC readiness check shows which columns the table identifies rows by, and
+  warns about tables that can only report inserts.
 - **TLS modes**: off, encrypt only, verify the authority, verify the authority
   *and* the host name — PostgreSQL's `sslmode` names, meaning the same on every
   engine and applied to every connection a bridge opens, the CDC streams

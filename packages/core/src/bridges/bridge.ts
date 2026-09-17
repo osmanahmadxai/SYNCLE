@@ -67,18 +67,34 @@ export function destinationNodeKeys(dest: BridgeDestination): string[] {
 type Row = Record<string, unknown>;
 
 /**
+ * a column the change did NOT carry, as opposed to one it set to NULL.
+ *
+ * PostgreSQL leaves a large (TOASTed) value out of an UPDATE's row image when
+ * the UPDATE did not touch it. that is "unchanged", and the only correct thing
+ * to do with it is nothing: writing NULL — what an absent value used to decay
+ * to — erased the destination's copy of every large column on every update of
+ * its row. a registered symbol, so it is one value across bundles and can never
+ * be mistaken for data.
+ */
+export const UNCHANGED = Symbol.for('syncle.unchanged');
+
+/**
  * project a source row onto the target's column names. an empty mapping means
  * "identity" (keep every column with its original name). `undefined` values are
- * normalized to `null` so drivers bind them as SQL NULL rather than erroring.
+ * normalized to `null` so drivers bind them as SQL NULL rather than erroring;
+ * a column marked {@link UNCHANGED} is left out of the write altogether.
  */
 export function mapRow(row: Row, mapping: ColumnMapping[]): Row {
   const out: Row = {};
   if (!mapping || mapping.length === 0) {
-    for (const [k, v] of Object.entries(row)) out[k] = v === undefined ? null : v;
+    for (const [k, v] of Object.entries(row)) {
+      if (v !== UNCHANGED) out[k] = v === undefined ? null : v;
+    }
     return out;
   }
   for (const m of mapping) {
-    out[m.target] = row[m.source] === undefined ? null : row[m.source];
+    const v = row[m.source];
+    if (v !== UNCHANGED) out[m.target] = v === undefined ? null : v;
   }
   return out;
 }

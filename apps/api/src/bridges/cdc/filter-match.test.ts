@@ -115,4 +115,23 @@ describe('rowMatchesFilters', () => {
       ).toBe(false);
     });
   });
+
+  describe('a column the source left out as unchanged', () => {
+    const UNCHANGED = Symbol.for('syncle.unchanged');
+
+    it('cannot fail a filter: the value is unknown, not absent and not NULL', () => {
+      // the orchestrator reads the value back before filtering. one that is
+      // still a marker here could not be read, and dropping the row over it
+      // would lose an update to a row the destination already holds
+      for (const op of ['eq', 'neq', 'contains', 'startsWith', 'notNull', 'isNull', 'gt'] as const) {
+        expect(rowMatchesFilters({ id: 1, body: UNCHANGED }, [f('body', op, 'x')])).toBe(true);
+      }
+    });
+
+    it('the other filters still apply', () => {
+      const filters = [f('body', 'contains', 'x'), f('status', 'eq', 'active')];
+      expect(rowMatchesFilters({ body: UNCHANGED, status: 'active' }, filters)).toBe(true);
+      expect(rowMatchesFilters({ body: UNCHANGED, status: 'archived' }, filters)).toBe(false);
+    });
+  });
 });

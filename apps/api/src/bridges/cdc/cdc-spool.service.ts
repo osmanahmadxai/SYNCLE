@@ -26,9 +26,18 @@ import type { CdcOperation } from '@syncle/core';
 import { redisConnectionOptions } from '../../common/runtime-config';
 import { decodeRows, encodeRows } from '../row-codec';
 
+/**
+ * what a spooled entry is. besides the four changes there is `notice`:
+ * something that happened at the source and was deliberately not applied (see
+ * CdcStreamHandlers.onNotice). it travels through the spool like a change, with
+ * `row.message` as its text, so it lands on the timeline in order — behind the
+ * rows read before it, ahead of the ones read after
+ */
+export type SpoolOp = CdcOperation | 'notice';
+
 /** one change as it is held in the spool */
 export interface SpoolEntry {
-  op: CdcOperation;
+  op: SpoolOp;
   row: Record<string, unknown>;
   cursor: string;
 }
@@ -46,7 +55,7 @@ export function encodeEntry(entry: SpoolEntry): string {
 /** inverse of {@link encodeEntry}; also reads entries spooled before the codec */
 export function decodeEntry(text: string): SpoolEntry {
   const raw = JSON.parse(text) as {
-    op: CdcOperation;
+    op: SpoolOp;
     cursor: string;
     r?: string;
     row?: Record<string, unknown>;

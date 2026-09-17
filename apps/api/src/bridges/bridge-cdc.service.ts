@@ -28,6 +28,7 @@ import {
   type ConnectionConfig,
   type DatabaseEngine,
   type BridgeJob,
+  UNCHANGED,
 } from '@syncle/core';
 import { randomUUID } from 'node:crypto';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
@@ -49,7 +50,7 @@ import {
   type CdcStreamHandle,
 } from './cdc/cdc-provider';
 import { rowMatchesFilters } from './cdc/filter-match';
-import { CdcSpoolService, type SpooledItem } from './cdc/cdc-spool.service';
+import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
 
 /** live runtime state for one active CDC stream */
 interface Stream {
@@ -110,6 +111,12 @@ interface Stream {
   halted: boolean;
   /** batches in a row that delivered nothing, to spot a dead destination */
   consecutiveFailures: number;
+  /**
+   * does a destination store the row as ONE value (a key-value store)? such a
+   * write cannot "leave a column alone". resolved on first need; see
+   * `completeRow`
+   */
+  wholeValueTarget: boolean | null;
 }
 
 /** one change held in the pending batch */
@@ -206,6 +213,13 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (!provider) {
       throw new BadRequestError(
         `Event-based delivery isn't available for ${conn.engine}. Use the polling trigger instead.`,
+      );
+    }
+
+    if (bridge.trigger.operations.includes('truncate') && !provider.capturesTruncate) {
+      throw new BadRequestError(
+        `${conn.engine} does not report a TRUNCATE as a change, so this bridge would never see one. ` +
+          'Remove "truncate" from its operations (it is available for PostgreSQL sources).',
       );
     }
 
@@ -354,6 +368,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       consumer: null,
       halted: false,
       consecutiveFailures: 0,
+      wholeValueTarget: null,
     };
     this.streams.set(bridgeId, stream);
 
@@ -367,6 +382,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         handlers: {
           onChange: (change) => this.handleChange(bridgeId, bridge, change),
           onSkip: (cursor) => this.handleSkip(bridgeId, cursor),
+          onNotice: (message, cursor) => this.handleNotice(bridgeId, message, cursor),
           onError: (err) => this.logger.warn(`CDC stream error for ${bridgeId}: ${err.message}`),
         },
       });
@@ -433,6 +449,151 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     return stream.pending;
   }
 
+  /**
+   * something happened at the source that was deliberately not applied (a
+   * TRUNCATE on a bridge that does not mirror them). it goes on the timeline IN
+   * ORDER — after everything read before it has been delivered — as a skipped
+   * cell carrying the explanation, and the stream then moves past it.
+   */
+  private handleNotice(bridgeId: string, message: string, cursor: string): Promise<void> {
+    const stream = this.streams.get(bridgeId);
+    if (!stream) return Promise.resolve();
+    stream.pending = stream.pending
+      .then(async () => {
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        // an event, so it is deduplicated the way a change is: against what has
+        // been durably processed, not against what is merely buffered
+        if (!stream.provider.cursorAfter(cursor, stream.watermark)) return;
+        await this.flush(bridgeId, stream);
+        if (stream.inflight) await stream.inflight.catch(() => undefined);
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+        this.logger.warn(`CDC ${bridgeId}: ${message}`);
+        if (stream.spooled) {
+          // the consumer owns the sequence numbers here, so the notice queues up
+          // behind the changes already spooled and is recorded when reached
+          await this.spoolBatch(bridgeId, stream, [{ op: 'notice', row: { message }, cursor }], cursor);
+          return;
+        }
+        await this.settle(bridgeId, stream, async () => {
+          const seq = stream.seq;
+          await this.jobs.recordNotice(stream.jobId, seq, message);
+          await this.checkpoint(stream, seq + 1, cursor);
+        });
+      })
+      .catch((err) => {
+        this.logger.error(`CDC notice chain broke for ${bridgeId}: ${(err as Error).message}`);
+      });
+    return stream.pending;
+  }
+
+  /**
+   * Postgres leaves a large (TOASTed) column out of an UPDATE that did not
+   * touch it, and the row arrives with UNCHANGED in its place.
+   *
+   * For a table-shaped destination that is all that is needed: the column is
+   * left out of the upsert, and the destination keeps the copy it has. But some
+   * things need the VALUE, and leaving it out is wrong for them:
+   *
+   *  - a source filter on that column cannot be evaluated without it
+   *  - an HTTP payload would go out with the column missing
+   *  - a key-value destination stores the row as one value: a write without the
+   *    column REPLACES a value that had it
+   *  - a row that moved to a new key has no earlier copy at the destination to
+   *    keep anything from
+   *
+   * For those, the row is read back from the source by its key and the missing
+   * columns are filled in from it. That is the row as it is NOW, which may be a
+   * moment newer than this change — the changes in between are still on their
+   * way and will write the same values again, so the destination converges.
+   *
+   * Returns the row to carry on with, or null when the read kept failing and
+   * the bridge was stopped (the cursor has not moved, so nothing is lost).
+   */
+  private async completeRow(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    stream: Stream,
+    change: CdcChange,
+  ): Promise<Row | null> {
+    const row = change.row;
+    if (bridge.source.kind !== 'table') return row;
+    const src = bridge.source;
+    const missing = Object.keys(row).filter((c) => row[c] === UNCHANGED);
+
+    const needed =
+      change.keyChanged === true ||
+      bridge.destination.kind === 'http' ||
+      (src.filters ?? []).some((f) => missing.includes(f.column)) ||
+      (await this.hasWholeValueTarget(bridge, stream));
+    if (!needed) return row;
+
+    // without the missing columns, an HTTP payload simply does not have them —
+    // better than the text of a marker. tables ignore them either way
+    const without = (): Row =>
+      bridge.destination.kind === 'http'
+        ? Object.fromEntries(Object.entries(row).filter(([, v]) => v !== UNCHANGED))
+        : row;
+
+    const key = stream.primaryKey;
+    if (!key?.length || key.some((c) => row[c] === undefined || row[c] === null || row[c] === UNCHANGED)) {
+      return without();
+    }
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const page = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+          a.browse({
+            schema: src.schema,
+            table: src.table,
+            filters: key.map((column) => ({ column, operator: 'eq' as const, value: row[column] })),
+            limit: 1,
+            offset: 0,
+          }),
+        );
+        const current = page.rows[0];
+        // gone since: its delete is further along the stream
+        if (!current) return without();
+        const filled: Row = { ...row };
+        for (const column of missing) {
+          if (column in current) filled[column] = current[column];
+        }
+        return bridge.destination.kind === 'http'
+          ? Object.fromEntries(Object.entries(filled).filter(([, v]) => v !== UNCHANGED))
+          : filled;
+      } catch (err) {
+        if (this.streams.get(bridgeId) !== stream || stream.halted) return null;
+        if (attempt >= 2) {
+          await this.halt(
+            bridgeId,
+            stream,
+            'failed',
+            `Could not read a row back from the source to complete a change, stopped without advancing the cursor so nothing is lost: ${(err as Error).message}`,
+          );
+          return null;
+        }
+        await new Promise((r) => setTimeout(r, backoffMs(attempt)));
+      }
+    }
+  }
+
+  /** is any database target a store that holds a row as one value? */
+  private async hasWholeValueTarget(bridge: ResolvedBridge, stream: Stream): Promise<boolean> {
+    if (stream.wholeValueTarget !== null) return stream.wholeValueTarget;
+    let found = false;
+    if (bridge.destination.kind === 'database') {
+      for (const target of bridge.destination.targets) {
+        try {
+          const conn = await this.connStore.resolve(target.connectionId);
+          if (conn.engine === 'redis') found = true;
+        } catch {
+          found = true; // unknown: the complete row is the safe assumption
+        }
+      }
+    }
+    stream.wholeValueTarget = found;
+    return found;
+  }
+
   /** extend the pending batch's reach to `cursor` without adding a row */
   private notePosition(bridgeId: string, stream: Stream, cursor: string): void {
     if (this.streams.get(bridgeId) !== stream || stream.halted) return;
@@ -472,6 +633,27 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (!stream.provider.cursorAfter(change.cursor, stream.watermark)) return;
 
     const op = change.op as CdcOperation;
+
+    // a truncate carries no row: nothing to filter, nothing to key, and nothing
+    // may share its batch. everything read before it is delivered first, then
+    // it goes alone, then the stream carries on — so a row inserted after the
+    // TRUNCATE at the source still exists at the destination afterwards
+    if (op === 'truncate') {
+      await this.flush(bridgeId, stream);
+      if (this.streams.get(bridgeId) !== stream || stream.halted) return;
+      stream.buffer.push({ change, row: {}, keySig: null });
+      stream.tailCursor = change.cursor;
+      stream.bufferOp = op;
+      await this.flush(bridgeId, stream);
+      return;
+    }
+
+    // columns the source left out because they did not change (see UNCHANGED)
+    if (Object.values(change.row).includes(UNCHANGED)) {
+      const row = await this.completeRow(bridgeId, bridge, stream, change);
+      if (row === null) return; // the bridge was stopped; nothing moved
+      change = { ...change, row };
+    }
 
     // source filters: replay pushes them into SQL, but a CDC stream sees every
     // row of the table, so evaluate them in-process here. skipped rows still
@@ -625,7 +807,8 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (bridge.source.kind !== 'table') return;
 
     if (stream.spooled) {
-      await this.spoolBatch(bridgeId, stream, items, lastCursor);
+      const entries = items.map((i) => ({ op: i.change.op, row: i.row, cursor: i.change.cursor }));
+      await this.spoolBatch(bridgeId, stream, entries, lastCursor);
       return;
     }
 
@@ -990,7 +1173,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   private async spoolBatch(
     bridgeId: string,
     stream: Stream,
-    items: Buffered[],
+    entries: SpoolEntry[],
     lastCursor: string,
   ): Promise<void> {
     // bounded: an unbounded spool would just move the unbounded growth from
@@ -1008,12 +1191,6 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       await new Promise((r) => setTimeout(r, 50));
     }
     if (this.streams.get(bridgeId) !== stream || stream.halted) return;
-
-    const entries = items.map((i) => ({
-      op: i.change.op,
-      row: i.row,
-      cursor: i.change.cursor,
-    }));
 
     // the cursor may only advance once the spool has the changes, so a failed
     // append must never checkpoint. retry briefly, then stop the stream: the
@@ -1072,9 +1249,13 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       const sig = pk?.length
         ? JSON.stringify(pk.map((c) => item.entry.row[c]))
         : null;
+      // a truncate or a notice is never part of a larger delivery
+      const alone = (o: string | null): boolean => o === 'truncate' || o === 'notice';
       const breaks =
         current.length > 0 &&
-        (currentOp !== item.entry.op || (sig !== null && seen.has(sig)));
+        (currentOp !== item.entry.op ||
+          alone(item.entry.op) ||
+          (sig !== null && seen.has(sig)));
       if (breaks) {
         runs.push(current);
         current = [];
@@ -1142,10 +1323,24 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     if (bridge.source.kind !== 'table') return true;
 
     const rows = run.map((i) => i.entry.row);
-    const op = run[0]!.entry.op;
+    const entryOp = run[0]!.entry.op;
     const lastId = run[run.length - 1]!.id;
     const lastCursor = run[run.length - 1]!.entry.cursor;
     const seq = stream.seq;
+
+    if (entryOp === 'notice') {
+      await this.settle(bridgeId, stream, async () => {
+        await this.jobs.recordNotice(stream.jobId, seq, String(rows[0]?.message ?? ''));
+        await this.spool.trimThrough(bridgeId, lastId);
+        await this.prisma.bridgeJob.update({
+          where: { id: stream.jobId },
+          data: { cursorOffset: seq + 1 },
+        });
+        stream.seq = seq + 1;
+      });
+      return stream.halted;
+    }
+    const op = entryOp;
     const idem =
       bridge.destination.kind === 'http' && bridge.destination.idempotency
         ? `${stream.jobId}:${lastCursor}`

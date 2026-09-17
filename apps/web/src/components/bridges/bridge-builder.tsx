@@ -281,7 +281,14 @@ export function BridgeBuilder() {
         <ResizablePanel defaultSize={36} minSize={26}>
           <div className="h-full overflow-y-auto">
             <div className="space-y-5 p-4">
-              <TriggerSection draft={draft} dispatch={dispatch} columns={columns} />
+              <TriggerSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columns}
+                sourceEngine={
+                  connections?.find((c) => c.id === connectionId)?.engine
+                }
+              />
               <PayloadSection
                 draft={draft}
                 dispatch={dispatch}

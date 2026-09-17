@@ -199,6 +199,8 @@
     "opInsert": "inserimento",
     "opUpdate": "aggiornamento",
     "opDelete": "eliminazione",
+    "opTruncate": "svuotamento (truncate)",
+    "truncateHint": "Disattivato: se la tabella di origine viene svuotata con TRUNCATE, la destinazione conserva le righe e la cronologia lo segnala. Attivato: anche la tabella di destinazione viene svuotata.",
     "cdcDesc": "Trasmette le modifiche dal log del DB in tempo reale (senza polling).",
     "checkReadiness": "Verifica idoneità",
     "cdcReady": "✓ Pronto — creeremo automaticamente la pubblicazione e lo slot all'avvio.",

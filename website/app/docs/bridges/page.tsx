@@ -122,7 +122,8 @@ export default function Page() {
         real time, no polling: Postgres logical replication, MySQL binlog,
         MongoDB change streams, Redis keyspace notifications. You can
         subscribe to a subset of operations (insert, update, delete; default
-        all three). SQLite has no change log, so CDC is not available there —
+        all three — PostgreSQL sources can also mirror{' '}
+        <code>TRUNCATE</code>, which is opt-in). SQLite has no change log, so CDC is not available there —
         use a watch bridge. Each engine has prerequisites and honest
         limitations, and the bridge builder runs a readiness check that lists
         anything missing; the <a href="/docs/cdc">CDC setup page</a> covers
@@ -507,8 +508,8 @@ export default function Page() {
                 <code>{'{{$op}}'}</code>
               </td>
               <td>
-                the change operation — insert, update or delete — set on CDC
-                deliveries
+                the change operation — insert, update or delete (or truncate,
+                where a PostgreSQL bridge captures it) — set on CDC deliveries
               </td>
             </tr>
             <tr>

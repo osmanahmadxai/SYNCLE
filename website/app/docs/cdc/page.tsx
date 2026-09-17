@@ -103,6 +103,119 @@ export default function Page() {
         off without skipping changes.
       </p>
 
+      <h4 id="postgres-table">What the table needs</h4>
+      <p>
+        PostgreSQL identifies the row an <code>UPDATE</code> or{' '}
+        <code>DELETE</code> touched by the table&apos;s{' '}
+        <strong>replica identity</strong> — its primary key, unless you have
+        set something else. A table with no primary key and no replica
+        identity can only report inserts. Worse, publishing updates or
+        deletes for such a table makes those statements <em>fail in your
+        database</em> (&quot;cannot update table … because it does not have a
+        replica identity and publishes updates&quot;). Syncle checks this
+        before it creates anything on the source and refuses to start the
+        bridge rather than break the application that owns the table. You
+        have three ways forward:
+      </p>
+      <ul>
+        <li>capture <code>insert</code> only — Syncle then publishes only inserts;</li>
+        <li>add a primary key;</li>
+        <li>
+          have the table send whole rows:{' '}
+          <code>ALTER TABLE your_table REPLICA IDENTITY FULL;</code>
+        </li>
+      </ul>
+      <p>
+        The same rule decides what a <strong>delete</strong> can do. A delete
+        message carries only the replica-identity columns, so a target keyed
+        on any other column would be handed a delete with no key in it —
+        which matches nothing and leaves the row behind for ever, without an
+        error. A bridge that captures deletes into a target keyed on a column
+        the delete does not carry is refused at start, with the three fixes
+        spelled out: key the target on the source&apos;s key, stop capturing
+        deletes, or switch the table to <code>REPLICA IDENTITY FULL</code>.
+        The readiness panel shows which columns the table identifies rows by.
+      </p>
+
+      <h4 id="postgres-behaviour">How particular changes are handled</h4>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>At the source</th>
+              <th>What Syncle does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                An <code>UPDATE</code> that does not touch a large column
+              </td>
+              <td>
+                PostgreSQL stores large values out of line (TOAST) and leaves
+                them out of an update that did not change them. Syncle leaves
+                such a column out of the write, so the destination keeps the
+                copy it has — it is never overwritten with <code>NULL</code>.
+                Where the value itself is needed — a source filter on that
+                column, an HTTP payload, a Redis destination, or a row whose
+                key changed — it is read back from the source table.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                An <code>UPDATE</code> that changes the primary key
+              </td>
+              <td>
+                The row has moved: the old key is deleted at the destination
+                and the row is written under the new one. (The delete is
+                applied only if the bridge captures deletes; without it the
+                old row stays, as any deleted row would.)
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>TRUNCATE</code>
+              </td>
+              <td>
+                Off by default: the destination keeps its rows, and the
+                timeline gets an amber entry saying the source was truncated
+                and that it was not applied. Add <code>truncate</code> to the
+                bridge&apos;s operations to empty the destination table too.
+              </td>
+            </tr>
+            <tr>
+              <td>A partitioned table</td>
+              <td>
+                Bridge the parent. The publication is created with{' '}
+                <code>publish_via_partition_root</code>, so rows written to
+                any partition arrive under the parent&apos;s name. Needs
+                PostgreSQL 13 or newer; on 12 the bridge is refused — bridge
+                each partition separately there.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                Bulk loads (<code>COPY</code>) and overlapping transactions
+              </td>
+              <td>
+                Nothing to configure. Changes are delivered in commit order,
+                a transaction at a time, and every row has its own position
+                even when hundreds share one WAL record — so a restart in the
+                middle of a large transaction resumes in the middle, without
+                repeating or skipping rows.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <Note>
+        Bridges created before these positions existed keep working: the
+        saved cursor is understood as &quot;everything up to here&quot;. The
+        first start after the upgrade may deliver the last transaction again;
+        database destinations absorb that (writes are upserts), and an HTTP
+        receiver sees at most that one transaction twice.
+      </Note>
+
       <h3 id="mysql">MySQL</h3>
       <p>
         Syncle connects as a replication client and decodes row events from
@@ -256,6 +369,21 @@ server_id        = 1   # any unique id`}</CodeBlock>
         token is populated on CDC deliveries only — a watch bridge sees rows,
         not operations; the other template tokens are covered in{' '}
         <a href="/docs/bridges">How bridges work</a>.
+      </p>
+      <p>
+        PostgreSQL sources have a fourth, opt-in operation:{' '}
+        <code>truncate</code>. With it, a <code>TRUNCATE</code> of the source
+        table empties every database target&apos;s table (a Redis target has
+        no table to empty, and says so in the delivery&apos;s result), and an
+        HTTP destination receives one delivery with an empty row and{' '}
+        <code>{'{{$op}}'}</code> set to <code>truncate</code>. It is always
+        delivered on its own, in order: rows written before the truncate are
+        delivered before it, and rows inserted after it are still there
+        afterwards. Without it, the truncate is recorded on the timeline as
+        a skipped entry explaining that the destination was left alone.
+        Other engines do not report a truncate as a change (in MySQL it is
+        DDL, not row events), so a bridge on them that asks for it is
+        refused at start instead of waiting for something that never comes.
       </p>
 
       <h2 id="lifecycle">Going live, stopping, and deleting</h2>

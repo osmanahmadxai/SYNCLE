@@ -199,6 +199,8 @@
     "opInsert": "insert",
     "opUpdate": "update",
     "opDelete": "delete",
+    "opTruncate": "truncate",
+    "truncateHint": "Off: when the source table is truncated the destination keeps its rows, and the timeline says so. On: the destination table is emptied too.",
     "cdcDesc": "Streams changes from the DB log in real time (no polling).",
     "checkReadiness": "Check readiness",
     "cdcReady": "✓ Ready — we’ll auto-create the publication & slot on start.",

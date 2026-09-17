@@ -83,7 +83,7 @@ export function blankDelivery(): Delivery {
 export type SyncMode = 'oneTime' | 'live';
 export type TriggerKind = 'replay' | 'watch' | 'cdc';
 export type WatchStrategy = 'increment' | 'timestamp' | 'snapshot';
-export type CdcOp = 'insert' | 'update' | 'delete';
+export type CdcOp = 'insert' | 'update' | 'delete' | 'truncate';
 export type RowMode = 'selected' | 'all';
 
 export interface BuilderDraft {

@@ -35,6 +35,13 @@ export interface CdcChange {
    * orchestrator persists it verbatim and hands it back on resume.
    */
   cursor: string;
+  /**
+   * this update put the row under a NEW key (the provider has already emitted
+   * the delete of the old one). there is no earlier copy of it at the
+   * destination, so a column the source left out as unchanged cannot simply be
+   * left out of the write: nothing is there to keep
+   */
+  keyChanged?: boolean;
 }
 
 /** callbacks the orchestrator hands to a provider's live stream */
@@ -60,6 +67,13 @@ export interface CdcStreamHandlers {
    * into the pending batch and confirms it only once that batch is durable.
    */
   onSkip?(cursor: string): Promise<void>;
+  /**
+   * something happened at the source that the bridge deliberately did NOT
+   * apply, and that whoever runs it needs to know — a TRUNCATE on a bridge that
+   * does not mirror truncates. recorded on the timeline in stream order, then
+   * the position is passed like any skip.
+   */
+  onNotice?(message: string, cursor: string): Promise<void>;
   /** a non-fatal transport error. logged, the provider keeps/reconnects */
   onError(err: Error): void;
 }
@@ -98,6 +112,14 @@ export interface CdcProvider {
    * in-process filter evaluation for changes from this provider.
    */
   readonly handlesSourceFilters?: boolean;
+
+  /**
+   * true when the engine reports a table being emptied as an event of its own
+   * (PostgreSQL's TRUNCATE message). elsewhere there is nothing to capture — a
+   * MySQL TRUNCATE is DDL in the binlog, not row events — and a bridge asking
+   * for it is refused rather than left waiting for something that never comes.
+   */
+  readonly capturesTruncate?: boolean;
 
   /**
    * can this engine/connection stream changes right now? drives the builder's

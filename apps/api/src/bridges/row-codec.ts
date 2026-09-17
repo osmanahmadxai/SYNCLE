@@ -14,9 +14,11 @@
  * `$literal`, so decoding can never mistake data for a tag.
  */
 
+import { UNCHANGED } from '@syncle/core';
+
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
-const TAGS = new Set(['$bytes', '$date', '$bigint', '$literal']);
+const TAGS = new Set(['$bytes', '$date', '$bigint', '$literal', '$unchanged']);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (v === null || typeof v !== 'object') return false;
@@ -30,6 +32,9 @@ function looksLikeTag(o: Record<string, unknown>): boolean {
 }
 
 function encodeValue(value: unknown): Json {
+  // "this change did not carry the column" is not NULL, and a symbol would
+  // simply vanish from JSON — after which it WOULD be written as NULL
+  if (value === UNCHANGED) return { $unchanged: true };
   if (value === null || value === undefined) return null;
   if (typeof value === 'bigint') return { $bigint: value.toString() };
   if (typeof value === 'number') {
@@ -63,6 +68,7 @@ function decodeValue(value: Json): unknown {
   if (Array.isArray(value)) return value.map(decodeValue);
   if (looksLikeTag(value)) {
     const [tag, payload] = Object.entries(value)[0]!;
+    if (tag === '$unchanged') return UNCHANGED;
     if (tag === '$bytes' && typeof payload === 'string')
       return Buffer.from(payload, 'base64');
     if (tag === '$date' && typeof payload === 'string')
@@ -112,6 +118,7 @@ export function decodeRows(json: string): Record<string, unknown>[] {
  */
 export function rowsForDisplay(json: string): Record<string, unknown>[] {
   const show = (v: unknown): unknown => {
+    if (v === UNCHANGED) return '<unchanged>';
     if (typeof v === 'bigint') return v.toString();
     if (v instanceof Date) return v.toISOString();
     if (Buffer.isBuffer(v)) return `<${v.length} bytes>`;

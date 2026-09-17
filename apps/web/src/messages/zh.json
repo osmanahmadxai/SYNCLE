@@ -199,6 +199,8 @@
     "opInsert": "插入",
     "opUpdate": "更新",
     "opDelete": "删除",
+    "opTruncate": "清空（truncate）",
+    "truncateHint": "关闭：源表被 TRUNCATE 清空时，目标表保留原有数据，并在时间线上给出提示。开启：目标表也会被清空。",
     "cdcDesc": "实时从数据库日志读取变更（无需轮询）。",
     "checkReadiness": "检查就绪状态",
     "cdcReady": "✓ 已就绪——启动时将自动创建发布与复制槽。",

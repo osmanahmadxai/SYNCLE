@@ -4,6 +4,7 @@ import {
   destinationLabel,
   destinationNodeKeys,
   mapRow,
+  UNCHANGED,
 } from './bridge';
 import type { BridgeDestination } from './bridge-config';
 
@@ -19,6 +20,28 @@ describe('mapRow', () => {
     ]);
     expect(out).toEqual({ user_id: 7, name: 'Ada' });
     expect(out).not.toHaveProperty('extra');
+  });
+
+  it('leaves out a column the source reported as unchanged, rather than nulling it', () => {
+    // Postgres omits a large column an UPDATE did not touch. writing NULL for
+    // it wiped the destination's copy; leaving it out of the write keeps it
+    const row = { id: 1, status: 'done', body: UNCHANGED, note: null };
+    expect(mapRow(row, [])).toEqual({ id: 1, status: 'done', note: null });
+    expect(mapRow(row, [])).not.toHaveProperty('body');
+  });
+
+  it('does the same through an explicit mapping', () => {
+    const out = mapRow({ id: 1, body: UNCHANGED, status: 'done' }, [
+      { source: 'id', target: 'id' },
+      { source: 'body', target: 'payload' },
+      { source: 'status', target: 'state' },
+    ]);
+    expect(out).toEqual({ id: 1, state: 'done' });
+    expect(out).not.toHaveProperty('payload');
+  });
+
+  it('UNCHANGED is one shared symbol, so it survives crossing package copies', () => {
+    expect(UNCHANGED).toBe(Symbol.for('syncle.unchanged'));
   });
 });
 

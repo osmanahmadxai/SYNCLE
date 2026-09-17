@@ -28,6 +28,7 @@ export function TriggerSection({
   draft,
   dispatch,
   columns,
+  sourceEngine,
 }: {
   draft: Pick<
     BuilderDraft,
@@ -47,6 +48,8 @@ export function TriggerSection({
   >;
   dispatch: Dispatch<BuilderAction>;
   columns: QueryColumn[];
+  /** the source connection's engine; only PostgreSQL reports a TRUNCATE */
+  sourceEngine?: string;
 }) {
   const t = useTranslations('bridgeBuilder');
   const {
@@ -145,8 +148,18 @@ export function TriggerSection({
           {triggerKind === 'cdc' && (
             <div className="grid gap-2 rounded-md border p-2.5">
             <Label className="text-xs">{t('operationsToDeliver')}</Label>
-            <div className="flex gap-3 text-xs">
-              {(['insert', 'update', 'delete'] as const).map((op) => (
+            <div className="flex flex-wrap gap-3 text-xs">
+              {(
+                [
+                  'insert',
+                  'update',
+                  'delete',
+                  // a bridge saved with it keeps showing it, whatever the engine
+                  ...(sourceEngine === 'postgres' || cdcOps.has('truncate')
+                    ? (['truncate'] as const)
+                    : []),
+                ] as const
+              ).map((op) => (
                 <label key={op} className="flex items-center gap-1.5">
                   <input
                     type="checkbox"
@@ -158,10 +171,17 @@ export function TriggerSection({
                     ? t('opInsert')
                     : op === 'update'
                       ? t('opUpdate')
-                      : t('opDelete')}
+                      : op === 'delete'
+                        ? t('opDelete')
+                        : t('opTruncate')}
                 </label>
               ))}
             </div>
+            {sourceEngine === 'postgres' && (
+              <p className="text-muted-foreground text-[11px]">
+                {t('truncateHint')}
+              </p>
+            )}
 
             {/* readiness / setup */}
             <div className="flex items-center justify-between">

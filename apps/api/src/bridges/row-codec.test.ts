@@ -3,6 +3,7 @@
  * as bytes, dates as dates, bigints as bigints — and data can never be mistaken
  * for one of the codec's own tags.
  */
+import { UNCHANGED } from '@syncle/core';
 import { describe, expect, it } from 'vitest';
 import { decodeRows, encodeRows, rowsForDisplay } from './row-codec';
 
@@ -103,6 +104,27 @@ describe('row codec', () => {
       expect(Buffer.isBuffer(inner)).toBe(true);
       expect(inner.toString()).toBe('real');
     });
+  });
+
+  it('keeps "the source did not send this column" apart from NULL', () => {
+    // a parked or spooled UPDATE that comes back with the marker turned into
+    // null would wipe the very column the marker exists to protect
+    const [row] = roundTrip([{ id: 1, body: UNCHANGED, note: null }]);
+    expect(row).toEqual({ id: 1, body: UNCHANGED, note: null });
+    expect(row!.body).toBe(UNCHANGED);
+    expect(row!.note).toBeNull();
+  });
+
+  it('data that merely looks like the unchanged tag stays data', () => {
+    const [row] = roundTrip([{ payload: { $unchanged: true } }]);
+    expect(row!.payload).toEqual({ $unchanged: true });
+    expect(row!.payload).not.toBe(UNCHANGED);
+  });
+
+  it('shows an unchanged column as such', () => {
+    expect(rowsForDisplay(encodeRows([{ id: 1, body: UNCHANGED }]))).toEqual([
+      { id: 1, body: '<unchanged>' },
+    ]);
   });
 
   it('uses the JSON form of driver wrapper types', () => {

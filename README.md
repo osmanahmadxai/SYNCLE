@@ -277,7 +277,7 @@ The live preview shows exactly what will be written before anything runs.
 | -------------------------------------- | ---------- | ------------------------------------------------------- |
 | A one-time copy / initial backfill     | **Replay** | Streams all (or selected) rows once, then finishes      |
 | Ongoing sync, zero source config       | **Watch**  | Polls a cursor (id / `updated_at` / PK diff) for change |
-| Real-time sync straight from the log   | **CDC**    | Live change capture — inserts, updates, deletes         |
+| Real-time sync straight from the log   | **CDC**    | Live change capture — inserts, updates, deletes (and, from PostgreSQL, truncates) |
 
 For CDC, the builder runs a **readiness check** against the source and lists
 anything the database still needs (see [CDC prerequisites](#cdc-prerequisites)).
@@ -524,6 +524,24 @@ for you and spells out what's missing.
 > Redis CDC is real-time only and non-durable — events that happen while Syncle
 > is offline can't be recovered, so prefer a watch bridge there if you need
 > guarantees.
+
+**PostgreSQL specifics.**
+
+- **Updates and deletes need a replica identity** — a primary key, or
+  `ALTER TABLE … REPLICA IDENTITY FULL`. Without one PostgreSQL can only report
+  inserts, and publishing updates for such a table would make `UPDATE`/`DELETE`
+  on it fail in *your* database. Syncle checks first and refuses to start the
+  bridge rather than do that; insert-only capture is always fine.
+- **A delete carries only the source's key**, so a target that should receive
+  deletes has to be keyed on it (or the table set to `REPLICA IDENTITY FULL`).
+  A mismatch is refused at start instead of silently deleting nothing.
+- **`TRUNCATE` is opt-in.** By default the destination keeps its rows and the
+  timeline records that the source was truncated. Add `truncate` to the
+  bridge's operations to empty the destination tables too.
+- **Partitioned tables**: bridge the parent. Needs PostgreSQL 13+.
+- Large (TOASTed) columns an `UPDATE` did not touch, primary-key changes, `COPY`
+  bulk loads and overlapping transactions are all handled — the
+  [CDC docs](https://syncle.dev/docs/cdc#postgres-behaviour) say how.
 
 **MySQL specifics.**
 

@@ -146,6 +146,14 @@
     scroll-margin-top: 2rem;
   }
 
+  /* a topic inside an engine's section: set apart, but below the engine name */
+  .prose-docs h4 {
+    margin-top: 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    scroll-margin-top: 2rem;
+  }
+
   .prose-docs p {
     margin-top: 1rem;
   }

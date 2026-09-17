@@ -270,7 +270,10 @@ export function rowConverterFor(
     for (const [name, convert] of converters) {
       if (!(name in row)) continue;
       const before = row[name];
-      if (before === null || before === undefined) continue;
+      // a symbol is a marker (UNCHANGED: "the source did not send this"), not a
+      // value: there is nothing to convert, and it must reach the writer intact
+      if (before === null || before === undefined || typeof before === 'symbol')
+        continue;
       const after = convert(before);
       if (after !== before) (out ??= { ...row })[name] = after;
     }

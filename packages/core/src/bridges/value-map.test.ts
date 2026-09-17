@@ -229,6 +229,22 @@ describe('rowConverterFor', () => {
     ).toBeNull();
   });
 
+  it('passes a marker through untouched: it is not a value to convert', () => {
+    // UNCHANGED stands in for a column the source did not send. a converter
+    // that stringified it would write the text "Symbol(syncle.unchanged)"
+    const UNCHANGED = Symbol.for('syncle.unchanged');
+    const convertRow = rowConverterFor(
+      [
+        { name: 'doc', sourceType: 'jsonb' },
+        { name: 'at', sourceType: 'timestamptz' },
+      ],
+      'postgres',
+      'mysql',
+    )!;
+    const row = { doc: UNCHANGED, at: UNCHANGED };
+    expect(convertRow(row)).toBe(row);
+  });
+
   it('converts only what it must and returns the same object otherwise', () => {
     const convertRow = rowConverterFor(columns, 'mysql', 'postgres')!;
     const untouched = {
