@@ -455,6 +455,13 @@ export interface BridgeJob {
   error: string | null;
   startedAt: string;
   finishedAt: string | null;
+  /** delivery details removed by retention (the counters above still include them) */
+  prunedDeliveries: number;
+  /**
+   * a delivery with a sequence below this that is no longer listed was
+   * delivered and has had its details removed — it is not "still queued"
+   */
+  prunedBelowSequence: number | null;
 }
 
 export interface BridgeDelivery {

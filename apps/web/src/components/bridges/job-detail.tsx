@@ -283,6 +283,15 @@ export function JobDetail({
         </p>
       )}
 
+      {job.prunedDeliveries > 0 && (
+        <p className="text-muted-foreground border-t px-4 py-1.5 text-[11px]">
+          Details of {job.prunedDeliveries.toLocaleString()} older{' '}
+          {job.prunedDeliveries === 1 ? 'delivery has' : 'deliveries have'} been
+          removed (Settings → Engine → delivery history). The totals above still
+          count them.
+        </p>
+      )}
+
       {/* rows a live bridge set aside instead of losing; hidden while empty */}
       {isLive && <DeadLetterPanel bridgeId={bridgeId} live={isActive} />}
 
@@ -297,6 +306,7 @@ export function JobDetail({
           totalRows={total}
           batchSize={job.batchSize}
           endpoint={endpoint}
+          prunedBelowSequence={job.prunedBelowSequence}
         />
       </div>
     </div>

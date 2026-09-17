@@ -46,6 +46,8 @@ export class SettingsStoreService implements OnModuleInit {
       poolIdleMs: runtimeConfig.poolIdleMs,
       jobConcurrency: runtimeConfig.jobConcurrency,
       sessionTtlMinutes: 60 * 24 * 7, // one week
+      deliveryRetentionDays: runtimeConfig.deliveryRetentionDays,
+      deliveryMaxPerJob: runtimeConfig.deliveryMaxPerJob,
     };
   }
 

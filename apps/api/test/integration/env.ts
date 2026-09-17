@@ -27,4 +27,6 @@ export function applyTestEnv(): void {
   // the source guard sweeps on a timer; tests that care run it by hand, and no
   // other test should have it wake up halfway through
   process.env.SYNCLE_SLOT_CHECK_SECONDS ??= '0';
+  // likewise the retention sweep: it deletes rows, so only the test of it runs it
+  process.env.SYNCLE_RETENTION_SWEEP_MINUTES ??= '0';
 }

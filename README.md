@@ -423,6 +423,9 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_SLOT_CHECK_SECONDS` | api | How often to measure the WAL each CDC bridge's replication slot pins on its source (default `60`; `0` = off) |
 | `SYNCLE_SLOT_WARN_BYTES` | api | WAL pinned by one bridge before it is flagged (default 1 GiB) |
 | `SYNCLE_SLOT_MAX_BYTES` | api | WAL pinned by a *stopped* bridge before its slot is dropped to protect the source (default `0` = never) |
+| `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
+| `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
+| `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |
 | `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under

@@ -100,6 +100,16 @@ export const appSettingsSchema = z.preprocess(
     jobConcurrency: z.coerce.number().int().min(1).max(100).optional(),
     /** minutes of inactivity before a login session expires */
     sessionTtlMinutes: z.coerce.number().int().min(15).max(43_200).optional(),
+    /**
+     * days a delivery's details (payload, response, timing) are kept. the job's
+     * delivered / failed / skipped counters are not affected. 0 = keep for ever
+     */
+    deliveryRetentionDays: z.coerce.number().int().min(0).max(3650).optional(),
+    /**
+     * how many deliveries a LIVE (watch / CDC) job keeps, however recent — it
+     * never finishes, so age alone does not bound it. 0 = no limit
+     */
+    deliveryMaxPerJob: z.coerce.number().int().min(0).max(100_000_000).optional(),
   }),
 );
 
@@ -114,4 +124,6 @@ export interface AppSettings {
   poolIdleMs: number;
   jobConcurrency: number;
   sessionTtlMinutes: number;
+  deliveryRetentionDays: number;
+  deliveryMaxPerJob: number;
 }

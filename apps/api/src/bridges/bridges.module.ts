@@ -9,6 +9,7 @@ import { BridgeJobService } from './bridge-job.service';
 import { BridgeCdcService } from './bridge-cdc.service';
 import { BridgeLifecycleService } from './bridge-lifecycle.service';
 import { SourceGuardService } from './cdc/source-guard.service';
+import { RetentionService } from './retention.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchProcessor } from './bridge-watch.processor';
 import { CdcSpoolService } from './cdc/cdc-spool.service';
@@ -38,6 +39,7 @@ import { SqliteCdcProvider } from './cdc/providers/sqlite-cdc.provider';
     BridgeCdcService,
     BridgeLifecycleService,
     SourceGuardService,
+    RetentionService,
     DeliveryService,
     DatabaseSinkService,
     BridgeSinkService,

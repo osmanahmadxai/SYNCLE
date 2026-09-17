@@ -40,6 +40,8 @@ const RANGES = {
   poolIdleMs: { min: 10_000, max: 86_400_000 },
   jobConcurrency: { min: 1, max: 100 },
   sessionTtlMinutes: { min: 15, max: 43_200 },
+  deliveryRetentionDays: { min: 0, max: 3650 },
+  deliveryMaxPerJob: { min: 0, max: 100_000_000 },
 } as const;
 
 export function SettingsDialog({
@@ -379,6 +381,24 @@ function EngineTab({ settings }: { settings: AppSettings }) {
         min={RANGES.jobConcurrency.min}
         max={RANGES.jobConcurrency.max}
         onChange={(v) => set('jobConcurrency', v)}
+      />
+      <NumField
+        id="delivery-retention-days"
+        label="Keep delivery details for (days)"
+        hint="What each delivery sent and got back. A finished job loses its details once it is older than this; a live bridge loses them row by row. The delivered / failed / skipped totals are never affected. 0 keeps everything for ever."
+        value={form.deliveryRetentionDays}
+        min={RANGES.deliveryRetentionDays.min}
+        max={RANGES.deliveryRetentionDays.max}
+        onChange={(v) => set('deliveryRetentionDays', v)}
+      />
+      <NumField
+        id="delivery-max-per-job"
+        label="Deliveries kept per live bridge"
+        hint="A watch or CDC bridge never finishes, so age alone does not bound its history: only the newest this-many deliveries are kept. 0 means no limit."
+        value={form.deliveryMaxPerJob}
+        min={RANGES.deliveryMaxPerJob.min}
+        max={RANGES.deliveryMaxPerJob.max}
+        onChange={(v) => set('deliveryMaxPerJob', v)}
       />
       <SaveBar saving={saving} onSave={save} />
     </div>

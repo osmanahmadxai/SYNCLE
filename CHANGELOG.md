@@ -261,6 +261,28 @@ can no longer lose a row to a failed delivery.
 
 ### Changed
 
+- **Delivery details are no longer kept for ever.** Every delivery is recorded
+  with what was sent and what came back (up to 16 KB each), and nothing ever
+  removed those rows: a live bridge doing ten deliveries a second writes 26
+  million a month into the metadata store. From this release details are kept
+  for **30 days**, and a live (watch / CDC) bridge keeps its newest **100,000**
+  deliveries. **Upgrading removes history older than that**, up to 500,000 rows
+  per hourly sweep until it has caught up.
+  - To keep everything, set both to `0` — in Settings › Engine, or with
+    `SYNCLE_DELIVERY_RETENTION_DAYS` / `SYNCLE_DELIVERY_MAX_PER_JOB` — before
+    upgrading, or within ten minutes of the new version starting (the first
+    sweep waits that long).
+  - The delivered / failed / skipped **totals** are stored on the job and do
+    not change. A failed delivery whose rows still wait in the dead-letter queue
+    is never removed, nor anything belonging to a replay still queued or
+    running.
+  - A finished replay loses its details all at once, when the job is older than
+    the retention — never row by row. On the timeline such deliveries are drawn
+    as *delivered, details removed* instead of as queued, and "retry failed" on
+    such a job says why it cannot, rather than "no failed rows".
+  - `POST /api/bridges/retention/run` applies it now;
+    `SYNCLE_RETENTION_SWEEP_MINUTES` sets how often it runs by itself.
+
 - **`onError` defaults to `abort`** for a bridge created through the API without
   one. Bridges that already exist keep the value they were saved with, and the
   web app's builder still pre-selects `continue` — which, with the queue, no

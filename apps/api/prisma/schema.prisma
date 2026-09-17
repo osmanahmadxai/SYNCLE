@@ -151,6 +151,12 @@ model BridgeJob {
   startedAt  DateTime  @default(now()) @map("started_at")
   finishedAt DateTime? @map("finished_at")
 
+  // delivery DETAILS are removed after the retention period (the counters above
+  // are not): how many rows have gone, and the sequence below which a missing
+  // row means "delivered, details removed" rather than "not delivered yet"
+  prunedDeliveries    Int  @default(0) @map("pruned_deliveries")
+  prunedBelowSequence Int? @map("pruned_below_sequence")
+
   bridge     Bridge           @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
   deliveries BridgeDelivery[]
 

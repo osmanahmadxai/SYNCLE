@@ -52,13 +52,19 @@ const MAX_COLUMNS = 40;
 type ViewMode = 'records' | 'feed' | 'map';
 
 /** visual state of a timeline cell */
-type CellState = DeliveryStatus | 'queued';
+/**
+ * `pruned`: the delivery happened, and its details have since been removed by
+ * the retention setting. without it, a finished job whose history had aged out
+ * drew as one long row of "queued" cells — offering to skip them
+ */
+type CellState = DeliveryStatus | 'queued' | 'pruned';
 
 const CELL_STYLES: Record<CellState, string> = {
   success: 'bg-emerald-500 border-emerald-600/40 text-white',
   failed:  'bg-red-500   border-red-700/40   text-white',
   skipped: 'bg-amber-400 border-amber-500/40 text-amber-950',
   queued:  'bg-muted     border-border        text-muted-foreground/60',
+  pruned:  'bg-transparent border-dashed border-border text-muted-foreground/40',
 };
 
 const DOT_STYLES: Record<CellState, string> = {
@@ -66,6 +72,7 @@ const DOT_STYLES: Record<CellState, string> = {
   failed:  'bg-red-500',
   skipped: 'bg-amber-400',
   queued:  'bg-muted-foreground/30',
+  pruned:  'bg-transparent border border-dashed border-muted-foreground/40',
 };
 
 const LEGEND: { state: CellState; label: string }[] = [
@@ -196,6 +203,7 @@ export function DeliveryMonitor({
   totalRows,
   batchSize,
   endpoint,
+  prunedBelowSequence = null,
 }: {
   bridgeId:    string;
   jobId:     string;
@@ -203,6 +211,8 @@ export function DeliveryMonitor({
   totalRows: number | null;
   batchSize: number;
   endpoint: EndpointInfo;
+  /** deliveries below this sequence that are not listed were removed by retention */
+  prunedBelowSequence?: number | null;
 }) {
   const cellCount = totalRows != null
     ? Math.ceil(totalRows / Math.max(1, batchSize))
@@ -307,7 +317,9 @@ export function DeliveryMonitor({
   const openDelivery = (deliveries ?? []).find((d) => d.id === openId) ?? null;
 
   function cellState(seq: number): CellState {
-    return (bySeq.get(seq)?.status as CellState) ?? 'queued';
+    const status = bySeq.get(seq)?.status as CellState | undefined;
+    if (status) return status;
+    return prunedBelowSequence != null && seq < prunedBelowSequence ? 'pruned' : 'queued';
   }
 
   function navigatePage(p: number) {
@@ -360,7 +372,8 @@ export function DeliveryMonitor({
   function selectQueuedOnPage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const seq of sequences) if (!bySeq.get(seq)) next.add(seq);
+      // queued only: a delivery whose details were removed has been delivered
+      for (const seq of sequences) if (cellState(seq) === 'queued') next.add(seq);
       return next;
     });
   }
@@ -400,12 +413,12 @@ export function DeliveryMonitor({
     }
     const targets: number[] = [];
     for (let s = start; s <= to; s++) {
-      if (!bySeq.get(s)) targets.push(s);
+      if (cellState(s) === 'queued') targets.push(s);
     }
     await runSkip(targets);
   }
 
-  const selectedQueued = [...selected].filter((s) => !bySeq.get(s)).length;
+  const selectedQueued = [...selected].filter((s) => cellState(s) === 'queued').length;
   const isMap = view === 'map';
 
   return (
@@ -482,6 +495,13 @@ export function DeliveryMonitor({
                   {l.label}
                 </span>
               ))}
+              {/* only once it applies: most jobs never see it */}
+              {prunedBelowSequence != null && (
+                <span className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+                  <span className={cn('h-3 w-3 rounded-sm border', CELL_STYLES.pruned)} />
+                  Details removed
+                </span>
+              )}
             </div>
           ) : (
             <>
@@ -594,7 +614,7 @@ export function DeliveryMonitor({
                     size="sm"
                     className="h-7"
                     disabled={selectedQueued === 0 || skip.isPending}
-                    onClick={() => runSkip([...selected].filter((s) => !bySeq.get(s)))}
+                    onClick={() => runSkip([...selected].filter((s) => cellState(s) === 'queued'))}
                   >
                     {skip.isPending
                       ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -656,7 +676,9 @@ export function DeliveryMonitor({
                       title={[
                         `Sequence #${seq}`,
                         rowLabel,
-                        state.charAt(0).toUpperCase() + state.slice(1),
+                        state === 'pruned'
+                          ? 'Delivered — details removed (delivery history setting)'
+                          : state.charAt(0).toUpperCase() + state.slice(1),
                         d?.httpStatus ? `HTTP ${d.httpStatus}` : null,
                         tipAction,
                       ].filter(Boolean).join(' · ')}

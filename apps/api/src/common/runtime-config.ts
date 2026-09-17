@@ -150,6 +150,17 @@ export const runtimeConfig = {
    */
   slotMaxBytes: nonNegativeInt(process.env.SYNCLE_SLOT_MAX_BYTES, 0),
   /**
+   * Delivery history. Every delivery is recorded with what was sent and what
+   * came back, and nothing used to remove those rows: a live bridge writes them
+   * for ever. These are the DEFAULTS for the two settings that bound it (both
+   * can be changed in the UI): days a delivery's details are kept, and how many
+   * a live job keeps however recent. 0 = no limit. Counters are never touched.
+   */
+  deliveryRetentionDays: nonNegativeInt(process.env.SYNCLE_DELIVERY_RETENTION_DAYS, 30),
+  deliveryMaxPerJob: nonNegativeInt(process.env.SYNCLE_DELIVERY_MAX_PER_JOB, 100_000),
+  /** how often the retention sweep runs, in minutes. 0 = never */
+  retentionSweepMinutes: nonNegativeInt(process.env.SYNCLE_RETENTION_SWEEP_MINUTES, 60),
+  /**
    * when true, HTTP destinations may not resolve to loopback/private/link-local
    * addresses (SSRF guard for network-exposed deployments). off by default —
    * Syncle is local-first and posting to localhost services is a primary use.

@@ -793,6 +793,23 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>POST /api/bridges/retention/run</code>
+              </td>
+              <td>
+                Apply the{' '}
+                <a href="/docs/configuration#delivery-history">
+                  delivery-history retention
+                </a>{' '}
+                now instead of at the next hourly sweep. Answers{' '}
+                <code>
+                  {'{ expiredDeliveries, overflowDeliveries, deadLetters, jobsEmptied, limited }'}
+                </code>
+                ; <code>limited</code> means the sweep stopped at its
+                500,000-row limit and the rest goes next time
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>GET /api/bridges/cdc/cleanups</code>
               </td>
               <td>

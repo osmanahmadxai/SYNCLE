@@ -49,6 +49,7 @@ import { BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { BridgeWatchService } from './bridge-watch.service';
 import { DeadLetterService } from './dead-letter.service';
+import { RetentionService, type RetentionResult } from './retention.service';
 
 @Controller('bridges')
 export class BridgesController {
@@ -64,6 +65,7 @@ export class BridgesController {
     private readonly databaseSink: DatabaseSinkService,
     private readonly lifecycle: BridgeLifecycleService,
     private readonly deadLetters: DeadLetterService,
+    private readonly retention: RetentionService,
   ) {}
 
   /* ----- CRUD ----- */
@@ -301,6 +303,15 @@ export class BridgesController {
   async sourceHold(@Param('id') id: string): Promise<BridgeSourceHold | null> {
     await this.store.get(id); // 404s if missing
     return this.cdc.hold(id);
+  }
+
+  /**
+   * apply the delivery-history retention now instead of at the next hourly
+   * sweep — after lowering it, say. returns what was removed
+   */
+  @Post('retention/run')
+  runRetention(): Promise<RetentionResult> {
+    return this.retention.sweep();
   }
 
   /** replication slots of removed bridges that could not be dropped yet */

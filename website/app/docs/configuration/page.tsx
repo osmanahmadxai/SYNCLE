@@ -335,6 +335,46 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
+              </td>
+              <td>
+                <code>30</code>
+              </td>
+              <td>
+                Default for the <code>deliveryRetentionDays</code> setting:
+                days a delivery&apos;s details are kept. <code>0</code> keeps
+                them for ever. See{' '}
+                <a href="#delivery-history">delivery history</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_DELIVERY_MAX_PER_JOB</code>
+              </td>
+              <td>
+                <code>100000</code>
+              </td>
+              <td>
+                Default for the <code>deliveryMaxPerJob</code> setting: how
+                many deliveries a live (watch / CDC) bridge keeps, however
+                recent. <code>0</code> is no limit.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_RETENTION_SWEEP_MINUTES</code>
+              </td>
+              <td>
+                <code>60</code>
+              </td>
+              <td>
+                How often delivery history is pruned. <code>0</code> never
+                prunes on a timer (<code>POST /api/bridges/retention/run</code>{' '}
+                still does it on demand).
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_MAX_QUERY_ROWS</code>
               </td>
               <td>
@@ -613,9 +653,71 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`}</C
               <td>15 – 43,200</td>
               <td>Minutes before a login session expires.</td>
             </tr>
+            <tr>
+              <td>
+                <code>deliveryRetentionDays</code>
+              </td>
+              <td>
+                <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>, else 30
+              </td>
+              <td>0 – 3,650</td>
+              <td>
+                Days a delivery&apos;s details are kept. 0 keeps them for
+                ever.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>deliveryMaxPerJob</code>
+              </td>
+              <td>
+                <code>SYNCLE_DELIVERY_MAX_PER_JOB</code>, else 100,000
+              </td>
+              <td>0 – 100,000,000</td>
+              <td>
+                Deliveries a live (watch / CDC) bridge keeps, however recent.
+                0 is no limit.
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+
+      <h3 id="delivery-history">Delivery history</h3>
+      <p>
+        Every delivery is recorded with what was sent and what came back (up
+        to 16&nbsp;KB each), which is what the timeline shows. Nothing used to
+        remove those rows, and a live bridge writes them for as long as it
+        runs — ten deliveries a second is 26 million rows a month in the
+        metadata store. Two settings, under Settings › Engine, bound it, and
+        both take effect at the next hourly sweep without a restart:
+      </p>
+      <ul>
+        <li>
+          <strong>Keep delivery details for (days)</strong> — a finished
+          replay loses its details all at once, when the <em>job</em> is older
+          than this (never row by row, which would leave a timeline with
+          holes in it); a live bridge loses them as each row passes that age.
+        </li>
+        <li>
+          <strong>Deliveries kept per live bridge</strong> — a watch or CDC
+          bridge never finishes, so age alone does not bound it: only the
+          newest this-many are kept.
+        </li>
+      </ul>
+      <p>
+        What is never removed: the job&apos;s delivered / failed / skipped{' '}
+        <strong>totals</strong>, which are stored on the job and do not change
+        when details go; a failed delivery whose rows are still waiting in the{' '}
+        <a href="/docs/bridges">dead-letter queue</a>; and anything belonging
+        to a replay that is still queued or running. On the timeline a
+        delivery whose details are gone is drawn as a dashed cell —{' '}
+        <em>delivered, details removed</em> — rather than as queued. Retrying
+        failed deliveries needs those details, so it is available for as long
+        as they are kept; after that, run the bridge again. Settled
+        dead letters (retried successfully, or discarded) expire on the same
+        schedule; pending ones are data and are kept until you deal with them.
+      </p>
       <p>
         A candid note on what is wired up in 1.0.{' '}
         <code>sessionTtlMinutes</code> takes effect immediately and has no

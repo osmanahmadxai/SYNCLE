@@ -92,7 +92,7 @@ export class BridgeJobService implements OnModuleInit {
     const failedCount = await this.prisma.bridgeDelivery.count({
       where: { jobId, status: 'failed' },
     });
-    if (failedCount === 0) throw new BadRequestError('No failed deliveries to retry.');
+    if (failedCount === 0) throw new BadRequestError(this.nothingToRetry(job, 'deliveries'));
 
     await ensureQueueReady(this.queue);
     await this.clearSettledJob(jobId);
@@ -402,8 +402,7 @@ export class BridgeJobService implements OnModuleInit {
     const failedCount = await this.prisma.bridgeDelivery.count({
       where: { jobId, status: 'failed' },
     });
-    if (failedCount === 0)
-      throw new BadRequestError('No failed rows to retry.');
+    if (failedCount === 0) throw new BadRequestError(this.nothingToRetry(job, 'rows'));
 
     await ensureQueueReady(this.queue);
     const updated = await this.prisma.bridgeJob.update({
@@ -916,6 +915,21 @@ export class BridgeJobService implements OnModuleInit {
 
   /* ----- mappers ----- */
 
+  /**
+   * "nothing failed" and "what failed has been removed" are different answers:
+   * a job can show 40 failed on its counter and have no failed delivery left,
+   * because delivery details are only kept for the retention period
+   */
+  private nothingToRetry(job: JobRow, what: 'rows' | 'deliveries'): string {
+    if (job.failedCount > 0 && job.prunedDeliveries > 0) {
+      return (
+        `This job's delivery details have been removed (they are kept for a limited time — see Settings → delivery history), ` +
+        `so its ${job.failedCount} failed ${what} can no longer be retried individually. Run the bridge again instead.`
+      );
+    }
+    return `No failed ${what} to retry.`;
+  }
+
   private toJob(row: JobRow): BridgeJob {
     return {
       id: row.id,
@@ -930,6 +944,8 @@ export class BridgeJobService implements OnModuleInit {
       error: row.error,
       startedAt: row.startedAt.toISOString(),
       finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
+      prunedDeliveries: row.prunedDeliveries,
+      prunedBelowSequence: row.prunedBelowSequence,
     };
   }
 
