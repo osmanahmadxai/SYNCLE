@@ -28,7 +28,7 @@
     "bullmq": "^5.34.0",
     "cron-parser": "^4.9.0",
     "dotenv": "^16.4.5",
-    "ioredis": "^5.4.1",
+    "ioredis": "^6.0.0",
     "mongodb": "^6.21.0",
     "nodemailer": "^10.0.10",
     "pg": "^8.13.1",
