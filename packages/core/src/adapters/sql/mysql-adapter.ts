@@ -53,6 +53,7 @@ export const MYSQL_CAPABILITIES: AdapterCapabilities = {
   rowEditing: true,
   transactions: true,
   ddl: true,
+  keysetPaging: true,
   manageDatabases: true,
   backupFormats: ['json', 'sql'],
 };

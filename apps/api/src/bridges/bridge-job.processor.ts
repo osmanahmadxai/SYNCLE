@@ -24,7 +24,7 @@ import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
-import { BridgeJobService } from './bridge-job.service';
+import { BEFORE_ANY_ROW, BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { JobRegistryService } from './job-registry.service';
 import { TableReaderService } from './table-reader.service';
@@ -346,6 +346,9 @@ export class BridgeJobProcessor extends WorkerHost implements OnApplicationBoots
     // that copies its table first reads it the same way
     const order = await this.reader.resolveOrder(bridge);
     await this.jobs.setTotal(jobId, order.total);
+    // a read that cannot promise every row once: said where the rows are
+    if (order.warning)
+      await this.jobs.recordNotice(jobId, BEFORE_ANY_ROW, order.warning);
     yield* this.reader.rows(bridge, { startOffset, resumeKey, order });
   }
 

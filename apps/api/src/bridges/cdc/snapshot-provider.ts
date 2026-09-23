@@ -35,6 +35,7 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
+import { BadRequestError } from '@syncle/core';
 import type { KeysetCheckpoint, ResolvedBridge } from '../bridges.types';
 import type { TableOrder, TableRow } from '../table-reader.service';
 import {
@@ -312,8 +313,16 @@ export class SnapshotCdcProvider implements CdcProvider {
       this.options.retryDelayMs ?? ((attempt: number) => backoffMs(attempt));
 
     // refuses here, while the caller is still waiting for the start: a table
-    // with no key to page by cannot be copied, and that is not news for a log
+    // with no key to page by cannot be copied, and that is not news for a log.
+    // (a replay may read such a table by OFFSET and say so; a copy that changes
+    // arrive under has to be exact, or the changes land on the wrong rows)
     const order = await this.reader.resolveOrder(bridge);
+    if (order.warning && bridge.source.kind === 'table') {
+      throw new BadRequestError(
+        `Table "${bridge.source.table}" has no primary key and no unique index, so its existing rows cannot be copied in a stable order while changes arrive under them. ` +
+          'Add a primary key (or a unique index whose columns cannot be NULL) and start the bridge again, or start it from "now" to follow changes only.',
+      );
+    }
 
     const holds = !this.inner.capturePosition;
     let from = resume ? resume.from : null;

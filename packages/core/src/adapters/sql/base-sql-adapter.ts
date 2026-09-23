@@ -29,6 +29,7 @@ import type {
   InsertRowsParams,
   QueryResult,
   RestoreResult,
+  SortSpec,
   TableSchema,
   UpdateRowParams,
   UpsertRowParams,
@@ -240,6 +241,51 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
   }
 
   /**
+   * the rows strictly after a tuple, in the order the sort gives: for columns
+   * a, b, c that is `a > ? OR (a = ? AND b > ?) OR (a = ? AND b = ? AND c > ?)`,
+   * with `<` where a column is sorted descending. spelled out instead of a
+   * row-value comparison `(a, b, c) > (?, ?, ?)`, which not every engine has and
+   * which cannot mix directions.
+   */
+  private buildAfter(
+    after: NonNullable<BrowseParams['after']>,
+    sort: SortSpec[] | undefined,
+    startIndex: number,
+  ): { clause: string; params: unknown[] } {
+    const order = sort ?? [];
+    const named = after.columns;
+    if (
+      named.length === 0 ||
+      named.length !== after.values.length ||
+      order.length !== named.length ||
+      order.some((s, i) => s.column !== named[i])
+    ) {
+      throw new BadRequestError(
+        'A page after a tuple needs the sort to name exactly the columns of the tuple, in its order.',
+      );
+    }
+    if (after.values.some((v) => v === null || v === undefined)) {
+      throw new BadRequestError(
+        'A page after a tuple cannot start after a NULL: nothing is greater or smaller than one.',
+      );
+    }
+    const params: unknown[] = [];
+    let idx = startIndex;
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return this.placeholder(idx++);
+    };
+    const alternatives = order.map((s, i) => {
+      const same = order
+        .slice(0, i)
+        .map((p, j) => `${this.quoteIdent(p.column)} = ${bind(after.values[j])}`);
+      const beyond = `${this.quoteIdent(s.column)} ${s.direction === 'desc' ? '<' : '>'} ${bind(after.values[i])}`;
+      return `(${[...same, beyond].join(' AND ')})`;
+    });
+    return { clause: `(${alternatives.join(' OR ')})`, params };
+  }
+
+  /**
    * build a parameterized WHERE clause from filters.
    * returns the SQL fragment (without leading WHERE) and the bound params
    */
@@ -315,7 +361,13 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     const target = this.qualify(params.table, params.schema);
 
     const where = this.buildWhere(params.filters, 1);
-    const whereSql = where.clause ? ` WHERE ${where.clause}` : '';
+    // the page after a tuple (keyset paging): a predicate on the sort columns
+    const after = params.after
+      ? this.buildAfter(params.after, params.sort, where.params.length + 1)
+      : null;
+    const clauses = [where.clause, after?.clause].filter(Boolean);
+    const whereSql = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+    const whereParams = [...where.params, ...(after?.params ?? [])];
 
     let orderSql = '';
     if (params.sort && params.sort.length > 0) {
@@ -334,17 +386,19 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     // fetch one extra row to learn whether a next page exists, way cheaper
     // than a COUNT(*) on every page for large tables
     const probe = limit + 1;
+    // (a keyset page starts right after its tuple: the offset means nothing to it)
     const sql =
       `SELECT * FROM ${target}${whereSql}${orderSql} ` +
-      `LIMIT ${probe} OFFSET ${offset}`;
+      `LIMIT ${probe} OFFSET ${after ? 0 : offset}`;
 
     const hasFilters = !!params.filters && params.filters.length > 0;
     const [data, count, pk] = await Promise.all([
-      this.runSql(sql, where.params),
+      this.runSql(sql, whereParams),
+      // the total is of the READ, not of the page: counted without the tuple
       this.countRows({
         table: params.table,
         schema: params.schema,
-        whereSql,
+        whereSql: where.clause ? ` WHERE ${where.clause}` : '',
         whereParams: where.params,
         hasFilters,
       }).catch(() => ({ total: null, estimated: false })),

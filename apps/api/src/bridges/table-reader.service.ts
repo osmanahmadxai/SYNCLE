@@ -1,12 +1,29 @@
 /**
  * reads a bridge's source TABLE from one end to the other, a page at a time, in
- * a stable order — for a replay, and for the copy a change-stream bridge makes
- * of the table before it starts following changes.
+ * a stable order — for a replay, for a verification, and for the copy a
+ * change-stream bridge makes of the table before it starts following changes.
  *
- * only a single page is ever held in memory. on a single-column primary key the
- * pages are keyset-paginated (`key > last`), which costs the same however deep
- * the read is and lands on the exact next row after a resume even when rows were
- * added or removed in the meantime; otherwise it falls back to OFFSET.
+ * only a single page is ever held in memory, and — wherever the engine can do
+ * it — the pages are keyset-paginated: "the rows after this one", which costs
+ * the same however deep the read is and lands on the exact next row after a
+ * resume even when rows were added or removed in the meantime. that used to be
+ * only a table with a single-column primary key; a composite key, or a sort of
+ * the bridge's own, fell back to OFFSET — where every page re-reads all the
+ * pages before it, so that a table of a few million rows took hours it had no
+ * business taking. now:
+ *
+ *   - a primary key of any width is the keyset (`(a, b) > (last a, last b)`)
+ *   - a sort of the bridge's own gets the key appended, so that it is total,
+ *     and is keyset-paginated too — unless a sorted column can hold NULL, which
+ *     no comparison can place: that is read by OFFSET, as it was
+ *   - a table with no primary key is keyed by a unique index whose columns
+ *     cannot be NULL, when it has one; a view, or a table with neither, is
+ *     read by OFFSET in the order of all its columns, and the read SAYS that
+ *     rows changed under it may be skipped or repeated (see {@link TableOrder.warning})
+ *
+ * a table with a single-column key is still read the way it always was
+ * (`key > last`, through an ordinary filter), so every engine keeps that, and
+ * so do the checkpoints of runs that were saved before this.
  *
  * an engine with no order to page by (Redis) is read by its own cursor instead.
  * it used to be keyset-paginated like the rest, and its adapter reads any
@@ -35,10 +52,49 @@ export interface TableRow {
 export interface TableOrder {
   sort: SortSpec[];
   total: number | null;
+  /** a SINGLE column the read is keyset-paginated on (`column > last`, through a filter) */
   keysetColumn: string | null;
+  /**
+   * the columns the read is keyset-paginated on when there is more than one
+   * (the tuple after the last row's, see {@link BrowseParams.after}); empty
+   * when `keysetColumn` is set, or when the read is by OFFSET
+   */
+  keysetColumns?: string[];
   /** read by the engine's own cursor (see {@link CURSOR_COLUMN}); `sort` does not apply */
   cursorPaging?: boolean;
+  /**
+   * the read is by OFFSET in an order that is not known to be unique: rows
+   * changed under it can be skipped or repeated. what a run should say
+   */
+  warning?: string;
 }
+
+/** what is known of a table's shape, for choosing how to page it; unknown = nothing */
+interface TableFacts {
+  /** the columns that can hold NULL; unknown = every column can */
+  nullable: Set<string> | null;
+  /** the unique indexes, each as its columns, primary key first */
+  uniqueKeys: string[][];
+  /** the columns, in table order */
+  columns: string[];
+  /** types that no ORDER BY can take (PostgreSQL's json, xml, geometry): not part of an all-columns order */
+  unorderable: Set<string>;
+}
+
+/** column types an ORDER BY refuses (or orders meaninglessly): left out of an all-columns order */
+const UNORDERABLE = new Set([
+  'json',
+  'xml',
+  'point',
+  'line',
+  'lseg',
+  'box',
+  'path',
+  'polygon',
+  'circle',
+  'geometry',
+  'geography',
+]);
 
 /**
  * the "column" of a checkpoint taken on a cursor-paged read. its value is the
@@ -61,7 +117,7 @@ export class TableReaderService {
     if (bridge.source.kind !== 'table')
       return { sort: [], total: null, keysetColumn: null };
     const src = bridge.source;
-    const { probe, cursorPaging } = await this.pool.withAdapter(
+    const { probe, cursorPaging, keysetPaging } = await this.pool.withAdapter(
       src.connectionId,
       src.database,
       async (a) => ({
@@ -73,6 +129,7 @@ export class TableReaderService {
           offset: 0,
         }),
         cursorPaging: a.capabilities.cursorPaging === true,
+        keysetPaging: a.capabilities.keysetPaging === true,
       }),
     );
     const singlePk =
@@ -100,27 +157,136 @@ export class TableReaderService {
     if (cursorPaging)
       return { sort: s, total: probe.total, keysetColumn: null };
 
+    // what identifies a row: the primary key, or — without one — a unique
+    // index none of whose columns can be NULL
+    const facts =
+      keysetPaging || probe.primaryKey.length === 0
+        ? await this.facts(src, probe)
+        : null;
+    const key =
+      probe.primaryKey.length > 0
+        ? probe.primaryKey
+        : (facts?.uniqueKeys.find((columns) =>
+            columns.every(
+              (c) => facts.nullable !== null && !facts.nullable.has(c),
+            ),
+          ) ?? []);
+    const asc = (column: string) => ({ column, direction: 'asc' as const });
+
     if (s.length > 0) {
-      // keyset only if the caller's order is exactly the (unique) primary key asc
-      const keyset =
-        s.length === 1 && s[0]!.column === singlePk && s[0]!.direction === 'asc'
-          ? singlePk
-          : null;
-      return { sort: s, total: probe.total, keysetColumn: keyset };
+      // the single-key case, as it always was: `key > last` through a filter
+      if (
+        s.length === 1 &&
+        s[0]!.column === singlePk &&
+        s[0]!.direction === 'asc'
+      )
+        return { sort: s, total: probe.total, keysetColumn: singlePk };
+      // the bridge's own order, made total by the key behind it — a keyset,
+      // provided nothing sorted can be NULL (a NULL is neither before nor after)
+      const sorted = new Set(s.map((x) => x.column));
+      const nullable = facts?.nullable ?? null;
+      const canKeyset =
+        keysetPaging &&
+        key.length > 0 &&
+        nullable !== null &&
+        s.every((x) => !nullable.has(x.column));
+      if (canKeyset) {
+        const sort = [...s, ...key.filter((c) => !sorted.has(c)).map(asc)];
+        return {
+          sort,
+          total: probe.total,
+          keysetColumn: null,
+          keysetColumns: sort.map((x) => x.column),
+        };
+      }
+      return { sort: s, total: probe.total, keysetColumn: null };
     }
-    if (probe.primaryKey.length > 0) {
+    if (key.length === 1) {
       return {
-        sort: probe.primaryKey.map((column) => ({
-          column,
-          direction: 'asc' as const,
-        })),
+        sort: key.map(asc),
         total: probe.total,
-        keysetColumn: singlePk,
+        keysetColumn: key[0]!,
       };
     }
-    throw new BadRequestError(
-      `Table "${src.table}" has no primary key, so rows cannot be paged in a stable order. Add a sort to the bridge to replay it safely.`,
-    );
+    if (key.length > 1) {
+      return {
+        sort: key.map(asc),
+        total: probe.total,
+        keysetColumn: null,
+        // an engine that cannot page after a tuple reads a composite key by OFFSET, as before
+        ...(keysetPaging ? { keysetColumns: key } : {}),
+      };
+    }
+    // nothing identifies a row (a view, a table without a key): every column
+    // that can be ordered, and the honest word about it
+    const columns = (
+      facts?.columns.length ? facts.columns : probe.columns.map((c) => c.name)
+    ).filter((c) => !facts?.unorderable.has(c));
+    if (columns.length === 0) {
+      throw new BadRequestError(
+        `Table "${src.table}" has no primary key, so rows cannot be paged in a stable order. Add a sort to the bridge to replay it safely.`,
+      );
+    }
+    return {
+      sort: columns.map(asc),
+      total: probe.total,
+      keysetColumn: null,
+      warning:
+        `"${src.table}" has no primary key and no unique index, so it is read by OFFSET in the order of all its columns. ` +
+        'Rows added, removed or changed while it is being read can be skipped or delivered twice; a key would make the read exact.',
+    };
+  }
+
+  /** what the engine says of the table's shape; as little as nothing, when it says nothing */
+  private async facts(
+    src: Extract<ResolvedBridge['source'], { kind: 'table' }>,
+    probe: {
+      primaryKey: string[];
+      columns: Array<{ name: string; dataType?: string }>;
+    },
+  ): Promise<TableFacts> {
+    const facts: TableFacts = {
+      nullable: null,
+      uniqueKeys: probe.primaryKey.length ? [probe.primaryKey] : [],
+      columns: probe.columns.map((c) => c.name),
+      unorderable: new Set(
+        probe.columns
+          .filter((c) => c.dataType && UNORDERABLE.has(baseType(c.dataType)))
+          .map((c) => c.name),
+      ),
+    };
+    try {
+      const schema = await this.pool.withAdapter(
+        src.connectionId,
+        src.database,
+        (a) => a.getSchema(src.database),
+      );
+      const table = schema.namespaces
+        .filter((n) => !src.schema || n.name === src.schema)
+        .flatMap((n) => n.tables)
+        .find((t) => t.name === src.table);
+      if (!table) return facts;
+      facts.nullable = new Set(
+        table.columns.filter((c) => c.nullable).map((c) => c.name),
+      );
+      facts.columns = table.columns.map((c) => c.name);
+      facts.unorderable = new Set(
+        table.columns
+          .filter((c) => UNORDERABLE.has(baseType(c.nativeType ?? c.dataType)))
+          .map((c) => c.name),
+      );
+      for (const index of table.indexes) {
+        if (
+          index.unique &&
+          index.columns.length > 0 &&
+          !facts.uniqueKeys.some((k) => k.join() === index.columns.join())
+        )
+          facts.uniqueKeys.push(index.columns);
+      }
+    } catch {
+      /* introspection unavailable: the key is what the probe said, every column may be NULL */
+    }
+    return facts;
   }
 
   /**
@@ -139,7 +305,7 @@ export class TableReaderService {
     if (bridge.source.kind !== 'table') return;
     const src = bridge.source;
     const { startOffset, resumeKey } = opts;
-    const { sort, keysetColumn, cursorPaging } =
+    const { sort, keysetColumn, keysetColumns, cursorPaging } =
       opts.order ?? (await this.resolveOrder(bridge));
     const pageSize = bridge.delivery.pageSize;
     const browse = (params: BrowseParams) =>
@@ -180,6 +346,54 @@ export class TableReaderService {
         // an empty page is not the end (a sparse MATCH); only the cursor says so
         if (!page.nextCursor) return;
         cursor = page.nextCursor;
+      }
+    }
+
+    // keyset pagination after a TUPLE: a composite key, or the bridge's own
+    // order with the key behind it. the checkpoint is the whole tuple
+    if (keysetColumns && keysetColumns.length > 0) {
+      const name = keysetColumns.join(',');
+      let last: unknown[] | null = null;
+      let index = startOffset;
+      if (startOffset > 0) {
+        if (
+          resumeKey &&
+          resumeKey.column === name &&
+          Array.isArray(resumeKey.value) &&
+          resumeKey.value.length === keysetColumns.length
+        ) {
+          last = resumeKey.value;
+        } else {
+          // no checkpoint of this shape (an older run, a changed sort): the
+          // row before the first one wanted, by offset, once
+          const seek = await browse({
+            schema: src.schema,
+            table: src.table,
+            filters: src.filters,
+            sort,
+            limit: 1,
+            offset: startOffset - 1,
+          });
+          const row = seek.rows[0];
+          last = row ? keysetColumns.map((c) => row[c]) : null;
+        }
+      }
+      for (;;) {
+        const page = await browse({
+          schema: src.schema,
+          table: src.table,
+          filters: src.filters,
+          sort,
+          limit: pageSize,
+          offset: 0,
+          ...(last ? { after: { columns: keysetColumns, values: last } } : {}),
+        });
+        for (const row of page.rows) {
+          last = keysetColumns.map((c) => row[c]);
+          yield { row, index, keyset: { column: name, value: last } };
+          index++;
+        }
+        if (!page.hasMore || page.rows.length === 0) return;
       }
     }
 
@@ -259,4 +473,9 @@ export class TableReaderService {
       offset += page.rows.length;
     }
   }
+}
+
+/** `numeric(10,2)` -> `numeric`, `character varying` -> `character varying`, `json` -> `json` */
+function baseType(type: string): string {
+  return type.toLowerCase().replace(/\(.*$/, '').replace(/\[\]$/, '').trim();
 }

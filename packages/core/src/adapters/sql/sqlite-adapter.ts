@@ -72,6 +72,7 @@ export const SQLITE_CAPABILITIES: AdapterCapabilities = {
   rowEditing: true,
   transactions: true,
   ddl: true,
+  keysetPaging: true,
   manageDatabases: false,
   backupFormats: ['json', 'sql'],
 };

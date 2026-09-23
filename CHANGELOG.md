@@ -918,6 +918,26 @@ can no longer lose a row to a failed delivery.
 
 ### Changed
 
+- **A replay of a table with a composite key — or a sort of its own — no
+  longer slows down as it goes.** Only a single-column primary key was read by
+  keyset (`key > last`); a key of two or more columns, a sort the bridge asked
+  for, and a table with no key were read by `OFFSET`, where every page re-reads
+  all the pages before it, so a table of a few million rows took hours it had
+  no business taking — and a resume after a stop could skip or repeat a row if
+  the table had moved. Now a primary key of any width is the keyset (`(a, b) >
+  (last a, last b)`), a sort of the bridge's own gets the key appended and is a
+  keyset too (unless a sorted column can hold `NULL`, which no comparison can
+  place), and a table with no primary key is keyed by a unique index whose
+  columns cannot be `NULL` when it has one. The checkpoint is the whole tuple,
+  so a canceled or interrupted run picks up at the exact next row. What is
+  left — a view, a table with no key and no such index — is read by `OFFSET`
+  in the order of all its columns, and the run **says so** on its timeline (a
+  notice before the first delivery; a verification puts it on its result):
+  rows changed under such a read can be skipped or delivered twice. A change
+  stream that copies its table first still refuses a keyless table, as it did.
+  The same reader serves verification, so a check of a composite-key copy is
+  faster by the same measure. Checkpoints saved by earlier releases stay good:
+  a single-column key is read exactly as before.
 - **Delivery details are no longer kept for ever.** Every delivery is recorded
   with what was sent and what came back (up to 16 KB each), and nothing ever
   removed those rows: a live bridge doing ten deliveries a second writes 26

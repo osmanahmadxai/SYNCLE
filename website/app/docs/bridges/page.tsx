@@ -47,6 +47,23 @@ export default function Page() {
         subset). This is the mode for an initial backfill or a one-off
         migration, and it is the default for a new bridge.
       </p>
+      <p>
+        Only one page is ever in memory, and the pages are read by{' '}
+        <em>keyset</em> wherever the engine can do it: &ldquo;the rows after
+        this one&rdquo;, which costs the same however deep the read is and
+        lands on the exact next row after a stop, even when rows were added
+        or removed in the meantime. A primary key of any width is the keyset;
+        a sort of the bridge&apos;s own gets the key appended behind it and is
+        read the same way, unless a sorted column can hold <code>NULL</code>{' '}
+        (a <code>NULL</code> is neither before nor after anything, so that
+        order is read by <code>OFFSET</code>). A table with no primary key is
+        keyed by a unique index whose columns cannot be <code>NULL</code>,
+        when it has one. What is left &mdash; a view, a table with neither
+        &mdash; is read by <code>OFFSET</code> in the order of all its
+        columns, and the run says so on its timeline: rows added, removed or
+        changed while such a table is being read can be skipped or delivered
+        twice. Give it a key and the read is exact.
+      </p>
 
       <h4 id="scheduled-replays">On a schedule</h4>
       <p>
@@ -244,9 +261,12 @@ export default function Page() {
         <li>
           <strong>It happens once.</strong> A bridge that already has a
           position resumes from it; changing the setting later does not
-          re-copy anything. The table needs a primary key (or the bridge a
-          sort) to be read in a stable order — without one the start is
-          refused, before anything is touched.
+          re-copy anything. The table needs a primary key, or a unique index
+          whose columns cannot be <code>NULL</code>, to be copied in a stable
+          order while changes arrive under it — without one the start is
+          refused, before anything is touched (a replay reads such a table
+          by <code>OFFSET</code> and says so; a copy that a log is replayed
+          on top of has to be exact).
         </li>
         <li>
           <strong>The source holds the log for as long as the copy

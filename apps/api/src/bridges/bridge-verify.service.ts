@@ -377,6 +377,9 @@ export class BridgeVerifyService implements OnApplicationBootstrap {
           where: { id },
           data: { sourceTotal: order.total },
         });
+        // a source read that cannot promise every row once: on the result
+        if (order.warning)
+          for (const run of live) this.note(run, order.warning);
         const table = bridge.source.table;
 
         /* pass 1: every row of the source, against every target */
@@ -794,10 +797,13 @@ export class BridgeVerifyService implements OnApplicationBootstrap {
 
     // the destination table read the way a source table is: keyset or cursor where it can be
     let asSource: ResolvedBridge = { ...bridge, source: tableOf(target) };
-    let order: TableOrder;
+    let order: TableOrder | null = null;
     try {
       order = await this.reader.resolveOrder(asSource);
     } catch {
+      /* nothing to order it by at all: below */
+    }
+    if (order === null || order.warning) {
       // no primary key there: ordered by the bridge's key columns instead
       asSource = {
         ...asSource,

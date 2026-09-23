@@ -51,6 +51,9 @@ const TERMINAL: BridgeJobStatus[] = [
   'interrupted',
 ];
 
+/** the sequence of a notice about a run as a whole: before its first delivery */
+export const BEFORE_ANY_ROW = -1;
+
 @Injectable()
 export class BridgeJobService implements OnModuleInit {
   private readonly logger = new Logger('BridgeJob');
@@ -1024,16 +1027,23 @@ export class BridgeJobService implements OnModuleInit {
    * put a notice on the timeline: a `skipped` cell of zero rows whose text says
    * what happened. used for things a bridge deliberately did not apply, which
    * must be visible where deliveries are. idempotent per sequence, so a replay
-   * after a crash rewrites the same cell instead of adding another.
+   * after a crash rewrites the same cell instead of adding another. a notice
+   * about the run as a whole goes at sequence -1, before any row (see
+   * {@link BEFORE_ANY_ROW}); it has no row of its own
    */
-  async recordNotice(jobId: string, sequence: number, message: string): Promise<void> {
+  async recordNotice(
+    jobId: string,
+    sequence: number,
+    message: string,
+    rowIndex: number = Math.max(0, sequence),
+  ): Promise<void> {
     await this.prisma.bridgeDelivery.upsert({
       where: { jobId_sequence: { jobId, sequence } },
       create: {
         id: randomUUID(),
         jobId,
         sequence,
-        rowIndex: sequence,
+        rowIndex,
         rowCount: 0,
         status: 'skipped',
         attempts: 0,

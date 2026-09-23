@@ -42,6 +42,13 @@ export interface AdapterCapabilities {
   transactions: boolean;
   /** supports creating / dropping / truncating tables (or collections) */
   ddl: boolean;
+  /**
+   * `browse` takes {@link BrowseParams.after}: the page of rows strictly after
+   * a tuple in the page's own sort order. what lets a table be read from one
+   * end to the other at the same cost per page however deep the read is —
+   * over a composite key, or a sort of the caller's with the key behind it
+   */
+  keysetPaging?: boolean;
   /** supports creating / dropping databases on this connection */
   manageDatabases: boolean;
   /** backup/restore formats this engine can produce/consume */
@@ -326,6 +333,14 @@ export interface BrowseParams {
    * {@link BrowseResult.nextCursor} alone says when the read is over
    */
   cursor?: string;
+  /**
+   * for an engine with {@link AdapterCapabilities.keysetPaging}: only the rows
+   * strictly AFTER this tuple in the order `sort` gives — `sort` has to name
+   * exactly these columns, in this order (a direction per column), and none of
+   * them may hold NULL, which no `>` or `<` can place. with it, `offset` is
+   * ignored: the page starts right after the tuple
+   */
+  after?: { columns: string[]; values: unknown[] };
 }
 
 export interface BrowseResult extends QueryResult {

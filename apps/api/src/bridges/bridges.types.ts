@@ -61,7 +61,9 @@ export interface DeliveryOutcome {
  * row. `column` guards against resuming a value against a changed sort.
  */
 export interface KeysetCheckpoint {
+  /** the key column — or, for a key of several columns, their names joined with commas */
   column: string;
+  /** its value in the last delivered row — an array of values for a key of several columns */
   value: unknown;
 }
 
