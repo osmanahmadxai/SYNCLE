@@ -55,6 +55,23 @@ can no longer lose a row to a failed delivery.
 
 ### Fixed
 
+- **A polling watch on a Redis source scanned the keyspace from the top for
+  every page.** Redis pages by a cursor of its own (`SCAN`); the watch paged it
+  by `OFFSET`, which the adapter can only do by scanning from the start and
+  slicing, so a keyspace of a hundred thousand keys was a hundred scans of it
+  per poll — and again for the copy of the keys the watch takes when it
+  starts. Both now follow the cursor: every key once per poll.
+- **Every watch poll left its job record in Redis for ever.** The scheduler's
+  job template had no `removeOnComplete`, so a watch polling every second
+  wrote 86,400 records a day into the queue's Redis. A poll that is done is now
+  gone (a failed one is kept, the last 50), and an API start cleans out the
+  records earlier releases left. A start also removes the scheduler of a watch
+  whose bridge is gone (one removed while no API process was up to unschedule
+  it polled for ever, "bridge not found" every tick), and keeps that of one
+  which is listening.
+- **The query editor's tabs were named in English whatever the language.**
+  "Query 3" is now "Query 3", "Query 3" or "查询 3" as the app is set; a tab
+  keeps its number when one before it is closed.
 - **A failed delivery on a live bridge could lose rows for good.** Three
   separate ways, all closed. The rule now holds everywhere: a row that has been
   read is in the destination, in the bridge's dead-letter queue, or still ahead

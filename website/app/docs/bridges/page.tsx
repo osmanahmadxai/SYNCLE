@@ -185,7 +185,9 @@ export default function Page() {
               <td>
                 for UUID and other non-monotonic keys; bounded by{' '}
                 <code>maxTracked</code> (default 50,000), so best for small
-                and medium tables
+                and medium tables. On a Redis source the keyspace is walked
+                by <code>SCAN</code>&apos;s own cursor, every key once per
+                poll
               </td>
             </tr>
           </tbody>

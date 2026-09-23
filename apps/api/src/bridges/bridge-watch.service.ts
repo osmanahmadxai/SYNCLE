@@ -258,6 +258,14 @@ export class BridgeWatchService implements OnModuleInit {
       let delivered = 0;
       let offset = 0;
       let pages = 0;
+      // an engine that pages by a cursor of its own (Redis: SCAN) is walked by
+      // it: an OFFSET there is a scan started over from the top for every
+      // page, and a keyspace of a hundred thousand keys was a hundred scans of
+      // it per poll. only a snapshot walk, which has no order to keep
+      const byCursor =
+        strategy.strategy === 'snapshot' &&
+        (await this.pool.withAdapter(src.connectionId, src.database, async (a) => a.capabilities.cursorPaging === true));
+      let scan: string | null = byCursor ? '0' : null;
       // rows in a row that failed during this poll, to tell a dead destination
       // from a bad row (see `continue` below)
       let consecutiveFailures = 0;
@@ -285,7 +293,8 @@ export class BridgeWatchService implements OnModuleInit {
             filters: allFilters.length ? allFilters : undefined,
             sort: sort.length ? sort : undefined,
             limit: pageLimit,
-            offset,
+            offset: byCursor ? 0 : offset,
+            ...(byCursor ? { cursor: scan ?? '0' } : {}),
           }),
         );
         pages++;
@@ -413,6 +422,12 @@ export class BridgeWatchService implements OnModuleInit {
           data: { cursorJson: JSON.stringify(cursor), cursorOffset: seq },
         });
 
+        if (byCursor) {
+          // the next page is wherever the engine's cursor points; the end is its end
+          if (!page.hasMore || !page.nextCursor) break;
+          scan = page.nextCursor;
+          continue;
+        }
         const full = page.rows.length >= pageLimit;
         if (!full) break; // drained everything matching the filter window
         if (newRows.length === 0 && !advanced) {
@@ -584,6 +599,25 @@ export class BridgeWatchService implements OnModuleInit {
     // in pk order so the seed and the polls walk the table the same way
     const pk = await this.resolvePk(bridge.id, src);
     const seen: string[] = [];
+    const byCursor = await this.pool.withAdapter(cid, db, async (a) => a.capabilities.cursorPaging === true);
+    if (byCursor) {
+      // by the engine's own cursor (see runPoll): every key once, no scan started over
+      for (let scan: string | null = '0'; scan !== null && seen.length < strategy.maxTracked; ) {
+        const page = await this.pool.withAdapter(cid, db, (a) =>
+          a.browse({
+            schema: src.schema,
+            table: src.table,
+            filters: withUser([]),
+            limit: Math.min(strategy.maxTracked - seen.length, 1000),
+            offset: 0,
+            cursor: scan ?? '0',
+          }),
+        );
+        seen.push(...page.rows.map((r) => rowKey(r, pk.length ? pk : page.primaryKey)));
+        scan = page.hasMore ? page.nextCursor ?? null : null;
+      }
+      return { strategy: 'snapshot', seen: seen.slice(0, strategy.maxTracked) };
+    }
     for (let offset = 0; offset < strategy.maxTracked; offset += 1000) {
       const page = await this.pool.withAdapter(cid, db, (a) =>
         a.browse({
@@ -613,8 +647,74 @@ export class BridgeWatchService implements OnModuleInit {
     await this.queue.upsertJobScheduler(
       this.schedulerId(bridgeId),
       { every },
-      { name: 'poll', data: { bridgeId } },
+      {
+        name: 'poll',
+        data: { bridgeId },
+        // a poll that is done is a poll that is gone: without this every tick
+        // left its job record in Redis for ever (a poll a second is 86,400 a day)
+        opts: { removeOnComplete: true, removeOnFail: 50, attempts: 1 },
+      },
     );
+  }
+
+  /** every scheduler of this queue that is one of ours, as `bridgeId`s, paged */
+  private async scheduledBridges(): Promise<string[]> {
+    const out: string[] = [];
+    for (let start = 0; ; start += 200) {
+      const page = await this.queue.getJobSchedulers(start, start + 199, true);
+      for (const scheduler of page) {
+        const key = scheduler.key ?? (scheduler as { id?: string }).id;
+        if (key?.startsWith('watch:')) out.push(key.slice('watch:'.length));
+      }
+      if (page.length < 200) break;
+    }
+    return out;
+  }
+
+  /**
+   * put the queue right: a scheduler for every watch that is listening, none
+   * for one that is not (a bridge removed while no process was up to
+   * unschedule it kept polling for ever, "bridge not found" every tick), and
+   * the records of polls that earlier releases never removed cleaned out.
+   * one process at a time; the others find it done
+   */
+  async reconcile(): Promise<{ scheduled: number; removed: number; cleaned: number }> {
+    const result = { scheduled: 0, removed: 0, cleaned: 0 };
+    const rows = await this.prisma.bridgeJob.findMany({
+      where: { status: 'running', cursorJson: { not: null } },
+      select: { bridgeId: true },
+    });
+    const listening = new Set<string>();
+    for (const { bridgeId } of rows) {
+      try {
+        const bridge = await this.store.get(bridgeId);
+        if (bridge.trigger.kind === 'watch' && bridge.enabled) {
+          await this.schedule(bridgeId, bridge.trigger.pollIntervalMs);
+          listening.add(bridgeId);
+          result.scheduled++;
+        }
+      } catch (err) {
+        this.logger.warn(`Could not resume watch ${bridgeId}: ${(err as Error).message}`);
+      }
+    }
+    for (const bridgeId of await this.scheduledBridges()) {
+      if (listening.has(bridgeId)) continue;
+      // the list is a moment old: another process may have started this one since
+      const job = await this.prisma.bridgeJob.findFirst({
+        where: { bridgeId, status: 'running', cursorJson: { not: null } },
+        select: { id: true },
+      });
+      if (job) continue;
+      await this.queue.removeJobScheduler(this.schedulerId(bridgeId)).catch(() => false);
+      result.removed++;
+    }
+    // (bounded per pass: a queue with a million of them is put right over a few starts)
+    for (let pass = 0; pass < 20; pass++) {
+      const gone = await this.queue.clean(0, 10_000, 'completed').catch(() => [] as string[]);
+      result.cleaned += gone.length;
+      if (gone.length < 10_000) break;
+    }
+    return result;
   }
 
   private async unschedule(bridgeId: string): Promise<void> {
@@ -644,26 +744,14 @@ export class BridgeWatchService implements OnModuleInit {
   /* ----- boot recovery ----- */
 
   async onModuleInit(): Promise<void> {
-    let rows: { bridgeId: string }[];
     try {
-      rows = await this.prisma.bridgeJob.findMany({
-        where: { status: 'running', cursorJson: { not: null } },
-        select: { bridgeId: true },
-      });
+      const done = await this.instance.withLock('watch-reconcile', () => this.reconcile());
+      if (done && (done.scheduled || done.removed || done.cleaned))
+        this.logger.log(
+          `Watch listeners: ${done.scheduled} resumed, ${done.removed} stale scheduler(s) removed, ${done.cleaned} old poll record(s) cleaned`,
+        );
     } catch (err) {
       this.logger.warn(`Skipped watch recovery: ${(err as Error).message}`);
-      return;
     }
-    for (const { bridgeId } of rows) {
-      try {
-        const bridge = await this.store.get(bridgeId);
-        if (bridge.trigger.kind === 'watch' && bridge.enabled) {
-          await this.schedule(bridgeId, bridge.trigger.pollIntervalMs);
-        }
-      } catch (err) {
-        this.logger.warn(`Could not resume watch ${bridgeId}: ${(err as Error).message}`);
-      }
-    }
-    if (rows.length) this.logger.log(`Resumed ${rows.length} watch listener(s)`);
   }
 }

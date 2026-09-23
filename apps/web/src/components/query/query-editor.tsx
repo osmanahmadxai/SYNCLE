@@ -201,7 +201,9 @@ export function QueryEditor() {
             )}
             onClick={() => setActiveQueryTab(tab.id)}
           >
-            <span className="max-w-[140px] truncate">{tab.name}</span>
+            <span className="max-w-[140px] truncate">
+              {tab.name ?? t('untitledTab', { n: tab.number })}
+            </span>
             <button
               className="rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
               aria-label={t('closeTab')}

@@ -925,6 +925,7 @@
     }
   },
   "queryEditor": {
+    "untitledTab": "Query {n}",
     "selectConnection": "Seleziona una connessione per eseguire query.",
     "closeTab": "Chiudi scheda",
     "newTab": "Nuova scheda query",

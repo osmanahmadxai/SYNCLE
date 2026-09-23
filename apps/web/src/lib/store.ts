@@ -21,7 +21,10 @@ export interface BridgeEditorSeed {
 
 export interface QueryTab {
   id: string;
-  name: string;
+  /** a name of its own (a statement opened from elsewhere); without one, "Query {number}" in the user's language */
+  name?: string;
+  /** its number among the tabs opened so far — kept when a tab before it closes */
+  number: number;
   sql: string;
 }
 
@@ -30,8 +33,12 @@ const nextTabId = () => `qt_${++tabSeq}`;
 
 function freshTabs(): { tabs: QueryTab[]; activeId: string } {
   const id = nextTabId();
-  return { tabs: [{ id, name: 'Query 1', sql: '' }], activeId: id };
+  return { tabs: [{ id, number: 1, sql: '' }], activeId: id };
 }
+
+/** the number for a new tab: one past the highest so far, so closing a tab renumbers nothing */
+const nextNumber = (tabs: QueryTab[]): number =>
+  tabs.reduce((n, t) => Math.max(n, t.number), 0) + 1;
 
 interface StudioState {
   /** the workspace currently in view; everything is scoped to it */
@@ -186,9 +193,16 @@ export const useStudio = create<StudioState>((set) => ({
   addQueryTab: (opts) =>
     set((s) => {
       const id = nextTabId();
-      const name = opts?.name ?? `Query ${s.queryTabs.length + 1}`;
       return {
-        queryTabs: [...s.queryTabs, { id, name, sql: opts?.sql ?? '' }],
+        queryTabs: [
+          ...s.queryTabs,
+          {
+            id,
+            ...(opts?.name ? { name: opts.name } : {}),
+            number: nextNumber(s.queryTabs),
+            sql: opts?.sql ?? '',
+          },
+        ],
         activeQueryTabId: id,
       };
     }),
@@ -219,7 +233,8 @@ export const useStudio = create<StudioState>((set) => ({
           ...s.queryTabs,
           {
             id,
-            name: name ?? `Query ${s.queryTabs.length + 1}`,
+            ...(name ? { name } : {}),
+            number: nextNumber(s.queryTabs),
             sql: statement,
           },
         ],

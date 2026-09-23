@@ -925,6 +925,7 @@
     }
   },
   "queryEditor": {
+    "untitledTab": "查询 {n}",
     "selectConnection": "选择一个连接以运行查询。",
     "closeTab": "关闭标签页",
     "newTab": "新建查询标签页",
