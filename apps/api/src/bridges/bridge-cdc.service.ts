@@ -20,6 +20,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import {
+  AppError,
   BadRequestError,
   ConflictError,
   type CdcOperation,
@@ -60,6 +61,7 @@ import { rowMatchesFilters } from './cdc/filter-match';
 import { AlertsService } from '../alerts/alerts.service';
 import { SnapshotCdcProvider } from './cdc/snapshot-provider';
 import { TableReaderService } from './table-reader.service';
+import { InstanceService } from '../common/instance.service';
 import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService, tracksSchema } from './schema-drift.service';
 import { CdcSpoolService, type SpoolEntry, type SpooledItem } from './cdc/cdc-spool.service';
@@ -188,6 +190,13 @@ const SETTLE_ATTEMPTS = 3;
  */
 const POSITION_LINGER_MS = 1_000;
 
+/**
+ * how often the leader looks for a job that is marked `running` and is not being
+ * read: one another process asked for while the lead was changing hands, or one
+ * whose source could not be reached when it was resumed
+ */
+const RECONCILE_MS = 15_000;
+
 /** read the persisted resume cursor from a job's cursorJson (legacy `lsn` ok) */
 function readCursor(cursorJson: string | null): string | null {
   return readCursorState(cursorJson).cursor;
@@ -266,6 +275,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     private readonly alerts: AlertsService,
     private readonly drift: SchemaDriftService,
     private readonly echo: EchoGuardService,
+    private readonly instance: InstanceService,
     @Inject(CDC_PROVIDERS) providers: CdcProvider[],
   ) {
     // every engine's provider is handed out inside the wrapper that can copy a
@@ -375,6 +385,19 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     });
     if (active) throw new ConflictError('This bridge is already running. Stop it first.');
 
+    // live streams exist ONCE, in the process that leads (see InstanceService).
+    // this one checks and prepares everything as it always did, and hands the
+    // stream itself to the leader — which has to be there to take it: a job
+    // marked "running" that nothing reads would be a lie on the screen
+    if (!this.instance.isLeader() && (await this.instance.askLeader('cdc.ping', null, 3_000)) === undefined) {
+      throw new AppError(
+        'CONFLICT',
+        'Live bridges are run by one API process at a time (the leader), and none answers right now — it is being elected, or Redis cannot be reached. Try again in a moment.',
+        503,
+        { reason: 'no-leader' },
+      );
+    }
+
     // from here on the source is being talked to: through the connection's SSH
     // tunnel if it has one, opened once and kept for the stream
     const route = await this.openRoute(conn);
@@ -482,6 +505,16 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
         });
 
     const copies = copiesFirst(bridge, job.cursorJson);
+    if (!this.instance.isLeader()) {
+      // everything that can be refused has been checked, and the source is set
+      // up: the leader opens the stream (through a route of its own)
+      await route.close();
+      const opened = await this.instance.askLeader('cdc.begin', { bridgeId }, 60_000);
+      // no answer: the leader went away in between. the job stays `running`,
+      // which is exactly what whoever is elected next resumes
+      if (opened === undefined) this.logger.warn(`CDC ${bridgeId}: the leader did not answer; the next one resumes it`);
+      return this.jobs.getJob(bridgeId, job.id);
+    }
     await this.beginStream(bridgeId, bridge, route, provider, job.id, job.cursorOffset, job.cursorJson);
     this.logger.log(
       `${copies ? 'Copying the table, then streaming' : 'Streaming'} changes for bridge ${bridgeId} (job ${job.id}, ${conn.engine}${route.tunnel ? ', through its SSH tunnel' : ''})`,
@@ -637,7 +670,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       // the bridge may be live again on this very source (deleted-then-recreated
       // ids do not happen, but an `abandon` followed by an edit back does): its
       // slot is in use, not left over
-      if (this.streams.has(task.bridgeId)) {
+      if (await this.isStreaming(task.bridgeId)) {
         const current = await this.store.resolve(task.bridgeId).catch(() => null);
         if (current?.source.kind === 'table' && current.source.connectionId === task.connectionId) {
           await this.prisma.sourceCleanup.delete({ where: { id: task.id } }).catch(() => undefined);
@@ -673,7 +706,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       select: { cursorJson: true },
     });
     const state = readCursorState(job?.cursorJson ?? null);
-    const running = this.streams.has(bridgeId);
+    const running = await this.isStreaming(bridgeId);
     const found = await provider.inspect(bridgeId, bridge, conn, state.cursor);
     if (!found) return null;
     // never started: a slot that does not exist yet is not a slot that was lost
@@ -774,14 +807,36 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
   /** close every streaming connection on shutdown, no zombie streamers */
   async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
+    if (this.reconciler) clearInterval(this.reconciler);
     for (const bridgeId of [...this.streams.keys()]) {
       await this.teardown(bridgeId);
     }
   }
 
+  /**
+   * is this bridge being read — here, or (when another process leads) there?
+   * a process that does not lead reads nothing; what the leader reads is what
+   * is marked `running`
+   */
+  private async isStreaming(bridgeId: string): Promise<boolean> {
+    if (this.streams.has(bridgeId)) return true;
+    if (this.instance.isLeader()) return false;
+    const job = await this.prisma.bridgeJob.findFirst({ where: { bridgeId, status: 'running' }, select: { id: true } });
+    return !!job;
+  }
+
   private async teardown(bridgeId: string): Promise<void> {
     const stream = this.streams.get(bridgeId);
-    if (!stream) return;
+    if (!stream) {
+      // not read HERE. if another process leads and the bridge is meant to be
+      // running, it is read THERE: that process is asked to stop reading, and is
+      // waited for — what follows (finalizing the job, dropping the slot) must
+      // not happen under a stream that is still delivering
+      if (!this.destroyed && !this.instance.isLeader() && (await this.isStreaming(bridgeId))) {
+        await this.instance.askLeader('cdc.teardown', { bridgeId }, 20_000).catch(() => undefined);
+      }
+      return;
+    }
     // let the in-flight chain settle so a half-built batch is not abandoned
     // mid-flush, then drop the entry so nothing new is accepted
     await stream.pending.catch(() => undefined);
@@ -810,6 +865,13 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     cursorJson: string | null,
   ): Promise<void> {
     const startCursor = readCursor(cursorJson);
+    // only the process that leads reads sources. (lost between the check at the
+    // top of a start and here: the job stays `running`, and the process that
+    // leads now picks it up)
+    if (!this.instance.isLeader()) {
+      await route.close();
+      throw new ConflictError('This process stopped being the leader while the bridge was starting; the one that leads now takes it over.');
+    }
     // two live streams for one bridge would double-deliver every change
     if (this.streams.has(bridgeId)) {
       throw new ConflictError('This bridge already has a live stream. Stop it first.');
@@ -1966,7 +2028,42 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
 
   /* ----- boot recovery ----- */
 
+  private reconciler: NodeJS.Timeout | null = null;
+  /** bridges whose stream is being opened right now: not the reconciler's to open a second time */
+  private readonly opening = new Set<string>();
+
+  /**
+   * the live streams exist ONCE: in the process that leads (InstanceService).
+   * being elected is what boot used to be — every job marked `running` is
+   * brought back up from its saved position — and it happens again whenever the
+   * lead changes hands, which is what makes a second process a standby.
+   */
   async onModuleInit(): Promise<void> {
+    this.instance.handle('cdc.ping', () => true);
+    this.instance.handle('cdc.begin', (p) => this.beginForAnother((p as { bridgeId: string }).bridgeId));
+    this.instance.handle('cdc.teardown', (p) => this.teardown((p as { bridgeId: string }).bridgeId));
+    this.instance.onElected(() => this.resumeAll());
+    this.instance.onDemoted((reason) => this.standDown(reason));
+    // and, every so often: the leader looks for a job that is marked `running`
+    // and is not being read (one another process asked for while the lead was
+    // changing hands, one whose source could not be reached) — and a process
+    // that does NOT lead makes sure it reads nothing (a start that was half-way
+    // through when the lead was lost)
+    this.reconciler = setInterval(() => {
+      if (this.destroyed) return;
+      if (this.instance.isLeader()) void this.resumeAll();
+      else if (this.streams.size > 0) void this.standDown('this process does not lead');
+    }, RECONCILE_MS);
+    this.reconciler.unref?.();
+  }
+
+  /**
+   * every CDC job that is marked `running` and is not being read: read it. what
+   * the process that leads does when it is elected — at boot, in an installation
+   * of one — and every so often after that
+   */
+  async resumeAll(): Promise<void> {
+    if (this.destroyed || !this.instance.isLeader()) return;
     let jobs: ResumableJob[];
     try {
       jobs = await this.prisma.bridgeJob.findMany({
@@ -1977,12 +2074,41 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     for (const r of jobs) {
+      if (this.streams.has(r.bridgeId) || this.opening.has(r.bridgeId)) continue;
+      if (this.destroyed || !this.instance.isLeader()) return;
       try {
         await this.resumeJob(r);
       } catch (err) {
         this.logger.warn(`Could not resume CDC ${r.bridgeId}: ${(err as Error).message}`);
       }
     }
+  }
+
+  /**
+   * this process no longer leads: another one reads the sources now (or will,
+   * the moment it is elected). every stream here stops; the jobs stay `running`
+   * — that is what tells the new leader to pick them up, from the positions
+   * that were saved
+   */
+  private async standDown(reason: string): Promise<void> {
+    const reading = [...this.streams.keys()];
+    if (reading.length > 0) this.logger.warn(`Stopping ${reading.length} live stream(s): ${reason}.`);
+    for (const bridgeId of reading) await this.teardown(bridgeId).catch(() => undefined);
+  }
+
+  /** another process prepared this bridge's start and asks the leader — this process — to read it */
+  private async beginForAnother(bridgeId: string): Promise<boolean> {
+    if (this.streams.has(bridgeId)) return true;
+    const job = await this.prisma.bridgeJob.findFirst({
+      where: { bridgeId, status: 'running' },
+      orderBy: { startedAt: 'desc' },
+      select: { bridgeId: true, id: true, cursorOffset: true, cursorJson: true },
+    });
+    if (!job) throw new Error('there is no running job to read for');
+    await this.resumeJob(job);
+    if (this.streams.has(bridgeId)) return true;
+    const after = await this.prisma.bridgeJob.findUnique({ where: { id: job.id }, select: { error: true } });
+    throw new Error(after?.error ?? 'the stream could not be opened');
   }
 
   /**
@@ -1993,6 +2119,18 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
    * the source could not be reached, so the caller can try again.
    */
   private async resumeJob(r: ResumableJob): Promise<void> {
+    if (this.opening.has(r.bridgeId)) return;
+    this.opening.add(r.bridgeId);
+    try {
+      await this.resumeJobNow(r);
+    } finally {
+      this.opening.delete(r.bridgeId);
+    }
+  }
+
+  private async resumeJobNow(r: ResumableJob): Promise<void> {
+    // (a retry loop that outlived the lead — a dropped tunnel being re-dialled — ends here)
+    if (!this.instance.isLeader()) return;
     const bridge = await this.store.resolve(r.bridgeId);
     if (bridge.trigger.kind !== 'cdc' || !bridge.enabled || bridge.source.kind !== 'table') return;
     const raw = await this.connStore.resolve(bridge.source.connectionId);
@@ -2055,7 +2193,7 @@ export class BridgeCdcService implements OnModuleInit, OnModuleDestroy {
     const jobId = stream.jobId;
     await this.teardown(bridgeId);
 
-    for (let attempt = 0; !this.destroyed; attempt++) {
+    for (let attempt = 0; !this.destroyed && this.instance.isLeader(); attempt++) {
       let job: ResumableJob | null = null;
       try {
         const row = await this.prisma.bridgeJob.findUnique({

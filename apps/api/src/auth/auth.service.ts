@@ -78,6 +78,9 @@ interface SessionPayload {
   iat: number;
 }
 
+/** the random value the first-run setup token is derived from (see mintSetupToken); gone once an account exists */
+const SETUP_NONCE_KEY = 'install.setupNonce';
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger('Auth');
@@ -129,7 +132,7 @@ export class AuthService implements OnModuleInit {
       this.logger.warn(`Skipped setup-token mint: ${(err as Error).message}`);
       return;
     }
-    this.printSetupBanner(this.mintSetupToken());
+    this.printSetupBanner(await this.mintSetupToken());
   }
 
   async hasAccount(): Promise<boolean> {
@@ -150,9 +153,12 @@ export class AuthService implements OnModuleInit {
     if (this.setupToken == null) {
       // boot couldn't reach the DB (or the token was consumed by a failed
       // race) — mint now so the console always shows a usable token
-      this.printSetupBanner(this.mintSetupToken());
+      this.printSetupBanner(await this.mintSetupToken());
     }
-    if (!tokensEqual(setupToken, this.setupToken!)) {
+    // (asked for again, not remembered: with more than one process, the token
+    // that counts is the one they all share — see mintSetupToken)
+    const expected = (await this.sharedSetupToken()) ?? this.setupToken!;
+    if (!tokensEqual(setupToken, expected)) {
       this.setupLimiter.fail(`setup:${ip}`);
       throw new UnauthorizedError(
         'Invalid setup token. It is printed in the server logs at startup.',
@@ -167,6 +173,8 @@ export class AuthService implements OnModuleInit {
     });
     this.setupToken = null;
     this.clearSetupTokenFile();
+    // the next first run (a wiped users table) gets a token of its own
+    await this.forgetSetupNonce();
     this.setupLimiter.succeed(`setup:${ip}`);
     return user;
   }
@@ -204,10 +212,48 @@ export class AuthService implements OnModuleInit {
     }
   }
 
-  private mintSetupToken(): string {
-    this.setupToken = randomBytes(9).toString('base64url');
+  /**
+   * the token used to be a random value in THIS process's memory. with two
+   * processes each printed its own, and the setup form — answered by whichever
+   * process the request reached — refused the other one's token half the time.
+   *
+   * it is now the same for every process of an installation: derived, under the
+   * master key, from a random value kept in the database for as long as no
+   * account exists. nothing in the database gives it away (the master key is
+   * needed), it survives a restart before setup is finished, and a database
+   * that is set up again gets another one. a process that cannot reach the
+   * database falls back to a token of its own, as before
+   */
+  private async mintSetupToken(): Promise<string> {
+    this.setupToken = (await this.sharedSetupToken()) ?? randomBytes(9).toString('base64url');
     this.persistSetupToken(this.setupToken);
     return this.setupToken;
+  }
+
+  private async forgetSetupNonce(): Promise<void> {
+    try {
+      await this.prisma.appSetting.deleteMany({ where: { key: SETUP_NONCE_KEY } });
+    } catch {
+      /* the account exists, which is what makes the token worthless */
+    }
+  }
+
+  private async sharedSetupToken(): Promise<string | null> {
+    try {
+      const settings = this.prisma.appSetting;
+      let row = await settings.findUnique({ where: { key: SETUP_NONCE_KEY } });
+      if (!row) {
+        const nonce = randomBytes(16).toString('base64url');
+        // two processes starting together: one creates it, the other reads it
+        row = await settings
+          .create({ data: { key: SETUP_NONCE_KEY, valueJson: JSON.stringify(nonce) } })
+          .catch(() => settings.findUnique({ where: { key: SETUP_NONCE_KEY } }));
+      }
+      if (!row) return null;
+      return this.crypto.derive('setup-token', String(JSON.parse(row.valueJson))).slice(0, 12);
+    } catch {
+      return null;
+    }
   }
 
   /**

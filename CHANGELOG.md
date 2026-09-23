@@ -455,6 +455,35 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **More than one API process on one database is safe — and gives failover.**
+  Nothing stopped anybody from running two (a replica, the overlap of a rolling
+  deploy), and nothing made it safe: every process resumed every live CDC bridge
+  at boot and kept the stream in a table of its own. Two readers per bridge — on
+  PostgreSQL the second looped on "replication slot is active", on MySQL both
+  connected under the same replication server id and the server threw out one
+  after the other, on MongoDB and Redis every change was delivered twice.
+  - One process **leads**, by a lease in Redis (`SYNCLE_LEADER_TTL_SECONDS`,
+    default 20): it reads the live bridges and runs the periodic sweeps. A
+    leader that shuts down hands the lease over at once; one that dies is
+    replaced when it runs out. The new leader resumes every live bridge from its
+    saved position, so nothing is lost and nothing is delivered twice. A leader
+    that cannot renew the lease for as long as it lasts stops reading (it
+    fences itself), and reads again when it leads again.
+  - Any process can be asked anything: a start or stop of a live bridge that
+    reaches another process is relayed to the leader and answered when it is
+    done (a start with no leader to hand the stream to is refused, 503, rather
+    than shown as "running"); a cancel reaches the process that runs the job; a
+    saved setting reaches every process's cache; a polling bridge is polled by
+    one process at a time even when a poll outlasts its interval.
+  - The first-run setup token is the same whichever process prints it (derived,
+    under the master key, from a value kept in the database until an account
+    exists) — it also survives a restart before setup is finished.
+  - `GET /api/settings/instances`, a panel in Settings that appears when there
+    is more than one process (or nobody leads), and `syncle_instance_leader` in
+    the metrics.
+  With one process nothing changes, except that a Redis outage longer than the
+  lease pauses live bridges until Redis is back. See *Running more than one API
+  process* in the self-hosting documentation.
 - **A row in Redis is a key of its own: a hash, a JSON document or a string,
   under a key you design, with an expiry.** A Redis destination had one shape —
   a column renamed to `key`, a column renamed to `value`, `SET` — which keeps

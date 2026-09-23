@@ -35,6 +35,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma.service';
+import { InstanceService } from '../common/instance.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
 
@@ -71,22 +72,22 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: SettingsStoreService,
+    private readonly instance: InstanceService,
   ) {}
+
+  /** on its timer, by the process that leads: one sweep at a time is all the database needs */
+  private timed(): void {
+    if (this.instance.isLeader()) void this.sweep().catch(() => undefined);
+  }
 
   onModuleInit(): void {
     const minutes = runtimeConfig.retentionSweepMinutes;
     if (minutes <= 0) return;
     // not at boot. the first start after an upgrade is when this removes the
     // most, and whoever runs it gets ten minutes to say "keep everything" first
-    this.first = setTimeout(
-      () => void this.sweep().catch(() => undefined),
-      FIRST_SWEEP_MS,
-    );
+    this.first = setTimeout(() => this.timed(), FIRST_SWEEP_MS);
     this.first.unref?.();
-    this.timer = setInterval(
-      () => void this.sweep().catch(() => undefined),
-      minutes * 60_000,
-    );
+    this.timer = setInterval(() => this.timed(), minutes * 60_000);
     this.timer.unref?.();
   }
 

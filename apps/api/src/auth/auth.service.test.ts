@@ -90,12 +90,35 @@ function fakePrisma() {
 }
 
 let ttlMinutes = 60;
-function make() {
-  const prisma = fakePrisma();
-  const service = new AuthService(prisma as never, new CryptoService(), {
+function make(prisma = fakePrisma(), crypto = new CryptoService()) {
+  const service = new AuthService(prisma as never, crypto, {
     resolved: async () => ({ sessionTtlMinutes: ttlMinutes }),
   } as never);
   return { prisma, service };
+}
+
+/** the key/value table every process of an installation shares */
+function sharedSettings() {
+  const rows = new Map<string, { key: string; valueJson: string }>();
+  return {
+    rows,
+    appSetting: {
+      findUnique: async ({ where }: { where: { key: string } }) =>
+        rows.get(where.key) ?? null,
+      create: async ({
+        data,
+      }: {
+        data: { key: string; valueJson: string };
+      }) => {
+        if (rows.has(data.key)) throw new Error('Unique constraint failed');
+        rows.set(data.key, data);
+        return data;
+      },
+      deleteMany: async ({ where }: { where: { key: string } }) => ({
+        count: rows.delete(where.key) ? 1 : 0,
+      }),
+    },
+  };
 }
 
 /** a response that records its cookies, the way a browser would keep them */
@@ -178,6 +201,68 @@ describe('first-run setup', () => {
     const ua = await account(a.service);
     const ub = await account(b.service);
     expect(ua.passwordHash).not.toBe(ub.passwordHash);
+  });
+});
+
+describe('first-run setup with more than one API process', () => {
+  const tokenOf = (service: AuthServiceClass) =>
+    (service as unknown as { setupToken: string | null }).setupToken;
+
+  it('every process prints the SAME token, and any of them takes it', async () => {
+    const shared = sharedSettings();
+    const database = { ...fakePrisma(), ...shared };
+    const a = make(database).service;
+    const b = make(database).service;
+    await a.onModuleInit();
+    await b.onModuleInit();
+    expect(tokenOf(a)).toMatch(/^[\w-]{12}$/);
+    expect(tokenOf(b)).toBe(tokenOf(a));
+    // the token one process printed, entered through the other
+    await expect(
+      b.setup('admin', 'correct horse battery', tokenOf(a)!, '10.0.0.1'),
+    ).resolves.toMatchObject({ username: 'admin' });
+    // used up: what it was derived from is gone, for every process
+    expect(shared.rows.size).toBe(0);
+  });
+
+  it('nothing in the database gives the token away: it takes the master key', async () => {
+    const shared = sharedSettings();
+    const { service } = make({ ...fakePrisma(), ...shared });
+    await service.onModuleInit();
+    const stored = [...shared.rows.values()].map((r) => r.valueJson).join();
+    expect(stored).not.toContain(tokenOf(service)!);
+    // another installation (another master key) over the same value gets another token
+    const otherKey = new CryptoService();
+    (otherKey as unknown as { key: Buffer }).key = Buffer.alloc(32, 9);
+    const other = make({ ...fakePrisma(), ...shared }, otherKey).service;
+    await other.onModuleInit();
+    expect(tokenOf(other)).toMatch(/^[\w-]{12}$/);
+    expect(tokenOf(other)).not.toBe(tokenOf(service));
+  });
+
+  it('a database that is set up AGAIN gets a token of its own', async () => {
+    const shared = sharedSettings();
+    const first = make({ ...fakePrisma(), ...shared }).service;
+    await first.onModuleInit();
+    const one = tokenOf(first)!;
+    await first.setup('admin', 'correct horse battery', one, '10.0.0.1');
+    const second = make({ ...fakePrisma(), ...shared }).service; // (the users table was wiped)
+    await second.onModuleInit();
+    expect(tokenOf(second)).not.toBe(one);
+  });
+
+  it('without the shared table a process falls back to a token of its own, as before', async () => {
+    const { service } = make();
+    await service.onModuleInit();
+    expect(tokenOf(service)).toMatch(/^[\w-]{12}$/);
+    await expect(
+      service.setup(
+        'admin',
+        'correct horse battery',
+        tokenOf(service)!,
+        '10.0.0.1',
+      ),
+    ).resolves.toMatchObject({ username: 'admin' });
   });
 });
 

@@ -352,7 +352,7 @@ describe('a slot that went away behind the bridge’s back', () => {
       data: { status: 'running', finishedAt: null },
     });
 
-    await app.cdc.onModuleInit();
+    await app.cdc.resumeAll(); // (what the process that leads does at boot)
     const after = await job(b.bridgeId);
     expect(after.status).toBe('failed');
     expect(after.error).toMatch(/could not resume where it stopped/);

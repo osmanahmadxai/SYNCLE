@@ -471,6 +471,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
 | `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
 | `SYNCLE_SHARED_SLOT_JOIN_WAIT_MS` | api | Joining a shared PostgreSQL replication slot: how long to wait for transactions that were open when the table was published (default `60000`) |
+| `SYNCLE_LEADER_TTL_SECONDS` | api | More than one API process: how long the leader's lease lasts — the longest a failover takes, and how long a leader cut off from Redis keeps reading live bridges (default `20`) |
 | `SYNCLE_ECHO_TTL_SECONDS` | api | Loop prevention (A → B plus B → A): how long a write to a table another bridge reads is remembered, so it is known when it comes back (default `300`; `0` = off) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
 | `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |

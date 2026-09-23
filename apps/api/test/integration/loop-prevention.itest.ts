@@ -496,7 +496,11 @@ describe('a bridge that POLLS the table another bridge writes', () => {
 });
 
 describe('what is remembered', () => {
-  const echoKeys = () => redis.keys('syncle:echo:*');
+  // what is REMEMBERED of writes (the count of what a bridge held back is a number, not a row)
+  const echoKeys = async () =>
+    (await redis.keys('syncle:echo:*')).filter(
+      (k) => !k.startsWith('syncle:echo:held:'),
+    );
 
   it('is nothing at all for a bridge whose destination nobody reads', async () => {
     const before = new Set(await echoKeys());

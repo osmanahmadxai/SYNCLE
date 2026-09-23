@@ -198,6 +198,17 @@ export class CryptoService {
     return base64url(createHmac('sha256', this.loadSigKey()).update(data).digest());
   }
 
+  /**
+   * a value every process that has THIS master key computes the same, and
+   * nobody without it can: HMAC under a sub-key of the master key that is only
+   * ever used for `purpose`. (the first-run setup token is one: whichever
+   * process prints it, and whichever one is asked, it is the same token)
+   */
+  derive(purpose: string, data: string): string {
+    const key = Buffer.from(hkdfSync('sha256', this.loadKey(), Buffer.alloc(0), `syncle-derive:${purpose}`, 32));
+    return base64url(createHmac('sha256', key).update(data).digest());
+  }
+
   /** HKDF(master, info='syncle-session-sig') — derived once, never persisted */
   private loadSigKey(): Buffer {
     if (this.sigKey) return this.sigKey;

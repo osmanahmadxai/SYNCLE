@@ -18,6 +18,6 @@ export interface BridgeLoopStatus {
   fedBy: BridgeLoopPeer[];
   /** live bridges that read a table this one writes */
   feeds: BridgeLoopPeer[];
-  /** changes this bridge recognised as this instance's own and did not send on, since the API started */
+  /** changes this bridge recognised as this instance's own and did not send on (every API process together) */
   heldBack: number;
 }

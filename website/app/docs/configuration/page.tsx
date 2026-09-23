@@ -457,6 +457,24 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_LEADER_TTL_SECONDS</code>
+              </td>
+              <td>
+                <code>20</code>
+              </td>
+              <td>
+                With{' '}
+                <a href="/docs/self-hosting#more-than-one-api">
+                  more than one API process
+                </a>
+                : how long the leader&apos;s lease lasts. It is how long a
+                failover takes at most after a process dies, and how long a
+                leader that cannot reach Redis keeps reading the live bridges
+                before it stops.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_ECHO_TTL_SECONDS</code>
               </td>
               <td>

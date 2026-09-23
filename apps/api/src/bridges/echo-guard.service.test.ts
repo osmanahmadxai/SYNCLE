@@ -377,14 +377,20 @@ function fakeRedis() {
     if (list.length === 0) lists.delete(key);
     return at >= 0 ? 1 : 0;
   };
+  const counters = new Map<string, number>();
   const api = {
     lists,
+    counters,
     down: false,
     check() {
       if (api.down) throw new Error('ECONNREFUSED');
     },
     on: () => api,
     quit: async () => 'OK',
+    get: async (key: string) => {
+      api.check();
+      return counters.has(key) ? String(counters.get(key)) : null;
+    },
     lrange: async (key: string) => {
       api.check();
       return [...(lists.get(key) ?? [])];
@@ -416,6 +422,10 @@ function fakeRedis() {
           return p;
         },
         expire: () => p,
+        incr: (key: string) => {
+          queued.push(() => counters.set(key, (counters.get(key) ?? 0) + 1));
+          return p;
+        },
         lrem: (key: string, _count: number, value: string) => {
           queued.push(() => remove(key, value, true));
           return p;
@@ -785,6 +795,38 @@ describe('when Redis is away', () => {
     await expect(
       r.guard.retract({ entries: [['k', 'v']] }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('what was held back', () => {
+  it('is counted where every process can read it: the page is not always answered by the process that reads the bridge', async () => {
+    const r = rig();
+    await r.guard.announce(
+      r.forward,
+      r.target,
+      [{ id: 1, name: 'a' }],
+      [{}],
+      'upsert',
+    );
+    const echo = await r.guard.recognise(
+      r.back,
+      { op: 'insert', row: { id: 1, name: 'a' } },
+      ['id'],
+    );
+    await r.guard.route(r.back, echo);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect((await r.guard.status(r.back)).heldBack).toBe(1);
+
+    // another process, on the same Redis, that has dropped nothing itself
+    const other = rig();
+    (other.guard as unknown as { redis: unknown }).redis = r.redis;
+    expect(other.guard.droppedBy('back')).toBe(0);
+    expect((await other.guard.status(other.back)).heldBack).toBe(1);
+
+    // and with Redis away, a process says what it knows itself
+    r.redis.down = true;
+    expect((await r.guard.status(r.back)).heldBack).toBe(1);
+    expect((await other.guard.status(other.back)).heldBack).toBe(0);
   });
 });
 

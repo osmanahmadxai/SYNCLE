@@ -4,12 +4,13 @@
  * and refreshed on write, so hot paths (session TTL, query caps) don't hit the
  * database each time.
  */
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import {
   appSettingsSchema,
   type AppSettings,
   type AppSettingsDTO,
 } from '@syncle/core';
+import { InstanceService } from '../common/instance.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 
@@ -55,10 +56,20 @@ export class SettingsStoreService implements OnModuleInit {
     }
   }
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly instance?: InstanceService,
+  ) {}
 
   // warm the cache on boot so the sync snapshot() has real values immediately
   async onModuleInit(): Promise<void> {
+    // the cache is this process's own. a setting saved through ANOTHER process
+    // was never seen here — its session length, its row cap, its worker
+    // concurrency stayed what they were until a restart
+    this.instance?.handle('settings.changed', async () => {
+      this.cache = null;
+      this.announce(await this.resolved());
+    });
     await this.resolved().catch(() => undefined);
   }
 
@@ -110,6 +121,7 @@ export class SettingsStoreService implements OnModuleInit {
     });
     this.cache = { ...this.defaults(), ...merged };
     this.announce(this.cache);
+    void this.instance?.publish('settings.changed');
     return this.cache;
   }
 

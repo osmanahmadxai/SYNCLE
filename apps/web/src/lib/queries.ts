@@ -78,6 +78,11 @@ export function useEncryptionStatus(enabled: boolean) {
   return useQuery({ queryKey: ['encryptionStatus'], queryFn: () => api.encryptionStatus(), enabled, retry: false });
 }
 
+/** the API processes that are alive on this database, and which of them leads */
+export function useInstances(enabled: boolean) {
+  return useQuery({ queryKey: ['instances'], queryFn: () => api.instances(), enabled, retry: false, refetchInterval: 15_000 });
+}
+
 export function useRotateEncryption() {
   const qc = useQueryClient();
   return useMutation({

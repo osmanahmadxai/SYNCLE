@@ -75,6 +75,8 @@ const PER_TABLE_UNKEYED = 500;
 const TOPOLOGY_TTL_MS = 5000;
 /** how long what is known of a table (its key, its column types) is believed */
 const TABLE_TTL_MS = 60_000;
+/** the count of what a bridge held back is kept this long after the last time it held something back */
+const HELD_BACK_TTL_SECONDS = 30 * 24 * 3600;
 
 export interface TableRef {
   connectionId: string;
@@ -662,6 +664,19 @@ export class EchoGuardService implements OnModuleDestroy {
 
   private count(bridge: ResolvedBridge): void {
     this.dropped.set(bridge.id, (this.dropped.get(bridge.id) ?? 0) + 1);
+    // …and where every process can read it: the page is answered by whichever
+    // process the request reaches, which is not always the one that reads the bridge
+    const key = `${ECHO_KEY_PREFIX}held:${bridge.id}`;
+    try {
+      void this.client()
+        .pipeline()
+        .incr(key)
+        .expire(key, HELD_BACK_TTL_SECONDS)
+        .exec()
+        .catch(() => undefined);
+    } catch {
+      /* a count that could not be kept is not a reason to deliver an echo */
+    }
     const last = this.lastSaid.get(bridge.id) ?? 0;
     if (Date.now() - last < 60_000) return;
     this.lastSaid.set(bridge.id, Date.now());
@@ -680,7 +695,7 @@ export class EchoGuardService implements OnModuleDestroy {
       guard: this.enabled,
       fedBy: [],
       feeds: [],
-      heldBack: this.droppedBy(bridge.id),
+      heldBack: await this.heldBack(bridge.id),
     };
     const mine =
       bridge.source.kind === 'table' ? await this.tableId(bridge.source) : null;
@@ -735,9 +750,21 @@ export class EchoGuardService implements OnModuleDestroy {
     return status;
   }
 
-  /** how many changes a bridge has recognised as its own instance's and not sent round again */
+  /** how many changes THIS process has recognised as this instance's own and not sent round again */
   droppedBy(bridgeId: string): number {
     return this.dropped.get(bridgeId) ?? 0;
+  }
+
+  /** …and how many every process has, together (kept in Redis; this process's own count if that cannot be read) */
+  private async heldBack(bridgeId: string): Promise<number> {
+    try {
+      const text = await this.client().get(
+        `${ECHO_KEY_PREFIX}held:${bridgeId}`,
+      );
+      return Math.max(Number(text ?? 0) || 0, this.droppedBy(bridgeId));
+    } catch {
+      return this.droppedBy(bridgeId);
+    }
   }
 }
 

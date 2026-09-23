@@ -557,7 +557,7 @@
   "loopNotice": {
     "tied": "{count, plural, other {与 {names} 互相同步。}}Syncle 自己写入的数据再次出现时会被识别，不会再次转发。",
     "unguarded": "{count, plural, other {与 {names} 互相同步}}，但循环防护已关闭（SYNCLE_ECHO_TTL_SECONDS=0）：每次更改都会无休止地来回传递。请重新开启，或停止其中一个 bridge。",
-    "heldBack": "{count, plural, other {自 API 启动以来已拦截 # 次更改。}}"
+    "heldBack": "{count, plural, other {目前已拦截 # 次更改。}}"
   },
   "verify": {
     "title": "校验",
@@ -1001,6 +1001,15 @@
     "noTables": "还没有表。"
   },
   "settingsDialog": {
+    "instances": {
+      "title": "{count, plural, other {此数据库上有 # 个 API 进程}}",
+      "since": "自 {when} 起",
+      "leader": "主进程",
+      "self": "（本次请求由它应答）",
+      "explain": "其中一个进程是主进程：它读取实时（CDC）bridge 并执行定期清理。运行、轮询和计划任务由所有进程共同承担。如果主进程消失，另一个进程会在 SYNCLE_LEADER_TTL_SECONDS 内接管，并从已保存的位置继续。",
+      "leaderless": "当前没有主进程，因此没有实时 bridge 在被读取。只要能连接到 Redis，几秒内就会选出主进程 — 如果一直如此，请检查 API 是否能连接到 Redis。",
+      "versions": "这些进程的版本不一致。请完成升级：它们共用一个数据库，必须对其中的内容达成一致。"
+    },
     "encryption": {
       "title": "主密钥更换",
       "previous": "{count, plural, other {此实例仍接受 # 个旧主密钥（SYNCLE_MASTER_KEY_PREVIOUS）。}}",

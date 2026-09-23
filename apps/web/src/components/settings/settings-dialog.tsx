@@ -33,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertsTab } from './alerts-tab';
 import { ApiKeysSection } from './api-keys-section';
 import { EncryptionStatus } from './encryption-status';
+import { InstancesStatus } from './instances-status';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -448,6 +449,7 @@ function SecurityTab({ settings }: { settings: AppSettings }) {
       <ApiKeysSection />
       {/* only while a change of master key is under way */}
       <EncryptionStatus />
+      <InstancesStatus />
     </div>
   );
 }

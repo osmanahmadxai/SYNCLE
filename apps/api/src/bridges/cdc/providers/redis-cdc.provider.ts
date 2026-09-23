@@ -33,6 +33,7 @@ import {
 } from '../../bridges.types';
 import { SPOOL_KEY_PREFIX } from '../cdc-spool.service';
 import { ECHO_KEY_PREFIX } from '../../echo-keys';
+import { INSTANCE_KEY_PREFIXES } from '../../../common/instance-keys';
 import type {
   CdcProvider,
   CdcStreamContext,
@@ -109,6 +110,8 @@ const OWN_KEY_PREFIXES = [
   SPOOL_KEY_PREFIX,
   // what the echo guard remembers of writes (loop prevention)
   ECHO_KEY_PREFIX,
+  // who leads, who is alive, who holds which lock (more than one API process)
+  ...INSTANCE_KEY_PREFIXES,
   // BullMQ's default prefix; Syncle sets none of its own
   `bull:${BRIDGE_JOBS_QUEUE}:`,
   `bull:${BRIDGE_WATCH_QUEUE}:`,

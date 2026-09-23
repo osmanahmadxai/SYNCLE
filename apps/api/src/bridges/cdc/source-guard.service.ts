@@ -25,6 +25,7 @@ import {
 } from '@nestjs/common';
 import type { BridgeSourceHold } from '@syncle/core';
 import { PrismaService } from '../../common/prisma.service';
+import { InstanceService } from '../../common/instance.service';
 import { AlertsService } from '../../alerts/alerts.service';
 import { MetricsService } from '../../observability/metrics.service';
 import { runtimeConfig } from '../../common/runtime-config';
@@ -45,6 +46,7 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
     private readonly cdc: BridgeCdcService,
     private readonly alerts: AlertsService,
     private readonly metrics: MetricsService,
+    private readonly instance: InstanceService,
   ) {}
 
   /** the labels each bridge's gauge was published under, to withdraw it by */
@@ -68,7 +70,11 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     const seconds = runtimeConfig.sourceHoldCheckSeconds;
     if (seconds <= 0) return;
-    this.timer = setInterval(() => void this.sweep(), seconds * 1000);
+    // on its timer, by the process that leads: two processes measuring every
+    // source would alert twice, and could both decide to give the same slot up
+    this.timer = setInterval(() => {
+      if (this.instance.isLeader()) void this.sweep();
+    }, seconds * 1000);
     // never the reason the process stays alive
     this.timer.unref?.();
   }

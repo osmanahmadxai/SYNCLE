@@ -6,8 +6,9 @@
  * scan of the delivery log. Counters that live in the job rows survive a
  * restart; the process gauges are this process's own.
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { InstanceService } from '../common/instance.service';
 import { PrismaService } from '../common/prisma.service';
 import { resolveVersion } from '../common/version';
 import { renderMetrics, type Metric, type Sample } from './prometheus';
@@ -25,6 +26,7 @@ export class MetricsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisProbeService,
+    @Optional() private readonly instance?: InstanceService,
   ) {
     this.loop.enable();
   }
@@ -73,6 +75,20 @@ export class MetricsService {
         { labels: { component: 'redis' }, value: redisDown === null ? 1 : 0 },
       ],
     });
+
+    if (this.instance) {
+      metrics.push({
+        name: 'syncle_instance_leader',
+        help: '1 on the API process that leads (it runs the live change streams and the periodic sweeps), 0 on the others. Summed over every process it should be exactly 1.',
+        type: 'gauge',
+        samples: [
+          {
+            labels: { instance: this.instance.id },
+            value: this.instance.isLeader() ? 1 : 0,
+          },
+        ],
+      });
+    }
 
     for (const [name, m] of this.pushed) {
       metrics.push({

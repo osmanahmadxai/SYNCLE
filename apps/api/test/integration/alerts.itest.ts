@@ -398,7 +398,7 @@ describe('a live bridge that loses its place', () => {
       where: { bridgeId: b.id },
       data: { status: 'running', finishedAt: null },
     });
-    await app.cdc.onModuleInit();
+    await app.cdc.resumeAll(); // (what the process that leads does at boot)
     await alerts.idle();
 
     const told = received.filter((r) => r.path.startsWith('/lost'));

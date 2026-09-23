@@ -393,7 +393,7 @@ describe('PostgreSQL: a copy that is interrupted', () => {
       Object.keys(await contents('postgres_dest', s.destTable)).length,
     ).toBeLessThan(TOTAL);
 
-    await app.cdc.onModuleInit();
+    await app.cdc.resumeAll(); // (what the process that leads does at boot)
     await waitFor(
       'the rest of the table',
       async () =>

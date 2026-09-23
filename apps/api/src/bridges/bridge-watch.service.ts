@@ -32,6 +32,7 @@ import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { DeadLetterService } from './dead-letter.service';
+import { InstanceService } from '../common/instance.service';
 import { EchoGuardService } from './echo-guard.service';
 import { SchemaDriftService } from './schema-drift.service';
 import { sleep } from './delivery.service';
@@ -78,6 +79,7 @@ export class BridgeWatchService implements OnModuleInit {
     @InjectQueue(BRIDGE_WATCH_QUEUE) private readonly queue: Queue<BridgeWatchPayload>,
     private readonly drift: SchemaDriftService,
     private readonly echo: EchoGuardService,
+    private readonly instance: InstanceService,
   ) {}
 
   /** the column names of the last row each bridge delivered: when they change, the table has */
@@ -196,7 +198,10 @@ export class BridgeWatchService implements OnModuleInit {
     if (this.polling.has(bridgeId)) return; // skip an overlapping fire
     this.polling.add(bridgeId);
     try {
-      await this.runPoll(bridgeId);
+      // …in ANY process: a poll that outlasts its interval is still running when
+      // the next tick is picked off the queue, possibly by another process —
+      // which would read the same window and deliver it a second time
+      await this.instance.withLock(`watch:${bridgeId}`, () => this.runPoll(bridgeId));
     } catch (err) {
       this.logger.warn(`Watch poll for ${bridgeId} failed: ${(err as Error).message}`);
     } finally {

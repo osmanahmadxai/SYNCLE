@@ -344,6 +344,16 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>syncle_instance_leader{'{instance}'}</code>
+              </td>
+              <td>
+                1 on the API process that{' '}
+                <a href="#more-than-one-api">leads</a>, 0 on the others. Summed
+                over every process you scrape it should be exactly 1
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>syncle_build_info{'{version}'}</code>,{' '}
                 <code>process_*</code>, <code>nodejs_*</code>
               </td>
@@ -484,6 +494,75 @@ const ok = given.length === expected.length &&
         <a href="#destination-guard">destination guard</a> as bridge
         deliveries, and redirects are not followed.
       </p>
+
+      <h2 id="more-than-one-api">Running more than one API process</h2>
+      <p>
+        One API process is what the compose stack runs, and all most
+        installations need. A second one — a replica for availability, or the
+        minute during which a rolling deploy overlaps — is safe: the processes
+        find each other through the Redis they share, and one of them{' '}
+        <strong>leads</strong>.
+      </p>
+      <ul>
+        <li>
+          <strong>The leader reads the live (CDC) bridges</strong> and runs the
+          periodic sweeps (the slot guard, delivery retention). A source is
+          never read by two processes: that used to mean a PostgreSQL slot
+          fought over, a MySQL server throwing out one reader after the other
+          (both connect under the same replication server id), and on MongoDB
+          and Redis every change delivered twice.
+        </li>
+        <li>
+          <strong>Runs, polls, schedules and verifications</strong> are jobs
+          on the queue, picked up by whichever process is free — that part
+          does scale out. A polling bridge is polled by one process at a time.
+        </li>
+        <li>
+          <strong>Any process can be asked anything.</strong> Start or stop a
+          live bridge through a process that does not lead and it is relayed
+          to the leader, and answered when the leader has done it. A setting
+          saved through one process reaches the others; a cancel reaches the
+          process that is running the job; the first-run setup token is the
+          same whichever process prints it.
+        </li>
+        <li>
+          <strong>Failover.</strong> The lead is a lease in Redis, renewed
+          three times within <code>SYNCLE_LEADER_TTL_SECONDS</code> (default
+          20). A leader that is shut down hands it over at once; one that
+          dies is replaced when the lease runs out. The new leader resumes
+          every live bridge from its saved position — the same thing a restart
+          does — so nothing is lost and nothing is delivered twice.
+        </li>
+      </ul>
+      <p>What it needs from you:</p>
+      <ul>
+        <li>
+          the <strong>same</strong> <code>DATABASE_URL</code>,{' '}
+          <code>REDIS_URL</code> and <code>SYNCLE_MASTER_KEY</code> on every
+          process. A master key generated into one container&apos;s data
+          directory is not shared: set it explicitly (the first-run token
+          differing between processes is the first sign that it is not);
+        </li>
+        <li>the same version everywhere, apart from the minutes of a rolling upgrade;</li>
+        <li>
+          a load balancer in front that can send any request to any process —
+          no sticky sessions are needed.
+        </li>
+      </ul>
+      <Note>
+        <p>
+          A leader that cannot reach Redis for as long as the lease lasts
+          assumes another process has taken over, and stops reading the live
+          bridges until Redis answers again (they carry on from their saved
+          positions). That is also true of a single process: a Redis outage
+          longer than <code>SYNCLE_LEADER_TTL_SECONDS</code> pauses live
+          bridges — runs, polls and schedules need Redis anyway. Login
+          rate limits and alert throttling are counted per process. Settings →{' '}
+          <em>API processes</em> lists who is alive and who leads (as does{' '}
+          <code>GET /api/settings/instances</code>); with one process, which
+          is the usual case, it shows nothing.
+        </p>
+      </Note>
 
       <h2 id="backups">What to back up</h2>
       <p>The stack keeps its state in three named Docker volumes:</p>

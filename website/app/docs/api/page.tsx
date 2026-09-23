@@ -550,6 +550,13 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         now (it also runs at every start); signed in only, not with an API
         key.
       </p>
+      <p>
+        <code>GET /api/settings/instances</code> lists the API processes that
+        are alive on this database —{' '}
+        <code>{'[{ id, startedAt, version, leader, self }]'}</code> — which one{' '}
+        <a href="/docs/self-hosting#more-than-one-api">leads</a>, and which
+        one answered. One entry is the usual answer.
+      </p>
 
       <h3 id="api-keys">API keys</h3>
       <p>
@@ -1148,8 +1155,8 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 one reads, <code>feeds</code> the enabled watch and CDC bridges
                 that read a table it writes (both not empty = a ring);{' '}
                 <code>heldBack</code> counts the changes it
-                recognised as Syncle&apos;s own and did not send round again,
-                since the API started. <code>guard: false</code> means loop
+                recognised as Syncle&apos;s own and did not send round
+                again. <code>guard: false</code> means loop
                 prevention is switched off
               </td>
             </tr>

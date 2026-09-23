@@ -60,6 +60,17 @@ import type {
  * values are inlined at build time. Set NEXT_PUBLIC_API_URL to an absolute URL
  * to bypass the proxy and call the API directly (then CORS applies).
  */
+/** one API process, as `GET /settings/instances` lists them */
+export interface InstanceInfo {
+  id: string;
+  startedAt: string;
+  version: string;
+  /** it runs the live change streams and the periodic sweeps */
+  leader: boolean;
+  /** the process that answered this request */
+  self: boolean;
+}
+
 /** what `GET /settings/encryption` answers (the API's KeyRotationReport) */
 export interface KeyRotationReport {
   previousKeys: number;
@@ -134,6 +145,7 @@ export const api = {
     request<AuthUser>('/auth/login', { method: 'POST', ...jsonBody(input) }),
   /** a change of master key: how many previous keys are still accepted, and what the last pass found */
   encryptionStatus: () => request<KeyRotationReport>('/settings/encryption'),
+  instances: () => request<InstanceInfo[]>('/settings/instances'),
   rotateEncryption: () => request<KeyRotationReport>('/settings/encryption/rotate', { method: 'POST' }),
   /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way */
   requestPasswordReset: () =>

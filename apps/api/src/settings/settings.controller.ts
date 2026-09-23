@@ -5,6 +5,7 @@ import {
   type AppSettingsDTO,
 } from '@syncle/core';
 import { SessionOnly } from '../auth/session-only.decorator';
+import { InstanceService, type InstanceInfo } from '../common/instance.service';
 import {
   KeyRotationService,
   type KeyRotationReport,
@@ -17,7 +18,18 @@ export class SettingsController {
   constructor(
     private readonly store: SettingsStoreService,
     private readonly keys: KeyRotationService,
+    private readonly instance: InstanceService,
   ) {}
+
+  /**
+   * the API processes that are alive on this database and this Redis, and which
+   * of them leads (it runs the live change streams and the periodic sweeps).
+   * one process is the usual answer; see InstanceService for what two mean
+   */
+  @Get('instances')
+  instances(): Promise<InstanceInfo[]> {
+    return this.instance.instances();
+  }
 
   @Get()
   get(): Promise<AppSettings> {

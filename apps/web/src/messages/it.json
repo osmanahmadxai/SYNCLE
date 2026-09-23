@@ -557,7 +557,7 @@
   "loopNotice": {
     "tied": "{count, plural, one {Alimenta {names} e ne è alimentato.} other {In un anello con {names}.}} Ciò che Syncle stesso ha scritto viene riconosciuto quando ritorna, e non viene rimandato in giro.",
     "unguarded": "{count, plural, one {Alimenta {names} e ne è alimentato} other {In un anello con {names}}} — e la prevenzione dei cicli è disattivata (SYNCLE_ECHO_TTL_SECONDS=0): ogni modifica girerà all'infinito. Riattivala, oppure ferma uno dei bridge.",
-    "heldBack": "{count, plural, one {# modifica trattenuta} other {# modifiche trattenute}} dall'avvio dell'API."
+    "heldBack": "{count, plural, one {# modifica trattenuta} other {# modifiche trattenute}} finora."
   },
   "verify": {
     "title": "Verifica",
@@ -1001,6 +1001,15 @@
     "noTables": "Ancora nessuna tabella."
   },
   "settingsDialog": {
+    "instances": {
+      "title": "{count, plural, one {# processo API} other {# processi API}} su questo database",
+      "since": "dal {when}",
+      "leader": "leader",
+      "self": "(ha risposto a questa richiesta)",
+      "explain": "Un processo fa da leader: legge i bridge in tempo reale (CDC) ed esegue le pulizie periodiche. Esecuzioni, polling e pianificazioni sono condivisi tra tutti. Se il leader sparisce, un altro subentra entro SYNCLE_LEADER_TTL_SECONDS e riprende dalle posizioni salvate.",
+      "leaderless": "In questo momento nessun processo fa da leader, quindi nessun bridge in tempo reale viene letto. Un leader viene eletto in pochi secondi quando Redis è raggiungibile — se la situazione persiste, verifica che l'API raggiunga Redis.",
+      "versions": "Questi processi non hanno tutti la stessa versione. Completa l'aggiornamento: condividono un unico database e devono concordare sul suo contenuto."
+    },
     "encryption": {
       "title": "Cambio della chiave principale",
       "previous": "{count, plural, one {Questa istanza accetta ancora # chiave principale precedente (SYNCLE_MASTER_KEY_PREVIOUS).} other {Questa istanza accetta ancora # chiavi principali precedenti (SYNCLE_MASTER_KEY_PREVIOUS).}}",

@@ -222,6 +222,14 @@ export const runtimeConfig = {
    */
   verifyRecheckMs: nonNegativeInt(env('SYNCLE_VERIFY_RECHECK_MS'), 1500),
   /**
+   * More than one API process on one database and one Redis: ONE of them is the
+   * leader (it runs the live change streams and the periodic sweeps), by a lease
+   * in Redis that lasts this long and is renewed three times within it. It is
+   * also how long a failover takes at most, and how long a leader that cannot
+   * reach Redis carries on before it stops what only a leader may do.
+   */
+  leaderTtlSeconds: positiveInt(env('SYNCLE_LEADER_TTL_SECONDS'), 20),
+  /**
    * Loop prevention. When a bridge writes to a table that another live bridge
    * READS, what it wrote is remembered for this long, so that the reading bridge
    * can tell its own instance's writes coming back from changes somebody made

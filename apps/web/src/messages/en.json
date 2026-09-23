@@ -557,7 +557,7 @@
   "loopNotice": {
     "tied": "{count, plural, one {Feeds and is fed by {names}.} other {In a ring with {names}.}} What Syncle itself wrote is recognised when it comes back, and not sent round again.",
     "unguarded": "{count, plural, one {Feeds and is fed by {names}} other {In a ring with {names}}} — and loop prevention is switched off (SYNCLE_ECHO_TTL_SECONDS=0): every change will go round for ever. Switch it back on, or stop one of the bridges.",
-    "heldBack": "{count, plural, one {# change} other {# changes}} held back since the API started."
+    "heldBack": "{count, plural, one {# change} other {# changes}} held back so far."
   },
   "verify": {
     "title": "Verify",
@@ -1001,6 +1001,15 @@
     "noTables": "No tables yet."
   },
   "settingsDialog": {
+    "instances": {
+      "title": "{count, plural, one {# API process} other {# API processes}} on this database",
+      "since": "since {when}",
+      "leader": "leader",
+      "self": "(answered this)",
+      "explain": "One process leads: it reads the live (CDC) bridges and runs the periodic sweeps. Runs, polls and schedules are shared between all of them. If the leader goes away, another takes over within SYNCLE_LEADER_TTL_SECONDS and carries on from the saved positions.",
+      "leaderless": "No process leads right now, so no live bridge is being read. One is elected within seconds when Redis can be reached — if this stays, check that the API can reach Redis.",
+      "versions": "These processes are not all the same version. Finish the upgrade: they share one database and have to agree on what is in it."
+    },
     "encryption": {
       "title": "Master key change",
       "previous": "{count, plural, one {This instance still accepts # previous master key (SYNCLE_MASTER_KEY_PREVIOUS).} other {This instance still accepts # previous master keys (SYNCLE_MASTER_KEY_PREVIOUS).}}",
