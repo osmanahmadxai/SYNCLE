@@ -51,6 +51,10 @@ import type {
   BridgeVerification,
   BridgeBulkInput,
   BridgeBulkResult,
+  AuditPage,
+  UserInfo,
+  UserInputDTO,
+  UserUpdateDTO,
 } from '@syncle/core';
 
 /**
@@ -60,6 +64,17 @@ import type {
  * values are inlined at build time. Set NEXT_PUBLIC_API_URL to an absolute URL
  * to bypass the proxy and call the API directly (then CORS applies).
  */
+/** what `GET /audit` is asked for: a page, newest first, narrowed by what/whom */
+export interface AuditQuery {
+  limit?: number;
+  /** the `next` of the page before */
+  before?: string;
+  action?: string;
+  actor?: string;
+  targetId?: string;
+  targetType?: string;
+}
+
 /** one API process, as `GET /settings/instances` lists them */
 export interface InstanceInfo {
   id: string;
@@ -147,9 +162,12 @@ export const api = {
   encryptionStatus: () => request<KeyRotationReport>('/settings/encryption'),
   instances: () => request<InstanceInfo[]>('/settings/instances'),
   rotateEncryption: () => request<KeyRotationReport>('/settings/encryption/rotate', { method: 'POST' }),
-  /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way */
-  requestPasswordReset: () =>
-    request<{ requested: true }>('/auth/reset/request', { method: 'POST' }),
+  /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way. unnamed = the first admin's */
+  requestPasswordReset: (username?: string) =>
+    request<{ requested: true }>('/auth/reset/request', {
+      method: 'POST',
+      ...jsonBody(username ? { username } : {}),
+    }),
   /** a new password with that code; signs in */
   resetPassword: (input: PasswordResetDTO) =>
     request<AuthUser>('/auth/reset', { method: 'POST', ...jsonBody(input) }),
@@ -171,6 +189,26 @@ export const api = {
     ),
   updateSettings: (input: AppSettingsDTO) =>
     request<AppSettings>('/settings', { method: 'PUT', ...jsonBody(input) }),
+
+  /* ----- accounts (an admin's to manage, signed in) ----- */
+  listUsers: () => request<UserInfo[]>('/auth/users'),
+  createUser: (input: UserInputDTO) =>
+    request<UserInfo>('/auth/users', { method: 'POST', ...jsonBody(input) }),
+  updateUser: (id: string, input: UserUpdateDTO) =>
+    request<UserInfo>(`/auth/users/${id}`, { method: 'PUT', ...jsonBody(input) }),
+  deleteUser: (id: string) =>
+    request<{ id: string; username: string }>(`/auth/users/${id}`, { method: 'DELETE' }),
+  endUserSessions: (id: string) =>
+    request<UserInfo>(`/auth/users/${id}/sessions/end`, { method: 'POST' }),
+
+  /* ----- the audit log: who did what (an admin's to read) ----- */
+  audit: (query: AuditQuery) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    const qs = params.toString();
+    return request<AuditPage>(`/audit${qs ? `?${qs}` : ''}`);
+  },
 
   /* ----- API keys (managed signed in; a key cannot manage keys) ----- */
   listApiKeys: () => request<ApiKeyInfo[]>('/auth/api-keys'),

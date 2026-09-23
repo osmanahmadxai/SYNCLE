@@ -1,3 +1,5 @@
+import { Audited } from '../audit/audited.decorator';
+import { Roles } from '../auth/roles.decorator';
 import { Body, Controller, Get, HttpCode, Post, Put } from '@nestjs/common';
 import {
   appSettingsSchema,
@@ -36,7 +38,9 @@ export class SettingsController {
     return this.store.resolved();
   }
 
+  @Roles('admin')
   @Put()
+  @Audited('settings.update', ({ body }) => ({ target: null, details: body as Record<string, unknown> }))
   update(
     @Body(new ZodValidationPipe(appSettingsSchema)) dto: AppSettingsDTO,
   ): Promise<AppSettings> {
@@ -54,7 +58,9 @@ export class SettingsController {
 
   /** look again now (it also runs at every start). not something an API key may do */
   @SessionOnly()
+  @Roles('admin')
   @Post('encryption/rotate')
+  @Audited('encryption.rotate', ({ result }) => ({ target: null, details: result as Record<string, unknown> }))
   @HttpCode(200)
   rotate(): Promise<KeyRotationReport> {
     return this.keys.rotate();

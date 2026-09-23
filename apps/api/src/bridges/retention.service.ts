@@ -35,6 +35,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { InstanceService } from '../common/instance.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
@@ -58,6 +59,8 @@ export interface RetentionResult {
   deadLetters: number;
   /** finished replay jobs whose details were removed this sweep */
   jobsEmptied: number;
+  /** audit-log entries older than `auditRetentionDays` */
+  auditEntries: number;
   /** the sweep stopped at its row limit; the rest goes next time */
   limited: boolean;
 }
@@ -73,6 +76,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly settings: SettingsStoreService,
     private readonly instance: InstanceService,
+    private readonly audit: AuditService,
   ) {}
 
   /** on its timer, by the process that leads: one sweep at a time is all the database needs */
@@ -107,13 +111,17 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run(now: Date): Promise<RetentionResult> {
-    const { deliveryRetentionDays: days, deliveryMaxPerJob: cap } =
-      await this.settings.resolved();
+    const {
+      deliveryRetentionDays: days,
+      deliveryMaxPerJob: cap,
+      auditRetentionDays: auditDays,
+    } = await this.settings.resolved();
     const result: RetentionResult = {
       expiredDeliveries: 0,
       overflowDeliveries: 0,
       deadLetters: 0,
       jobsEmptied: 0,
+      auditEntries: 0,
       limited: false,
     };
     let budget = SWEEP_LIMIT;
@@ -146,14 +154,24 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
         spend,
       );
     }
+    if (auditDays > 0 && budget > 0) {
+      result.auditEntries = await this.audit.prune(
+        new Date(now.getTime() - auditDays * 86_400_000),
+        budget,
+      );
+      spend(result.auditEntries);
+    }
     result.limited = budget <= 0;
 
     const removed =
-      result.expiredDeliveries + result.overflowDeliveries + result.deadLetters;
+      result.expiredDeliveries +
+      result.overflowDeliveries +
+      result.deadLetters +
+      result.auditEntries;
     if (removed > 0) {
       this.logger.log(
         `Removed ${result.expiredDeliveries} expired and ${result.overflowDeliveries} overflow deliveries, ` +
-          `${result.deadLetters} settled dead letters` +
+          `${result.deadLetters} settled dead letters, ${result.auditEntries} old audit entries` +
           (result.limited
             ? ' (stopped at the per-sweep limit; the rest goes next time)'
             : ''),

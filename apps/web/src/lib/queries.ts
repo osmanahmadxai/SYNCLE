@@ -22,8 +22,10 @@ import type {
   SetupDTO,
   WorkspaceInputDTO,
   BridgeBulkInput,
+  UserInputDTO,
+  UserUpdateDTO,
 } from '@syncle/core';
-import { api } from './api';
+import { api, type AuditQuery } from './api';
 import { useStudio } from './store';
 
 export const queryKeys = {
@@ -31,6 +33,8 @@ export const queryKeys = {
   settings: ['settings'] as const,
   version: ['version'] as const,
   alertChannels: ['alert-channels'] as const,
+  users: ['users'] as const,
+  audit: ['audit'] as const,
   apiKeys: ['api-keys'] as const,
   drivers: ['drivers'] as const,
   workspaces: ['workspaces'] as const,
@@ -92,7 +96,9 @@ export function useRotateEncryption() {
 }
 
 export function useRequestPasswordReset() {
-  return useMutation({ mutationFn: () => api.requestPasswordReset() });
+  return useMutation({
+    mutationFn: (username?: string) => api.requestPasswordReset(username),
+  });
 }
 
 export function useResetPassword() {
@@ -160,6 +166,65 @@ export function useUpdateSettings() {
       qc.setQueryData(queryKeys.settings, settings);
       qc.invalidateQueries({ queryKey: queryKeys.settings });
     },
+  });
+}
+
+/* ----- accounts ----- */
+
+export function useUsers(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.users,
+    queryFn: () => api.listUsers(),
+    enabled,
+  });
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UserInputDTO) => api.createUser(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UserUpdateDTO }) =>
+      api.updateUser(id, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.users });
+      // your own role may have changed: what the app shows follows it
+      qc.invalidateQueries({ queryKey: queryKeys.authStatus });
+    },
+  });
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteUser(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useEndUserSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.endUserSessions(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+/* ----- the audit log ----- */
+
+/** one page of who did what; the next page is asked for with the page's `next` */
+export function useAudit(query: AuditQuery, enabled = true) {
+  return useQuery({
+    queryKey: [...queryKeys.audit, query],
+    queryFn: () => api.audit(query),
+    enabled,
+    placeholderData: (previous) => previous,
   });
 }
 

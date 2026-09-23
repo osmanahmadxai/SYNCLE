@@ -49,7 +49,14 @@ export function UserMenu() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuLabel className="truncate">{username}</DropdownMenuLabel>
+          <DropdownMenuLabel className="truncate">
+            {username}
+            {status?.user?.role && (
+              <span className="text-muted-foreground ml-1.5 text-[10px] font-normal uppercase">
+                {t(`role.${status.user.role}`)}
+              </span>
+            )}
+          </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={() => openSettings('account')}

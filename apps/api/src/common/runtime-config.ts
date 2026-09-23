@@ -265,6 +265,8 @@ export const runtimeConfig = {
    */
   deliveryRetentionDays: nonNegativeInt(env('SYNCLE_DELIVERY_RETENTION_DAYS'), 30),
   deliveryMaxPerJob: nonNegativeInt(env('SYNCLE_DELIVERY_MAX_PER_JOB'), 100_000),
+  /** days the audit log (who did what) is kept — the default for the in-app setting; 0 = for ever */
+  auditRetentionDays: nonNegativeInt(env('SYNCLE_AUDIT_RETENTION_DAYS'), 365),
   /** how often the retention sweep runs, in minutes. 0 = never */
   retentionSweepMinutes: nonNegativeInt(env('SYNCLE_RETENTION_SWEEP_MINUTES'), 60),
   /**

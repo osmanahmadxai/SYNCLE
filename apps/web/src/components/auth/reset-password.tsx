@@ -41,13 +41,14 @@ export function ResetPassword({
   const request = useRequestPasswordReset();
   const reset = useResetPassword();
   const [asked, setAsked] = useState(requested);
+  const [username, setUsername] = useState('');
   const [form, setForm] = useState({ code: '', password: '', confirm: '' });
   const [error, setError] = useState<string | null>(null);
 
   async function ask() {
     setError(null);
     try {
-      await request.mutateAsync();
+      await request.mutateAsync(username.trim() || undefined);
       setAsked(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : tc('somethingWrong'));
@@ -73,11 +74,29 @@ export function ResetPassword({
     <div className="grid gap-4">
       <p className="text-muted-foreground text-sm">{t('how')}</p>
       {!asked ? (
+        <form
+          className="grid gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void ask();
+          }}
+        >
+          <div className="grid gap-2">
+            <Label htmlFor="reset-username">{t('username')}</Label>
+            <Input
+              id="reset-username"
+              autoComplete="username"
+              autoFocus
+              placeholder={t('usernamePlaceholder')}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <p className="text-muted-foreground text-xs">{t('usernameHint')}</p>
+          </div>
         <Button
-          type="button"
+          type="submit"
           className="w-full"
           disabled={request.isPending}
-          onClick={() => void ask()}
         >
           {request.isPending ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -86,6 +105,7 @@ export function ResetPassword({
           )}
           {t('ask')}
         </Button>
+        </form>
       ) : (
         <form
           className="grid gap-4"

@@ -16,6 +16,7 @@ import { Separator } from '@/components/ui/separator';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LangToggle } from '@/components/lang-toggle';
 import { UserMenu } from '@/components/settings/user-menu';
+import { ReadOnlyNotice } from '@/components/settings/read-only-notice';
 import { ConnectionDialog } from '@/components/connections/connection-dialog';
 import { BridgesView } from '@/components/bridges/bridges-view';
 import { BridgeList } from '@/components/bridges/bridge-list';
@@ -164,6 +165,8 @@ export function Studio() {
               </div>
             </div>
             <Separator />
+            {/* a viewer can look, not change: said here, not by a refused request */}
+            <ReadOnlyNotice />
             {/* which workspace you're in — scopes the bridges + connections below */}
             <div className="px-2 py-1.5">
               <WorkspaceSwitcher />

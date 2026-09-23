@@ -1,3 +1,4 @@
+import { Audited } from '../audit/audited.decorator';
 import { randomUUID } from 'node:crypto';
 import {
   Body,
@@ -79,6 +80,17 @@ import { BridgeVerifyService } from './bridge-verify.service';
 import { DeadLetterService } from './dead-letter.service';
 import { RetentionService, type RetentionResult } from './retention.service';
 
+/** the numbers in an answer (`{ created: 3, skipped: 1 }`), for an audit entry's details */
+function summary(result: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!result || typeof result !== 'object') return out;
+  for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+    if (typeof value === 'number' || typeof value === 'boolean') out[key] = value;
+    else if (Array.isArray(value)) out[key] = value.length;
+  }
+  return out;
+}
+
 @Controller('bridges')
 export class BridgesController {
   private readonly logger = new Logger('Bridges');
@@ -116,6 +128,7 @@ export class BridgesController {
   }
 
   @Post()
+  @Audited('bridge.create')
   async create(
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
   ): Promise<Bridge> {
@@ -147,6 +160,7 @@ export class BridgesController {
   }
 
   @Put(':id')
+  @Audited('bridge.update')
   async update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(bridgeInputSchema)) dto: BridgeInputDTO,
@@ -230,11 +244,14 @@ export class BridgesController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ id: string }> {
-    await this.store.get(id); // 404s if missing
+  @Audited('bridge.delete', ({ params, result }) => ({
+    target: { type: 'bridge', id: params.id, name: (result as { name?: string })?.name ?? null },
+  }))
+  async remove(@Param('id') id: string): Promise<{ id: string; name: string }> {
+    const { name } = await this.store.get(id); // 404s if missing
     await this.lifecycle.teardown(id);
     await this.store.remove(id);
-    return { id };
+    return { id, name };
   }
 
   /* ----- payload preview (no delivery) ----- */
@@ -243,6 +260,7 @@ export class BridgesController {
 
   /** starts in the background; poll `GET :id/verifications/:verificationId` for progress and the result */
   @Post(':id/verify')
+  @Audited('bridge.verify', ({ body }) => ({ details: body as Record<string, unknown> }))
   @HttpCode(202)
   startVerification(
     @Param('id') id: string,
@@ -262,6 +280,7 @@ export class BridgesController {
   }
 
   @Post(':id/verifications/:verificationId/cancel')
+  @Audited('bridge.verify_cancel', ({ params }) => ({ details: { verificationId: params.verificationId } }))
   @HttpCode(200)
   cancelVerification(@Param('id') id: string, @Param('verificationId') verificationId: string): Promise<BridgeVerification> {
     return this.verify.cancel(id, verificationId);
@@ -308,6 +327,7 @@ export class BridgesController {
 
   /** the table as it is NOW becomes what the bridge is built for */
   @Post(':id/schema-drift/accept')
+  @Audited('bridge.schema_accepted')
   @HttpCode(200)
   async acceptSchemaDrift(@Param('id') id: string): Promise<BridgeSchemaDrift> {
     const bridge = await this.store.resolve(id);
@@ -336,6 +356,7 @@ export class BridgesController {
    * counterpart for; send again with a `connectionMap`
    */
   @Post('import')
+  @Audited('bridge.import', ({ result }) => ({ target: null, details: summary(result) }))
   importBridges(@Body(new ZodValidationPipe(bridgeImportSchema)) dto: BridgeImportDTO): Promise<BridgeImportResult> {
     return this.transfer.import(dto);
   }
@@ -346,6 +367,7 @@ export class BridgesController {
    * the reason, and does not stop the others
    */
   @Post('bulk')
+  @Audited('bridge.bulk_create', ({ result }) => ({ target: null, details: summary(result) }))
   async bulk(@Body(new ZodValidationPipe(bridgeBulkSchema)) dto: BridgeBulkDTO): Promise<BridgeBulkResult> {
     const plan = await this.transfer.planBulk(dto);
     const result: BridgeBulkResult = { created: [], skipped: plan.skipped };
@@ -361,6 +383,7 @@ export class BridgesController {
   }
 
   @Post(':id/clone')
+  @Audited('bridge.clone', ({ params }) => ({ details: { from: params.id } }))
   clone(@Param('id') id: string): Promise<Bridge> {
     return this.transfer.clone(id);
   }
@@ -514,6 +537,9 @@ export class BridgesController {
   /* ----- jobs ----- */
 
   @Post(':id/jobs')
+  @Audited('bridge.run', ({ body, result }) => ({
+    details: { ...(body as Record<string, unknown>), jobId: (result as { id?: string })?.id },
+  }))
   startJob(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(startJobSchema)) dto: StartJobDTO,
@@ -531,6 +557,7 @@ export class BridgesController {
   }
 
   @Post(':id/watch/start')
+  @Audited('bridge.start', ({ body }) => ({ details: body as Record<string, unknown> }))
   async startWatch(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(liveStartSchema)) dto: LiveStartDTO,
@@ -556,6 +583,7 @@ export class BridgesController {
    * sweep — after lowering it, say. returns what was removed
    */
   @Post('retention/run')
+  @Audited('retention.run', ({ result }) => ({ target: null, details: result as Record<string, unknown> }))
   runRetention(): Promise<RetentionResult> {
     return this.retention.sweep();
   }
@@ -568,18 +596,21 @@ export class BridgesController {
 
   /** try them all again now, rather than at the next sweep */
   @Post('cdc/cleanups/retry')
+  @Audited('bridge.cleanups_retry', ({ result }) => ({ target: null, details: result as Record<string, unknown> }))
   async retryCleanups(): Promise<{ left: number }> {
     return { left: await this.cdc.retryCleanups() };
   }
 
   /** stop tracking one — after it was removed on the server by hand */
   @Delete('cdc/cleanups/:cleanupId')
+  @Audited('bridge.cleanup_dismissed', ({ params }) => ({ target: { type: 'cleanup', id: params.cleanupId, name: null } }))
   async dismissCleanup(@Param('cleanupId') cleanupId: string): Promise<{ id: string }> {
     await this.cdc.dismissCleanup(cleanupId);
     return { id: cleanupId };
   }
 
   @Post(':id/watch/stop')
+  @Audited('bridge.stop')
   async stopWatch(@Param('id') id: string): Promise<BridgeJob | null> {
     await this.store.get(id); // 404s if missing
     // stop BOTH mechanisms, not just the current trigger kind: a bridge edited
@@ -604,6 +635,7 @@ export class BridgesController {
   }
 
   @Post(':id/jobs/:jobId/retry-failed')
+  @Audited('bridge.retry', ({ params }) => ({ details: { jobId: params.jobId, what: 'failed rows' } }))
   async retryFailed(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
@@ -644,6 +676,7 @@ export class BridgesController {
   }
 
   @Post(':id/dead-letters/retry')
+  @Audited('bridge.dead_letters_retry', ({ body, result }) => ({ details: { ...(body as Record<string, unknown>), ...summary(result) } }))
   retryDeadLetters(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(deadLetterRetrySchema)) dto: DeadLetterRetryDTO,
@@ -652,6 +685,7 @@ export class BridgesController {
   }
 
   @Post(':id/dead-letters/discard')
+  @Audited('bridge.dead_letters_discard', ({ body, result }) => ({ details: { ...(body as Record<string, unknown>), ...summary(result) } }))
   discardDeadLetters(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(deadLetterDiscardSchema)) dto: DeadLetterDiscardDTO,
@@ -660,6 +694,7 @@ export class BridgesController {
   }
 
   @Post(':id/jobs/:jobId/cancel')
+  @Audited('bridge.cancel', ({ params }) => ({ details: { jobId: params.jobId } }))
   async cancelJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
@@ -706,6 +741,7 @@ export class BridgesController {
    * re-sent from what was captured of it
    */
   @Post(':id/jobs/:jobId/deliveries/:sequence/retry')
+  @Audited('bridge.retry', ({ params }) => ({ details: { jobId: params.jobId, sequence: Number(params.sequence) } }))
   @HttpCode(200)
   async retryDelivery(
     @Param('id') id: string,
@@ -753,6 +789,7 @@ export class BridgesController {
   }
 
   @Post(':id/jobs/:jobId/skip')
+  @Audited('bridge.skip', ({ params, body }) => ({ details: { jobId: params.jobId, ...(body as Record<string, unknown>) } }))
   async skip(
     @Param('id') id: string,
     @Param('jobId') jobId: string,

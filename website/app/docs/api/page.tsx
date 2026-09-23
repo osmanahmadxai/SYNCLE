@@ -128,9 +128,11 @@ $ curl http://localhost:3002/api/connections
 
       <h2 id="authentication">Authentication</h2>
       <p>
-        Syncle has a single admin account, created on first run with the setup
-        token (the <a href="/docs/quickstart">quickstart</a> walks through
-        that). Signing in sets <code>db_session</code>, a signed httpOnly
+        The first account is created on first run with the setup token (the{' '}
+        <a href="/docs/quickstart">quickstart</a> walks through that); it is
+        an admin, and can make more, each with a{' '}
+        <a href="/docs/self-hosting#accounts">role</a>. Signing in sets{' '}
+        <code>db_session</code>, a signed httpOnly
         cookie with <code>SameSite=Lax</code>, valid for the{' '}
         <code>sessionTtlMinutes</code> setting — one week by default. Keep it
         in a cookie jar and send it back on every call:
@@ -556,6 +558,53 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         <code>{'[{ id, startedAt, version, leader, self }]'}</code> — which one{' '}
         <a href="/docs/self-hosting#more-than-one-api">leads</a>, and which
         one answered. One entry is the usual answer.
+      </p>
+
+      <h3 id="accounts">Accounts</h3>
+      <p>
+        An admin&apos;s, signed in (never with an API key).{' '}
+        <code>GET /api/auth/users</code> lists them —{' '}
+        <code>{'{ id, username, role, disabledAt, lastLoginAt, createdAt, updatedAt }'}</code>
+        ; <code>POST /api/auth/users</code> with{' '}
+        <code>{'{ username, password, role }'}</code> makes one (role{' '}
+        <code>admin</code>, <code>operator</code> or <code>viewer</code>;
+        default <code>operator</code>); <code>PUT /api/auth/users/:id</code>{' '}
+        with any of <code>{'{ role, newPassword, disabled }'}</code> changes
+        one (a new password or a disable ends its sessions);{' '}
+        <code>DELETE /api/auth/users/:id</code> removes one;{' '}
+        <code>POST /api/auth/users/:id/sessions/end</code> signs it out
+        everywhere. A 400 says why something is refused: the last admin that
+        can sign in, or your own account. <code>GET /api/auth/me</code> now
+        carries <code>role</code>, and a request an account&apos;s role does
+        not allow is a 403 that names the role it takes.{' '}
+        <code>POST /api/auth/reset/request</code> takes an optional{' '}
+        <code>{'{ username }'}</code>: whose code to print; unnamed, the first
+        admin&apos;s.
+      </p>
+
+      <h3 id="audit">The activity log</h3>
+      <p>
+        <code>GET /api/audit</code> — an admin&apos;s — answers{' '}
+        <code>{'{ entries: [{ id, at, actor: { type, id, name }, action, target: { type, id, name } | null, details, ip }], next }'}</code>
+        , newest first. <code>limit</code> (1–200, default 50);{' '}
+        <code>before</code> = the <code>next</code> of the page before, for
+        the page after it; <code>action</code> (one of the names below),{' '}
+        <code>actor</code> (an actor&apos;s name, exactly),{' '}
+        <code>targetId</code>, <code>targetType</code> narrow it. What is
+        recorded and why is in the{' '}
+        <a href="/docs/self-hosting#activity-log">self-hosting guide</a>.
+        Actions: <code>auth.setup</code>, <code>auth.login</code>,{' '}
+        <code>auth.login_failed</code>, <code>auth.logout</code>,{' '}
+        <code>auth.password_changed</code>, <code>auth.reset_requested</code>
+        , <code>auth.password_reset</code>, <code>user.*</code>,{' '}
+        <code>api_key.*</code>, <code>settings.update</code>,{' '}
+        <code>encryption.rotate</code>, <code>workspace.*</code>,{' '}
+        <code>connection.*</code> (create, update, delete, query, rows_*,
+        ddl, restore), <code>bridge.*</code> (create, update, delete, import,
+        bulk_create, clone, run, cancel, retry, skip, start, stop,
+        dead_letters_*, verify, verify_cancel, schema_accepted,
+        slot_surrendered, cleanups_retry, cleanup_dismissed),{' '}
+        <code>retention.run</code>, <code>alert_channel.*</code>.
       </p>
 
       <h3 id="api-keys">API keys</h3>

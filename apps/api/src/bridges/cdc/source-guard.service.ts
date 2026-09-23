@@ -25,6 +25,7 @@ import {
 } from '@nestjs/common';
 import type { BridgeSourceHold } from '@syncle/core';
 import { PrismaService } from '../../common/prisma.service';
+import { AuditService, SYSTEM } from '../../audit/audit.service';
 import { InstanceService } from '../../common/instance.service';
 import { AlertsService } from '../../alerts/alerts.service';
 import { MetricsService } from '../../observability/metrics.service';
@@ -47,6 +48,7 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
     private readonly alerts: AlertsService,
     private readonly metrics: MetricsService,
     private readonly instance: InstanceService,
+    private readonly audit: AuditService,
   ) {}
 
   /** the labels each bridge's gauge was published under, to withdraw it by */
@@ -160,6 +162,12 @@ export class SourceGuardService implements OnModuleInit, OnModuleDestroy {
       );
       if (surrendered) {
         this.reported.set(bridgeId, 'critical');
+        await this.audit.record({
+          actor: SYSTEM,
+          action: 'bridge.slot_surrendered',
+          target: { type: 'bridge', id: bridgeId, name },
+          details: { retainedBytes: hold.retainedBytes ?? 0, limitBytes: max },
+        });
         return;
       }
     }

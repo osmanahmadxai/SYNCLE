@@ -31,9 +31,11 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertsTab } from './alerts-tab';
+import { AuditLog } from './audit-log';
 import { ApiKeysSection } from './api-keys-section';
 import { EncryptionStatus } from './encryption-status';
 import { InstancesStatus } from './instances-status';
+import { UsersSection } from './users-section';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -48,6 +50,7 @@ const RANGES = {
   sessionTtlMinutes: { min: 15, max: 43_200 },
   deliveryRetentionDays: { min: 0, max: 3650 },
   deliveryMaxPerJob: { min: 0, max: 100_000_000 },
+  auditRetentionDays: { min: 0, max: 3650 },
 } as const;
 
 export function SettingsDialog({
@@ -61,6 +64,7 @@ export function SettingsDialog({
 }) {
   const t = useTranslations('settingsDialog');
   const { data: status } = useAuthStatus();
+  const admin = status?.user?.role === 'admin';
   const { data: settings } = useSettings();
   const { data: version } = useVersion();
 
@@ -72,24 +76,40 @@ export function SettingsDialog({
           <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue={initialTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+        {/* the settings, the alert channels, the accounts and the activity are an admin's: the others see their account */}
+        <Tabs
+          defaultValue={admin || initialTab === 'account' ? initialTab : 'account'}
+          className="w-full"
+        >
+          <TabsList className={admin ? 'grid w-full grid-cols-6' : 'grid w-full grid-cols-1'}>
             <TabsTrigger value="account">{t('tabs.account')}</TabsTrigger>
-            <TabsTrigger value="bridges">{t('tabs.bridges')}</TabsTrigger>
-            <TabsTrigger value="engine">{t('tabs.engine')}</TabsTrigger>
-            <TabsTrigger value="alerts">{t('tabs.alerts')}</TabsTrigger>
-            <TabsTrigger value="security">{t('tabs.security')}</TabsTrigger>
+            {admin && (
+              <>
+                <TabsTrigger value="bridges">{t('tabs.bridges')}</TabsTrigger>
+                <TabsTrigger value="engine">{t('tabs.engine')}</TabsTrigger>
+                <TabsTrigger value="alerts">{t('tabs.alerts')}</TabsTrigger>
+                <TabsTrigger value="security">{t('tabs.security')}</TabsTrigger>
+                <TabsTrigger value="activity">{t('tabs.activity')}</TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="account" className="pt-2">
             <AccountTab user={status?.user ?? null} />
           </TabsContent>
 
-          <TabsContent value="alerts" className="pt-2">
-            <AlertsTab />
-          </TabsContent>
+          {admin && (
+            <TabsContent value="alerts" className="pt-2">
+              <AlertsTab />
+            </TabsContent>
+          )}
+          {admin && (
+            <TabsContent value="activity" className="pt-2">
+              <AuditLog />
+            </TabsContent>
+          )}
 
-          {settings ? (
+          {!admin ? null : settings ? (
             <>
               <TabsContent value="bridges" className="pt-2">
                 <BridgesTab settings={settings} />
@@ -445,7 +465,17 @@ function SecurityTab({ settings }: { settings: AppSettings }) {
         max={RANGES.sessionTtlMinutes.max}
         onChange={(v) => set('sessionTtlMinutes', v)}
       />
+      <NumField
+        id="audit-retention"
+        label={t('auditRetentionDays')}
+        hint={t('auditRetentionDaysHint')}
+        value={form.auditRetentionDays}
+        min={RANGES.auditRetentionDays.min}
+        max={RANGES.auditRetentionDays.max}
+        onChange={(v) => set('auditRetentionDays', v)}
+      />
       <SaveBar saving={saving} onSave={save} />
+      <UsersSection />
       <ApiKeysSection />
       {/* only while a change of master key is under way */}
       <EncryptionStatus />

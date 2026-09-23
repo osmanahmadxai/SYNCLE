@@ -1,3 +1,4 @@
+import { Audited } from '../audit/audited.decorator';
 import {
   Body,
   Controller,
@@ -44,6 +45,16 @@ type RelationRefDTO = z.infer<typeof relationRefSchema>;
 type BackupDTO = z.infer<typeof backupSchema>;
 type RestoreDTO = z.infer<typeof restoreSchema>;
 
+/** the numbers in an answer, for an audit entry's details */
+function summary(result: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!result || typeof result !== 'object') return out;
+  for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+    if (typeof value === 'number' || typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
 @Controller('connections')
 export class ConnectionsController {
   constructor(
@@ -77,6 +88,7 @@ export class ConnectionsController {
   }
 
   @Post()
+  @Audited('connection.create', ({ result }) => ({ details: { engine: (result as { engine?: string })?.engine } }))
   create(
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
   ): Promise<ConnectionConfig> {
@@ -112,6 +124,7 @@ export class ConnectionsController {
   }
 
   @Put(':id')
+  @Audited('connection.update', ({ result }) => ({ details: { engine: (result as { engine?: string })?.engine } }))
   async update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
@@ -122,6 +135,7 @@ export class ConnectionsController {
   }
 
   @Delete(':id')
+  @Audited('connection.delete')
   async remove(
     @Param('id') id: string,
     @Query('force') force?: string,
@@ -207,6 +221,11 @@ export class ConnectionsController {
   }
 
   @Post(':id/query')
+  @Audited('connection.query', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    const text = String(b.statement ?? '');
+    return { details: { database: b.database, statement: text.length > 300 ? `${text.slice(0, 299)}…` : text } };
+  })
   async query(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(querySchema)) dto: QueryDTO,
@@ -233,6 +252,10 @@ export class ConnectionsController {
   }
 
   @Post(':id/rows')
+  @Audited('connection.rows_insert', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
   async insertRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(insertRowSchema)) dto: InsertDTO,
@@ -245,6 +268,10 @@ export class ConnectionsController {
   }
 
   @Patch(':id/rows')
+  @Audited('connection.rows_update', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
   async updateRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(updateRowSchema)) dto: UpdateDTO,
@@ -257,6 +284,10 @@ export class ConnectionsController {
   }
 
   @Delete(':id/rows')
+  @Audited('connection.rows_delete', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
   async deleteRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(deleteRowSchema)) dto: DeleteDTO,
@@ -271,6 +302,7 @@ export class ConnectionsController {
   /* ----- schema management (DDL) ----- */
 
   @Post(':id/ddl/database')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'create-database', ...(body as Record<string, unknown>) } }))
   async createDatabase(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(databaseNameSchema)) dto: DatabaseNameDTO,
@@ -282,6 +314,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/drop-database')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'drop-database', ...(body as Record<string, unknown>) } }))
   async dropDatabase(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(databaseNameSchema)) dto: DatabaseNameDTO,
@@ -294,6 +327,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'create-table', ...(body as Record<string, unknown>) } }))
   async createTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(createTableSchema)) dto: CreateTableDTO,
@@ -306,6 +340,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/drop-table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'drop-table', ...(body as Record<string, unknown>) } }))
   async dropTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(relationRefSchema)) dto: RelationRefDTO,
@@ -318,6 +353,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/truncate-table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'truncate-table', ...(body as Record<string, unknown>) } }))
   async truncateTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(relationRefSchema)) dto: RelationRefDTO,
@@ -350,6 +386,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/restore')
+  @Audited('connection.restore', ({ body, result }) => ({ details: { format: (body as { format?: string })?.format, ...summary(result) } }))
   async restore(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(restoreSchema)) dto: RestoreDTO,

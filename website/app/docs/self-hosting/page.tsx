@@ -16,10 +16,11 @@ export default function Page() {
 
       <h2 id="security-posture">The security posture</h2>
       <p>
-        Every API route sits behind a single admin account — created once on
+        Every API route sits behind an account. The first one is created on
         first run, guarded by a one-time setup token, with no signup (the{' '}
-        <a href="/docs/quickstart">quickstart</a> walks through it). The
-        password is hashed with scrypt, and the session is a signed httpOnly
+        <a href="/docs/quickstart">quickstart</a> walks through it); it is an
+        admin, and can make more — see <a href="#accounts">accounts and roles</a>{' '}
+        below. The password is hashed with scrypt, and the session is a signed httpOnly
         cookie named <code>db_session</code> that expires after one week{' '}
         <em>of inactivity</em> by default — using the app renews it — with the
         length configurable in-app under Settings › Security. Changing the
@@ -44,6 +45,88 @@ export default function Page() {
         policy is explicit that TLS termination and network-level control over
         who can reach the port are the operator&apos;s job the moment anything
         beyond localhost can connect.
+      </p>
+
+      <h3 id="accounts">Accounts and roles</h3>
+      <p>
+        Settings › Security › Accounts is where an admin adds them. Every
+        account has a role:
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>May</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>admin</code>
+              </td>
+              <td>
+                everything — including the accounts, the API keys, the
+                settings, the alert channels, the workspaces, the master key
+                and the activity log
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>operator</code>
+              </td>
+              <td>
+                the work: connections, bridges, runs, verifications, the data
+                browser (including DDL and raw queries on connections that
+                allow them). Not the things above
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>viewer</code>
+              </td>
+              <td>
+                look at everything, change nothing — every <code>GET</code>,
+                and their own password
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        A role change takes effect on the next request, without signing in
+        again. An account can be <strong>disabled</strong> — it cannot sign
+        in and its sessions are over at once, but it keeps its name, so what
+        it did stays attributed to it in the activity log — or deleted. Two
+        things are refused because they would lock everybody out: the last
+        admin that can sign in cannot be demoted, disabled or deleted, and
+        nobody deletes the account they are signed in with. An admin can set
+        another account&apos;s password (which ends that account&apos;s
+        sessions) or end its sessions outright. API keys are not accounts:
+        their scope (<code>read</code> or <code>full</code>) says what they
+        may do, as before, and only an admin manages them. With more than one
+        account, the password-reset code is asked for by user name (
+        <code>syncle reset-password &lt;user&gt;</code>); unnamed, it is the
+        first admin&apos;s.
+      </p>
+
+      <h3 id="activity-log">The activity log</h3>
+      <p>
+        Every change made through the API — by an account or an API key — and
+        every sign-in, succeeded or not, is one entry: who (by name as well as
+        by id, so the entry outlives the account), what, to what, from which
+        address, and a few words of detail (which engine, which role, which
+        setting). Never a secret: a password, a connection&apos;s credentials
+        or an API key are not details, and what Syncle does by itself — the
+        slot guard giving up a replication slot — is recorded as{' '}
+        <em>Syncle</em>. Reads are not recorded; they are the ordinary use of
+        the app. Settings › Activity shows it newest first, narrowed by what
+        was done and by whom; <code>GET /api/audit</code> answers the same to
+        an admin. Entries are kept for <code>auditRetentionDays</code>{' '}
+        (Settings › Security; default 365, <code>0</code> = for ever) and
+        pruned by the same retention sweep as delivery details. An entry that
+        could not be written never fails the request it was about; it is said
+        in the server log instead.
       </p>
 
       <h2 id="exposed-ports">What the compose stack exposes</h2>

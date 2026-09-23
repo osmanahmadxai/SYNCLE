@@ -11,6 +11,7 @@ import type { Request, Response } from 'express';
 import {
   changePasswordSchema,
   loginSchema,
+  passwordResetRequestSchema,
   passwordResetSchema,
   setupSchema,
   type AuthStatus,
@@ -18,6 +19,7 @@ import {
   type ChangePasswordDTO,
   type LoginDTO,
   type PasswordResetDTO,
+  type PasswordResetRequestDTO,
   type SetupDTO,
   UnauthorizedError,
 } from '@syncle/core';
@@ -26,6 +28,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './current-user.decorator';
 import { Public } from './public.decorator';
+import { Audited } from '../audit/audited.decorator';
 import { SessionOnly } from './session-only.decorator';
 
 @Controller('auth')
@@ -83,8 +86,11 @@ export class AuthController {
   @Public()
   @Post('reset/request')
   @HttpCode(202)
-  async requestReset(): Promise<{ requested: true }> {
-    await this.auth.requestPasswordReset();
+  async requestReset(
+    @Body(new ZodValidationPipe(passwordResetRequestSchema)) dto: PasswordResetRequestDTO,
+    @Req() req: Request,
+  ): Promise<{ requested: true }> {
+    await this.auth.requestPasswordReset(dto.username || undefined, req.ip ?? '');
     return { requested: true };
   }
 
@@ -103,6 +109,7 @@ export class AuthController {
 
   @SessionOnly()
   @Post('logout')
+  @Audited('auth.logout', () => ({ target: null }))
   logout(@Res({ passthrough: true }) res: Response): { success: true } {
     this.auth.clearSession(res);
     return { success: true };
@@ -117,6 +124,7 @@ export class AuthController {
 
   @SessionOnly()
   @Post('change-password')
+  @Audited('auth.password_changed', () => ({ target: null }))
   async changePassword(
     @Body(new ZodValidationPipe(changePasswordSchema)) dto: ChangePasswordDTO,
     @CurrentUser() user: AppUser | undefined,

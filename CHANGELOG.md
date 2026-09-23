@@ -455,6 +455,31 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **More than one account, each with a role — and an activity log that says who
+  did what.** There was one account, the admin, and everybody who used Syncle
+  used it. Now the admin makes more (Settings › Security › Accounts, or
+  `POST /api/auth/users`): an **admin** does everything; an **operator** does
+  the work — connections, bridges, runs, the data browser — but nothing about
+  accounts, API keys, settings, alert channels or workspaces; a **viewer** looks
+  and changes nothing but their own password. A role change takes effect on the
+  next request. An account can be disabled (out at once, name and history
+  kept), have its password set by an admin, have its sessions ended, or be
+  deleted; the last admin that can sign in cannot be demoted, disabled or
+  deleted, and nobody deletes the account they are signed in with. The
+  password-reset code is asked for by user name (`syncle reset-password <user>`,
+  or the field on the login screen); unnamed, it is the first admin's. API keys
+  keep their scope: only an admin manages them.
+  - **The activity log** (Settings › Activity, `GET /api/audit`): every change
+    made through the API — by an account or an API key — and every sign-in,
+    succeeded or not, with who (by name as well as by id, so an entry outlives
+    the account), what, to what, from which address, and a few words of detail.
+    Never a secret: values under names like `password`, `token` or
+    `authorization` are redacted before they are written, and the details of a
+    connection are its engine, not its credentials. What Syncle does by itself
+    (the slot guard giving up a slot) is recorded as *Syncle*. Kept for
+    `auditRetentionDays` (default 365, `SYNCLE_AUDIT_RETENTION_DAYS`; 0 = for
+    ever), pruned by the retention sweep. An entry that could not be written
+    never fails the request.
 - **More than one API process on one database is safe — and gives failover.**
   Nothing stopped anybody from running two (a replica, the overlap of a rolling
   deploy), and nothing made it safe: every process resumed every live CDC bridge

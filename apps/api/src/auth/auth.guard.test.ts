@@ -20,6 +20,8 @@ function make(opts: {
   /** who `Authorization: Bearer …` turns out to be */
   apiKey?: { id: string; name: string; scope: 'read' | 'full' } | null;
   sessionOnly?: boolean;
+  /** the roles the route is marked with (@Roles) */
+  roles?: string[];
 }) {
   const auth = {
     sessionFromRequest: vi.fn(async () => opts.session),
@@ -29,10 +31,20 @@ function make(opts: {
     }),
   };
   const reflector = {
-    getAllAndOverride: vi.fn((key: string) => (key === 'auth:session-only' ? !!opts.sessionOnly : opts.isPublic)),
+    getAllAndOverride: vi.fn((key: string) =>
+      key === 'auth:session-only'
+        ? !!opts.sessionOnly
+        : key === 'roles'
+          ? opts.roles
+          : opts.isPublic,
+    ),
   };
   const apiKeys = { identify: vi.fn(async () => opts.apiKey ?? null) };
-  return { guard: new AuthGuard(auth as never, reflector as never, apiKeys as never), auth, apiKeys };
+  return {
+    guard: new AuthGuard(auth as never, reflector as never, apiKeys as never),
+    auth,
+    apiKeys,
+  };
 }
 
 describe('the global auth guard', () => {
@@ -77,10 +89,18 @@ describe('the global auth guard', () => {
 
   describe('with an API key instead of a session', () => {
     const key = { id: 'k1', name: 'ci', scope: 'full' as const };
-    const request = (method: string) => ({ method, headers: { authorization: 'Bearer syn_x' } }) as Record<string, unknown>;
+    const request = (method: string) =>
+      ({ method, headers: { authorization: 'Bearer syn_x' } }) as Record<
+        string,
+        unknown
+      >;
 
     it('lets a known key through, and says which key it was', async () => {
-      const { guard, apiKeys } = make({ isPublic: false, session: null, apiKey: key });
+      const { guard, apiKeys } = make({
+        isPublic: false,
+        session: null,
+        apiKey: key,
+      });
       const req = request('POST');
       await expect(guard.canActivate(contextWith(req))).resolves.toBe(true);
       expect(apiKeys.identify).toHaveBeenCalledWith('Bearer syn_x');
@@ -91,15 +111,28 @@ describe('the global auth guard', () => {
 
     it('an unknown, revoked or expired key is no credential at all', async () => {
       const { guard } = make({ isPublic: false, session: null, apiKey: null });
-      await expect(guard.canActivate(contextWith(request('GET')))).rejects.toMatchObject({ status: 401 });
+      await expect(
+        guard.canActivate(contextWith(request('GET'))),
+      ).rejects.toMatchObject({ status: 401 });
     });
 
     it('a read key may GET and HEAD, and nothing else — whatever the route does', async () => {
-      const { guard } = make({ isPublic: false, session: null, apiKey: { ...key, scope: 'read' } });
-      await expect(guard.canActivate(contextWith(request('GET')))).resolves.toBe(true);
-      await expect(guard.canActivate(contextWith(request('head')))).resolves.toBe(true);
+      const { guard } = make({
+        isPublic: false,
+        session: null,
+        apiKey: { ...key, scope: 'read' },
+      });
+      await expect(
+        guard.canActivate(contextWith(request('GET'))),
+      ).resolves.toBe(true);
+      await expect(
+        guard.canActivate(contextWith(request('head'))),
+      ).resolves.toBe(true);
       for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
-        await expect(guard.canActivate(contextWith(request(method))), method).rejects.toMatchObject({
+        await expect(
+          guard.canActivate(contextWith(request(method))),
+          method,
+        ).rejects.toMatchObject({
           status: 403,
           message: expect.stringContaining('read-only'),
         });
@@ -107,9 +140,17 @@ describe('the global auth guard', () => {
     });
 
     it('no key, of any scope, reaches what concerns credentials — not even to look', async () => {
-      const { guard } = make({ isPublic: false, session: null, apiKey: key, sessionOnly: true });
+      const { guard } = make({
+        isPublic: false,
+        session: null,
+        apiKey: key,
+        sessionOnly: true,
+      });
       for (const method of ['GET', 'POST', 'DELETE']) {
-        await expect(guard.canActivate(contextWith(request(method))), method).rejects.toMatchObject({
+        await expect(
+          guard.canActivate(contextWith(request(method))),
+          method,
+        ).rejects.toMatchObject({
           status: 403,
           message: expect.stringContaining('not with an API key'),
         });
@@ -118,9 +159,125 @@ describe('the global auth guard', () => {
 
     it('a session wins: the key is not even looked at', async () => {
       const session = { user: { id: 'u1' }, ageSec: 10 };
-      const { guard, apiKeys } = make({ isPublic: false, session, apiKey: null, sessionOnly: true });
-      await expect(guard.canActivate(contextWith(request('DELETE')))).resolves.toBe(true);
+      const { guard, apiKeys } = make({
+        isPublic: false,
+        session,
+        apiKey: null,
+        sessionOnly: true,
+      });
+      await expect(
+        guard.canActivate(contextWith(request('DELETE'))),
+      ).resolves.toBe(true);
       expect(apiKeys.identify).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('what an account’s role allows', () => {
+    const session = (role: string | undefined) => ({
+      user: { id: 'u1', username: 'sam', role },
+      ageSec: 10,
+    });
+    const request = (method: string, url: string) =>
+      ({ method, originalUrl: url, headers: {} }) as Record<string, unknown>;
+
+    it('a route for admins turns an operator away, by name and role', async () => {
+      const { guard } = make({
+        isPublic: false,
+        session: session('operator'),
+        roles: ['admin'],
+      });
+      await expect(
+        guard.canActivate(contextWith(request('GET', '/api/auth/users'))),
+      ).rejects.toMatchObject({
+        status: 403,
+        message: expect.stringMatching(
+          /takes the admin role.*"sam" is an operator/,
+        ),
+      });
+      const admin = make({
+        isPublic: false,
+        session: session('admin'),
+        roles: ['admin'],
+      });
+      await expect(
+        admin.guard.canActivate(contextWith(request('GET', '/api/auth/users'))),
+      ).resolves.toBe(true);
+    });
+
+    it('a viewer may look, and change nothing — except their own password and session', async () => {
+      const { guard } = make({ isPublic: false, session: session('viewer') });
+      await expect(
+        guard.canActivate(contextWith(request('GET', '/api/bridges?x=1'))),
+      ).resolves.toBe(true);
+      await expect(
+        guard.canActivate(contextWith(request('HEAD', '/api/bridges'))),
+      ).resolves.toBe(true);
+      for (const [method, url] of [
+        ['POST', '/api/bridges'],
+        ['PUT', '/api/connections/c1'],
+        ['DELETE', '/api/bridges/b1'],
+        ['PATCH', '/api/connections/c1/rows'],
+        ['POST', '/api/auth/users'],
+      ]) {
+        await expect(
+          guard.canActivate(contextWith(request(method!, url!))),
+          `${method} ${url}`,
+        ).rejects.toMatchObject({
+          status: 403,
+          message: expect.stringContaining('is a viewer'),
+        });
+      }
+      await expect(
+        guard.canActivate(
+          contextWith(request('POST', '/api/auth/change-password')),
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        guard.canActivate(contextWith(request('POST', '/api/auth/logout?x=1'))),
+      ).resolves.toBe(true);
+      // (the self-service paths, not something that starts like them)
+      await expect(
+        guard.canActivate(contextWith(request('POST', '/api/auth/logout-all'))),
+      ).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('an operator does everything a route does not reserve for admins', async () => {
+      const { guard } = make({ isPublic: false, session: session('operator') });
+      await expect(
+        guard.canActivate(contextWith(request('POST', '/api/bridges'))),
+      ).resolves.toBe(true);
+      await expect(
+        guard.canActivate(
+          contextWith(request('DELETE', '/api/connections/c1')),
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('an account from before there were roles is an admin', async () => {
+      const { guard } = make({
+        isPublic: false,
+        session: session(undefined),
+        roles: ['admin'],
+      });
+      await expect(
+        guard.canActivate(contextWith(request('POST', '/api/auth/users'))),
+      ).resolves.toBe(true);
+    });
+
+    it('roles are about accounts: a key’s scope decides for a key, as before', async () => {
+      const key = { id: 'k1', name: 'ci', scope: 'full' as const };
+      const { guard } = make({
+        isPublic: false,
+        session: null,
+        apiKey: key,
+        roles: ['admin'],
+      });
+      const req = {
+        method: 'PUT',
+        originalUrl: '/api/settings',
+        headers: { authorization: 'Bearer syn_x' },
+      } as Record<string, unknown>;
+      await expect(guard.canActivate(contextWith(req))).resolves.toBe(true);
     });
   });
 });

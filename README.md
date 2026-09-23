@@ -471,6 +471,7 @@ Env files are created automatically on first run from the committed
 | `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
 | `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
 | `SYNCLE_SHARED_SLOT_JOIN_WAIT_MS` | api | Joining a shared PostgreSQL replication slot: how long to wait for transactions that were open when the table was published (default `60000`) |
+| `SYNCLE_AUDIT_RETENTION_DAYS` | api | Days the activity log (who did what) is kept — the default for the in-app setting (default `365`; `0` = for ever) |
 | `SYNCLE_LEADER_TTL_SECONDS` | api | More than one API process: how long the leader's lease lasts — the longest a failover takes, and how long a leader cut off from Redis keeps reading live bridges (default `20`) |
 | `SYNCLE_ECHO_TTL_SECONDS` | api | Loop prevention (A → B plus B → A): how long a write to a table another bridge reads is remembered, so it is known when it comes back (default `300`; `0` = off) |
 | `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
@@ -659,10 +660,12 @@ React Flow · Zod · Vitest.
 - All user values are passed as bound parameters; identifiers are dialect-quoted.
 - Bridge payloads are built by structured token substitution — no string injection,
   no code execution.
-- Every API route sits behind a single-operator auth layer: the first run
-  creates the admin account, after which a scrypt-hashed password and an
-  httpOnly session cookie guard the app. Changing the password invalidates
-  existing sessions.
+- Every API route sits behind an account. The first run creates an admin, who
+  can add more — admins, operators (the work, not the settings or accounts) and
+  viewers (look, not change). Passwords are scrypt-hashed, the session is an
+  httpOnly cookie, and changing a password invalidates existing sessions.
+- An activity log records who did what: every change made through the API and
+  every sign-in, kept for `SYNCLE_AUDIT_RETENTION_DAYS`.
 - Syncle is still designed for local / trusted-network use. Before exposing it
   further, complete first-run setup before the port is reachable, put it behind
   TLS, and restrict which destinations (database connections / endpoint URLs)

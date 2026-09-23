@@ -38,10 +38,43 @@ model AppUser {
   resetCodeMintedAt  DateTime? @map("reset_code_minted_at")
   resetCodeExpiresAt DateTime? @map("reset_code_expires_at")
   resetCodeFailures  Int       @default(0) @map("reset_code_failures")
+  // 'admin' | 'operator' | 'viewer' (see core's userRoleSchema). the account
+  // made at first run is an admin; every account there was before roles existed too
+  role        String    @default("admin")
+  // an account that may not sign in, and whose sessions are over: kept, so that
+  // what it did stays attributed to it
+  disabledAt  DateTime? @map("disabled_at")
+  lastLoginAt DateTime? @map("last_login_at")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("app_users")
+}
+
+// who did what: every change made through the API, and every sign-in. kept for
+// `auditRetentionDays`. the actor is recorded by NAME as well as by id, so an
+// entry outlives the account (or key) that made it
+model AuditEntry {
+  id         String   @id
+  at         DateTime @default(now())
+  // 'user' | 'apiKey' | 'system'
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  actorName  String   @map("actor_name")
+  // 'bridge.create', 'auth.login', ... (see core's AUDIT_ACTIONS)
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  targetName String?  @map("target_name")
+  // what changed, in short (JSON); never a secret
+  detailsJson String? @map("details_json")
+  ip         String?
+
+  @@index([at])
+  @@index([action, at])
+  @@index([targetId, at])
+  @@index([actorId, at])
+  @@map("audit_entries")
 }
 
 // Global application settings as a key/value store (single-operator install, so

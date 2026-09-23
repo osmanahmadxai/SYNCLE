@@ -14,7 +14,7 @@ import {
 } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
   AppError,
@@ -26,6 +26,7 @@ import {
 import { AttemptLimiter } from '../common/attempt-limiter';
 import type { AppUser } from '@prisma/client';
 import { CryptoService } from '../common/crypto.service';
+import { AuditService, SYSTEM } from '../audit/audit.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
@@ -38,7 +39,7 @@ const RESET_TTL_MS = 15 * 60_000;
 const RESET_MIN_INTERVAL_MS = 60_000;
 /** …and it is gone after this many wrong guesses, wherever they came from */
 const RESET_MAX_FAILURES = 10;
-const CLEARED_RESET = { resetCodeHash: null, resetCodeMintedAt: null, resetCodeExpiresAt: null, resetCodeFailures: 0 };
+export const CLEARED_RESET = { resetCodeHash: null, resetCodeMintedAt: null, resetCodeExpiresAt: null, resetCodeFailures: 0 };
 
 /** what is stored of a reset code (72 random bits: a fast hash is enough, and it is compared in constant time) */
 const hashResetCode = (code: string): string => createHash('sha256').update(code.trim()).digest('hex');
@@ -110,6 +111,7 @@ export class AuthService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
     private readonly settings: SettingsStoreService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   /* ----- account lifecycle ----- */
@@ -169,6 +171,8 @@ export class AuthService implements OnModuleInit {
         id: randomUUID(),
         username,
         passwordHash: await this.hashPassword(password),
+        // (signed in by the setup itself: that is a sign-in)
+        lastLoginAt: new Date(),
       },
     });
     this.setupToken = null;
@@ -176,6 +180,12 @@ export class AuthService implements OnModuleInit {
     // the next first run (a wiped users table) gets a token of its own
     await this.forgetSetupNonce();
     this.setupLimiter.succeed(`setup:${ip}`);
+    await this.audit?.record({
+      actor: { type: 'user', id: user.id, name: user.username },
+      action: 'auth.setup',
+      target: { type: 'user', id: user.id, name: user.username },
+      ip,
+    });
     return user;
   }
 
@@ -194,10 +204,31 @@ export class AuthService implements OnModuleInit {
     if (!user || !ok) {
       this.loginLimiter.fail(key);
       this.usernameLimiter.fail(nameKey);
+      await this.audit?.record({
+        actor: { type: 'user', id: user?.id ?? null, name: username.trim().slice(0, 60) },
+        action: 'auth.login_failed',
+        ip,
+      });
       throw new UnauthorizedError('Incorrect username or password.');
+    }
+    if (user.disabledAt) {
+      // (said only once the password was right: nobody learns from this that the account exists)
+      await this.audit?.record({
+        actor: { type: 'user', id: user.id, name: user.username },
+        action: 'auth.login_failed',
+        details: { reason: 'disabled' },
+        ip,
+      });
+      throw new UnauthorizedError('This account is disabled. Ask an admin.');
     }
     this.loginLimiter.succeed(key);
     this.usernameLimiter.succeed(nameKey);
+    await this.prisma.appUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => undefined);
+    await this.audit?.record({
+      actor: { type: 'user', id: user.id, name: user.username },
+      action: 'auth.login',
+      ip,
+    });
     return user;
   }
 
@@ -325,9 +356,13 @@ export class AuthService implements OnModuleInit {
    * whoever made them. only its hash is stored, so it works whichever API
    * process the reset then reaches.
    */
-  async requestPasswordReset(): Promise<void> {
-    const user = await this.prisma.appUser.findFirst({ orderBy: { createdAt: 'asc' } });
-    if (!user) return; // nothing to reset: first-run setup is the way in
+  async requestPasswordReset(username?: string, ip?: string): Promise<void> {
+    // named, or — as before there were roles — the first admin
+    const user = username
+      ? await this.prisma.appUser.findUnique({ where: { username } })
+      : await this.prisma.appUser.findFirst({ where: { role: 'admin' }, orderBy: { createdAt: 'asc' } });
+    if (!user) return; // nothing to reset: first-run setup is the way in (or no such name)
+    if (user.disabledAt) return; // a disabled account cannot sign in, with any password
     const now = Date.now();
     const fresh =
       user.resetCodeHash &&
@@ -357,27 +392,39 @@ export class AuthService implements OnModuleInit {
       [
         '',
         '  ┌──────────────────────────────────────────────────┐',
-        '  │  Password reset code (valid for 15 minutes)      │',
+        `  │  Password reset code for ${user.username.slice(0, 24).padEnd(24)}│`,
+        '  │  (valid for 15 minutes)                          │',
         `  │      ${code.padEnd(44)}│`,
         '  │  Nobody asked for this? Then ignore it.          │',
         '  └──────────────────────────────────────────────────┘',
       ].join('\n'),
     );
+    await this.audit?.record({
+      actor: { ...SYSTEM, name: 'anonymous' },
+      action: 'auth.reset_requested',
+      target: { type: 'user', id: user.id, name: user.username },
+      ip: ip ?? null,
+    });
   }
 
   /** set a new password with a reset code; every session there was ends */
   async resetPassword(code: string, newPassword: string, ip: string): Promise<AppUser> {
     const key = `reset:${ip}`;
     this.assertNotLocked(this.resetLimiter, key);
-    const user = await this.prisma.appUser.findFirst({ orderBy: { createdAt: 'asc' } });
-    const live = !!user?.resetCodeHash && !!user.resetCodeExpiresAt && user.resetCodeExpiresAt.getTime() > Date.now();
-    if (!user || !live || !tokensEqual(hashResetCode(code), user.resetCodeHash!)) {
+    // the code says whose it is: the one account with a live code it matches
+    const candidates = await this.prisma.appUser.findMany({
+      where: { resetCodeHash: { not: null }, resetCodeExpiresAt: { gt: new Date() }, disabledAt: null },
+    });
+    const given = hashResetCode(code);
+    const user = candidates.find((c) => tokensEqual(given, c.resetCodeHash!));
+    if (!user) {
       this.resetLimiter.fail(key);
-      if (user && live) {
-        // guesses from many addresses add up too: ten of them and the code is gone
-        const failures = user.resetCodeFailures + 1;
+      // guesses from many addresses add up too: ten of them and a code is gone
+      // (a wrong guess counts against every code that is out)
+      for (const c of candidates) {
+        const failures = c.resetCodeFailures + 1;
         await this.prisma.appUser.update({
-          where: { id: user.id },
+          where: { id: c.id },
           data: failures >= RESET_MAX_FAILURES ? CLEARED_RESET : { resetCodeFailures: failures },
         });
         if (failures >= RESET_MAX_FAILURES) this.clearResetCodeFile();
@@ -391,11 +438,19 @@ export class AuthService implements OnModuleInit {
         // whoever was signed in with the old password no longer is
         sessionVersion: { increment: 1 },
         ...CLEARED_RESET,
+        // (signed in by the reset itself)
+        lastLoginAt: new Date(),
       },
     });
     this.clearResetCodeFile();
     this.resetLimiter.succeed(key);
     this.logger.warn(`The password of "${updated.username}" was reset with a reset code.`);
+    await this.audit?.record({
+      actor: { type: 'user', id: updated.id, name: updated.username },
+      action: 'auth.password_reset',
+      target: { type: 'user', id: updated.id, name: updated.username },
+      ip,
+    });
     return updated;
   }
 
@@ -484,6 +539,7 @@ export class AuthService implements OnModuleInit {
       where: { id: payload.uid },
     });
     if (!user || user.sessionVersion !== payload.v) return null;
+    if (user.disabledAt) return null; // (its version was bumped when it was disabled; belt and braces)
     return { user, ageSec };
   }
 
@@ -511,6 +567,7 @@ export class AuthService implements OnModuleInit {
     return {
       id: user.id,
       username: user.username,
+      role: user.role === 'operator' || user.role === 'viewer' ? user.role : 'admin',
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     };
@@ -518,7 +575,7 @@ export class AuthService implements OnModuleInit {
 
   /* ----- password hashing (scrypt) ----- */
 
-  private async hashPassword(password: string): Promise<string> {
+  async hashPassword(password: string): Promise<string> {
     const salt = randomBytes(SALT_BYTES);
     const derived = (await scrypt(password, salt, SCRYPT_KEYLEN)) as Buffer;
     return `${salt.toString('hex')}:${derived.toString('hex')}`;

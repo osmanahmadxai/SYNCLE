@@ -47,6 +47,9 @@ function fakePrisma() {
       }) => {
         const now = new Date();
         const user = {
+          role: 'admin',
+          disabledAt: null,
+          lastLoginAt: null,
           ...data,
           sessionVersion: 0,
           resetCodeHash: null,
@@ -68,6 +71,17 @@ function fakePrisma() {
           where.id ? u.id === where.id : u.username === where.username,
         ) ?? null,
       findFirst: async () => [...users.values()][0] ?? null,
+      /** the accounts with a live reset code (what resetPassword asks for), or all of them */
+      findMany: async ({ where }: { where?: Record<string, unknown> } = {}) =>
+        [...users.values()].filter((u) => {
+          if (!where) return true;
+          if (where.resetCodeHash && !u.resetCodeHash) return false;
+          const gt = (where.resetCodeExpiresAt as { gt?: Date } | undefined)?.gt;
+          if (gt && !(u.resetCodeExpiresAt && u.resetCodeExpiresAt > gt)) return false;
+          if ('disabledAt' in where && where.disabledAt === null && u.disabledAt) return false;
+          if (where.role && u.role !== where.role) return false;
+          return true;
+        }),
       update: async ({
         where,
         data,

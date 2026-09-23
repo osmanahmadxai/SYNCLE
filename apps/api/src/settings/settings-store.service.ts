@@ -94,6 +94,7 @@ export class SettingsStoreService implements OnModuleInit {
       sessionTtlMinutes: 60 * 24 * 7, // one week
       deliveryRetentionDays: runtimeConfig.deliveryRetentionDays,
       deliveryMaxPerJob: runtimeConfig.deliveryMaxPerJob,
+      auditRetentionDays: runtimeConfig.auditRetentionDays,
     };
   }
 

@@ -457,6 +457,20 @@ SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_AUDIT_RETENTION_DAYS</code>
+              </td>
+              <td>
+                <code>365</code>
+              </td>
+              <td>
+                Days the{' '}
+                <a href="/docs/self-hosting#activity-log">activity log</a> is
+                kept — the default for the in-app setting (Settings ›
+                Security). <code>0</code> keeps it for ever.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_LEADER_TTL_SECONDS</code>
               </td>
               <td>

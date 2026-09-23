@@ -352,7 +352,11 @@ describe('a live job', () => {
 
 describe('the settings', () => {
   it('0 days keeps everything for ever; 0 rows means no cap', async () => {
-    await settings.update({ deliveryRetentionDays: 0, deliveryMaxPerJob: 0 });
+    await settings.update({
+      deliveryRetentionDays: 0,
+      deliveryMaxPerJob: 0,
+      auditRetentionDays: 0,
+    });
     const replay = await makeBridge('replay');
     const old = await makeJob(replay, {
       status: 'completed',
@@ -368,6 +372,7 @@ describe('the settings', () => {
       overflowDeliveries: 0,
       deadLetters: 0,
       jobsEmptied: 0,
+      auditEntries: 0,
       limited: false,
     });
     expect((await sequencesOf(old)).length).toBe(5);
