@@ -8,7 +8,7 @@
 # `pnpm deploy`) and the web app's Next standalone output. No compilers, no
 # git, no dev dependencies, and it runs as the unprivileged `node` user.
 
-FROM node:22-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
 WORKDIR /app
@@ -67,7 +67,7 @@ RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api \
 
 # ---------------------------------------------------------------------------
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 ENV NODE_ENV=production
 # what this image is. passed by the release workflow (the tag it was built
 # from); a local build leaves it empty and the API falls back to its
