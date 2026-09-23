@@ -48,8 +48,10 @@ function touched(
 describe('what an event makes stale', () => {
   const B = 'b1';
   const J = 'j1';
+  const W = 'w1';
   const KEYS = [
-    queryKeys.bridges,
+    // the lists are keyed under their workspace, as the hooks in queries.ts key them
+    [...queryKeys.bridges, W],
     queryKeys.bridge(B),
     queryKeys.bridgeJobs(B),
     queryKeys.bridgeJob(B, J),
@@ -59,8 +61,8 @@ describe('what an event makes stale', () => {
     queryKeys.deadLetters(B),
     queryKeys.bridgeLoops(B),
     queryKeys.schemaDrift(B),
-    ['bridgeStatuses', 'w1'],
-    queryKeys.connections,
+    ['bridgeStatuses', W],
+    [...queryKeys.connections, W],
     queryKeys.connection('c1'),
     queryKeys.schema('c1', 'db'),
     queryKeys.workspaces,
@@ -85,7 +87,7 @@ describe('what an event makes stale', () => {
         K(queryKeys.bridgeJobs(B)),
         K(queryKeys.bridgeJob(B, J)),
         K(['bridgeStatuses', 'w1']),
-        K(queryKeys.bridges),
+        K([...queryKeys.bridges, W]),
       ]),
     );
     expect(stale).not.toContain(
@@ -116,7 +118,7 @@ describe('what an event makes stale', () => {
     const stale = after({ type: 'bridge', bridgeId: B });
     expect(stale).toEqual(
       expect.arrayContaining([
-        K(queryKeys.bridges),
+        K([...queryKeys.bridges, W]),
         K(queryKeys.bridge(B)),
         K(queryKeys.bridgeLoops(B)),
         K(queryKeys.schemaDrift(B)),
@@ -142,13 +144,18 @@ describe('what an event makes stale', () => {
     const stale = after({ type: 'connection', id: 'c1' });
     expect(stale).toEqual(
       expect.arrayContaining([
-        K(queryKeys.connections),
+        K([...queryKeys.connections, W]),
         K(queryKeys.connection('c1')),
         K(queryKeys.schema('c1', 'db')),
-        K(queryKeys.bridges),
+        K([...queryKeys.bridges, W]),
+        K(queryKeys.bridge(B)),
       ]),
     );
-    expect(stale).toHaveLength(4);
+    expect(stale).toHaveLength(5);
+    // another connection's schema is left alone
+    expect(after({ type: 'connection', id: 'c2' })).not.toContain(
+      K(queryKeys.schema('c1', 'db')),
+    );
   });
 
   it('the rest: one family each, by the keys queries.ts uses', () => {

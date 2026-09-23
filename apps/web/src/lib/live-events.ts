@@ -50,74 +50,83 @@ export function pollEvery(ms: number): number {
 
 type Key = readonly unknown[];
 
-/** what an event makes stale. the keys are those of `queries.ts` (its test keeps them so) */
+/** the parts of a bridge that are derived from the bridge itself (not from its runs) */
+const DERIVED = new Set(['loops', 'schemaDrift', 'schedule', 'sourceHold']);
+
+/**
+ * what an event makes stale. the keys are those of `queries.ts` (its test
+ * keeps them so). a list is keyed under its workspace (`['bridges', wsId]`,
+ * `['connections', wsId]`), a thing under its id (`['bridges', id]`): both are
+ * "a key of two parts", and both are stale when the thing changes
+ */
 export function invalidateFor(qc: QueryClient, event: LiveEvent): void {
   const stale = (queryKey: Key, exact = false) =>
     void qc.invalidateQueries({ queryKey, exact });
+  const when = (predicate: (key: Key) => boolean) =>
+    void qc.invalidateQueries({ predicate: (q) => predicate(q.queryKey) });
   const { bridgeId, jobId, id } = event;
+  /** the bridge lists (by workspace) and the bridges themselves (by id) */
+  const bridgeHeads = (key: Key) => key[0] === 'bridges' && key.length <= 2;
   switch (event.type) {
     case 'bridge':
-      // the bridge and what is derived from it — not its runs, which have events of their own
-      stale(['bridges'], true);
+      // the bridge, the lists, what is derived from it - not its runs, which have events of their own
+      when(
+        (key) =>
+          bridgeHeads(key) ||
+          (key[0] === 'bridges' &&
+            typeof key[2] === 'string' &&
+            DERIVED.has(key[2]) &&
+            (!bridgeId || key[1] === bridgeId)),
+      );
       stale(['bridgeStatuses']);
-      if (bridgeId) {
-        stale(['bridges', bridgeId], true);
-        for (const part of ['loops', 'schemaDrift', 'schedule', 'sourceHold'])
-          stale(['bridges', bridgeId, part]);
-      } else {
-        void qc.invalidateQueries({
-          predicate: (q) =>
-            q.queryKey[0] === 'bridges' && q.queryKey[2] !== 'jobs',
-        });
-      }
       return;
     case 'bridge.job':
       stale(['bridgeStatuses']);
-      stale(['bridges'], true);
-      if (bridgeId) {
-        stale(['bridges', bridgeId, 'jobs'], true);
-        if (jobId) stale(['bridges', bridgeId, 'jobs', jobId], true);
-      } else {
-        void qc.invalidateQueries({
-          predicate: (q) =>
-            q.queryKey[0] === 'bridges' &&
-            q.queryKey[2] === 'jobs' &&
-            (q.queryKey.length === 3 ||
-              (q.queryKey.length === 4 && (!jobId || q.queryKey[3] === jobId))),
-        });
-      }
+      when(
+        (key) =>
+          bridgeHeads(key) ||
+          (key[0] === 'bridges' &&
+            key[2] === 'jobs' &&
+            (!bridgeId || key[1] === bridgeId) &&
+            (key.length === 3 ||
+              (key.length === 4 && (!jobId || key[3] === jobId)))),
+      );
       return;
     case 'bridge.deliveries':
       // deliveries are keyed under their run: matched by the run, whichever bridge it is of
-      void qc.invalidateQueries({
-        predicate: (q) =>
-          q.queryKey[0] === 'bridges' &&
-          q.queryKey[2] === 'jobs' &&
-          q.queryKey[4] === 'deliveries' &&
-          (!jobId || q.queryKey[3] === jobId),
-      });
+      when(
+        (key) =>
+          key[0] === 'bridges' &&
+          key[2] === 'jobs' &&
+          key[4] === 'deliveries' &&
+          (!jobId || key[3] === jobId),
+      );
       return;
     case 'bridge.verification':
-      if (bridgeId) stale(['bridges', bridgeId, 'verifications']);
-      else
-        void qc.invalidateQueries({
-          predicate: (q) =>
-            q.queryKey[0] === 'bridges' && q.queryKey[2] === 'verifications',
-        });
+      when(
+        (key) =>
+          key[0] === 'bridges' &&
+          key[2] === 'verifications' &&
+          (!bridgeId || key[1] === bridgeId),
+      );
       return;
     case 'bridge.deadLetters':
-      if (bridgeId) stale(['bridges', bridgeId, 'deadLetters']);
-      else
-        void qc.invalidateQueries({
-          predicate: (q) =>
-            q.queryKey[0] === 'bridges' && q.queryKey[2] === 'deadLetters',
-        });
+      when(
+        (key) =>
+          key[0] === 'bridges' &&
+          key[2] === 'deadLetters' &&
+          (!bridgeId || key[1] === bridgeId),
+      );
       return;
     case 'connection':
-      stale(['connections'], true);
-      if (id) stale(['connections', id]);
-      // a bridge is described by its connections' names
-      stale(['bridges'], true);
+      // the lists (by workspace), the connection (by id) and everything under it - and the
+      // bridges, which are described by their connections' names
+      when(
+        (key) =>
+          (key[0] === 'connections' &&
+            (key.length <= 2 || !id || key[1] === id)) ||
+          bridgeHeads(key),
+      );
       return;
     case 'workspace':
       stale(['workspaces']);
