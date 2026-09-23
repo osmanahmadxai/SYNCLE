@@ -31,7 +31,7 @@
     "ioredis": "^5.4.1",
     "mongodb": "^6.21.0",
     "nodemailer": "^10.0.10",
-    "pg": "^8.13.1",
+    "pg": "^8.23.0",
     "pg-logical-replication": "^2.0.3",
     "prisma": "^5.22.0",
     "reflect-metadata": "^0.2.2",
@@ -46,10 +46,10 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.9.0",
     "@types/nodemailer": "^8.0.2",
-    "@types/ssh2": "^1.15.5",
+    "@types/ssh2": "^1.15.6",
     "@vitest/coverage-v8": "^2.1.4",
     "typescript": "^5.6.3",
-    "unplugin-swc": "^1.5.11",
+    "unplugin-swc": "^1.6.0",
     "vitest": "^2.1.4"
   }
 }
