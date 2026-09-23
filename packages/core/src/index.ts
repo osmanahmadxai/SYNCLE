@@ -12,6 +12,7 @@ export * from './bridges';
 export * from './workspace';
 export * from './auth';
 export * from './alerts';
+export * from './events';
 export * from './statement-safety';
 
 // type-only re-exports of the driver metadata (no driver implementations are

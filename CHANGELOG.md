@@ -462,6 +462,19 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **The page hears what happens instead of asking.** `GET /api/events` is a
+  stream of server-sent events — one message per thing that changed, as it
+  changes: a bridge, a run, its deliveries, a verification, a dead letter, a
+  connection, a workspace, a setting, an account, an API key, an activity-log
+  entry, an alert channel. The web app listens to it, and the polls it used to
+  live by (a run's deliveries every 1.5 seconds, every bridge's status every 3)
+  slow down to a safety net of one every 30 seconds while the stream is up —
+  and carry on as before when it is not (a proxy that will not stream). A run's
+  progress now shows the moment it is made, on every open tab, from whichever
+  API process it happened on. An event says only *that* something changed and
+  what it was about; the page asks for the thing itself, so a missed event is a
+  little staleness and never a wrong picture. Anything with a session or an API
+  key may listen (`curl -N`); the API reference says what the events are.
 - **A Helm chart** (`deploy/helm/syncle`): the API, the web GUI, and — unless
   pointed at your own — a PostgreSQL for Syncle's metadata and a Redis for its
   queue, on persistent volumes. The master key is the one value it insists on

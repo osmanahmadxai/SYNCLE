@@ -89,6 +89,10 @@ ingress:
   className: ''
   annotations: {}
   #   cert-manager.io/cluster-issuer: letsencrypt
+  # the page listens to a stream (GET /api/events) that stays open for up to
+  # 15 minutes: with ingress-nginx, let it through unbuffered and uncut
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
   host: syncle.example.com
   path: /
   pathType: Prefix

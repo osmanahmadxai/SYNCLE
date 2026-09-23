@@ -26,6 +26,7 @@ import type {
   UserUpdateDTO,
 } from '@syncle/core';
 import { api, type AuditQuery } from './api';
+import { pollEvery } from './live-events';
 import { useStudio } from './store';
 
 export const queryKeys = {
@@ -443,7 +444,7 @@ export function useBridgeStatuses() {
     queryKey: ['bridgeStatuses', workspaceId],
     queryFn: () => api.listBridgeStatuses(workspaceId as string),
     enabled: !!workspaceId,
-    refetchInterval: 3000,
+    refetchInterval: () => pollEvery(3000),
   });
 }
 
@@ -595,7 +596,7 @@ export function useDeadLetters(bridgeId: string | null, live: boolean) {
     queryKey: bridgeId ? queryKeys.deadLetters(bridgeId) : ['deadLetters', 'none'],
     queryFn: () => api.listDeadLetters(bridgeId as string, { status: 'pending', limit: 100 }),
     enabled: !!bridgeId,
-    refetchInterval: live ? 5000 : false,
+    refetchInterval: () => (live ? pollEvery(5000) : false),
   });
 }
 
@@ -623,7 +624,8 @@ export function useVerifications(bridgeId: string | null, enabled: boolean) {
     queryKey: bridgeId ? queryKeys.verifications(bridgeId) : ['verifications', 'none'],
     queryFn: () => api.verifications(bridgeId as string),
     enabled: !!bridgeId && enabled,
-    refetchInterval: (query) => (query.state.data?.some((v) => VERIFYING.includes(v.status)) ? 1500 : false),
+    refetchInterval: (query) =>
+      query.state.data?.some((v) => VERIFYING.includes(v.status)) ? pollEvery(1500) : false,
     retry: false,
   });
 }
@@ -757,7 +759,7 @@ export function useBridgeJobs(bridgeId: string | null) {
       const active = jobs?.some((r) =>
         ['queued', 'running', 'canceling'].includes(r.status),
       );
-      return active ? 1500 : false;
+      return active ? pollEvery(1500) : false;
     },
   });
 }
@@ -790,7 +792,7 @@ export function useBridgeDeliveries(
         ...opts,
       }),
     enabled: !!bridgeId && !!jobId,
-    refetchInterval: live ? 1500 : false,
+    refetchInterval: () => (live ? pollEvery(1500) : false),
     staleTime: 0,
   });
 

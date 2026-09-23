@@ -1345,6 +1345,49 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         </table>
       </div>
 
+      <h2 id="events">Events</h2>
+      <p>
+        <code>GET /api/events</code> is a stream of{' '}
+        <a href="https://developer.mozilla.org/docs/Web/API/Server-sent_events">
+          server-sent events
+        </a>
+        : one message per thing that changed, as it changes. The web app
+        listens to it instead of asking every few seconds whether a run has
+        moved on, and anything else with a session or an API key may listen
+        the same way (<code>curl -N -H &quot;Authorization: Bearer …&quot;</code>
+        ). Each message&apos;s <code>data</code> is one JSON event:
+      </p>
+      <pre>
+        <code>{`{ "type": "bridge.job", "bridgeId": "…", "jobId": "…", "at": "2026-09-23T10:00:00.000Z" }`}</code>
+      </pre>
+      <p>
+        An event says only <em>that</em> something changed and what it was
+        about — ask for the thing itself, the way you would have anyway. The
+        kinds: <code>bridge</code> (<code>bridgeId</code>),{' '}
+        <code>bridge.job</code> (<code>bridgeId</code>, <code>jobId</code>),{' '}
+        <code>bridge.deliveries</code> (<code>jobId</code>),{' '}
+        <code>bridge.verification</code> and <code>bridge.deadLetters</code>{' '}
+        (<code>bridgeId</code>), <code>connection</code> and{' '}
+        <code>workspace</code> (<code>id</code>), <code>settings</code>,{' '}
+        <code>users</code>, <code>apiKeys</code>, <code>audit</code>,{' '}
+        <code>alertChannels</code>. An id is present when the change was about
+        one thing; a change to many at once names none. A burst of changes
+        about one thing (the deliveries of a run, ten a second) is thinned to
+        one event at once and one when the burst pauses. Events from every API
+        process reach every stream, whichever process it was opened on.
+      </p>
+      <p>
+        The stream sends a comment every 25 seconds so that nothing between
+        the two ends decides it is idle, and is ended by the server after 15
+        minutes; a browser&apos;s <code>EventSource</code> opens a new one by
+        itself (it is told to wait 2 seconds), and any other client should do
+        the same. Nothing is replayed on reconnection — ask again for what you
+        care about, then listen. A proxy in front of Syncle has to pass the
+        stream through unbuffered: the response says{' '}
+        <code>Cache-Control: no-transform</code> and{' '}
+        <code>X-Accel-Buffering: no</code>, which the usual ones honour.
+      </p>
+
       <h2 id="limits">Limits</h2>
       <ul>
         <li>

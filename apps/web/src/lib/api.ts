@@ -96,6 +96,9 @@ export interface KeyRotationReport {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
+/** where the API's stream of events is (see `live-events.ts`) */
+export const eventsUrl = (): string => `${BASE_URL}/events`;
+
 export class ApiError extends Error {
   constructor(
     message: string,

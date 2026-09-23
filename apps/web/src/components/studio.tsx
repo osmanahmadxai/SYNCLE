@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { useTranslations } from 'next-intl';
 import { BookOpen, Database, Search } from 'lucide-react';
 import { useStudio } from '@/lib/store';
+import { useLiveEvents } from '@/lib/live-events';
 import { createUrlSync, type UrlState } from '@/lib/url-state';
 import {
   ResizableHandle,
@@ -32,6 +33,8 @@ import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
  */
 export function Studio() {
   const t = useTranslations('nav');
+  // what changes on the server reaches the page as it happens
+  useLiveEvents();
   const {
     selectedBridgeId,
     selectBridge,

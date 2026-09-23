@@ -288,6 +288,21 @@ export default function Page() {
           <code>WEB_ORIGIN</code>.
         </li>
         <li>
+          <strong>Let the event stream through.</strong> The page listens to{' '}
+          <code>GET /api/events</code>, a stream of server-sent events that
+          stays open for up to 15 minutes (see the{' '}
+          <a href="/docs/api#events">API reference</a>). A proxy must pass it
+          on unbuffered and not cut it short: the response carries{' '}
+          <code>Cache-Control: no-transform</code> and{' '}
+          <code>X-Accel-Buffering: no</code>, which nginx, Caddy and Traefik
+          honour — but a read timeout shorter than 15 minutes (nginx&apos;s{' '}
+          <code>proxy_read_timeout</code> defaults to 60 seconds) ends the
+          stream early; the browser reopens it, at the cost of a full refresh
+          of the page&apos;s data each time. Raise the timeout for{' '}
+          <code>/api/events</code>, or leave it: without the stream the page
+          falls back to asking every few seconds, as it always did.
+        </li>
+        <li>
           <strong>Restrict destinations.</strong> Set{' '}
           <code>SYNCLE_BLOCK_PRIVATE_DESTINATIONS=true</code> so bridge
           deliveries refuse loopback, private and link-local addresses — see

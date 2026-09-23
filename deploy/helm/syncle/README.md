@@ -19,7 +19,9 @@ Then the first-run setup token is in the API's log
 (`kubectl logs deploy/syncle-api | grep -A2 'setup token'`), and the GUI is
 reachable with `kubectl port-forward svc/syncle 3002:3002` — or through an
 ingress (`ingress.enabled=true`, `ingress.host=…`; put TLS in front, Syncle
-serves plain HTTP).
+serves plain HTTP — and let `GET /api/events`, the page's event stream, through
+unbuffered and for up to 15 minutes: with ingress-nginx that is the two
+annotations shown in `values.yaml`).
 
 What is worth knowing:
 
