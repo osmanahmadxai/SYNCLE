@@ -1,0 +1,20 @@
+apiVersion: v2
+name: syncle
+description: Syncle — sync tables between databases in real time (PostgreSQL, MySQL, SQLite, MongoDB, Redis), with a web GUI. This chart runs the API, the web GUI, and — unless you point it at your own — a PostgreSQL for Syncle's own metadata and a Redis for its job queue.
+type: application
+# the chart's own version: bump on any change to the templates or the defaults
+version: 0.1.0
+# the Syncle release the chart's default image tag points at (image.tag overrides)
+appVersion: '1.3.0'
+home: https://syncle.dev
+sources:
+  - https://github.com/osmanahmadxai/SYNCLE
+keywords:
+  - database
+  - sync
+  - replication
+  - cdc
+  - etl
+maintainers:
+  - name: Osman Ahmadzai
+    url: https://github.com/osmanahmadxai

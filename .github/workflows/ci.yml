@@ -127,3 +127,48 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # the Helm chart: linted, rendered in its main shapes, and every manifest
+  # checked against the Kubernetes schemas — so a values key that stops
+  # rendering, or a field a newer API rejects, is caught before a release
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Lint
+        run: helm lint deploy/helm/syncle --set masterKey.value=ci
+
+      - name: Refuses to install without a master key
+        run: |
+          if helm template t deploy/helm/syncle > /dev/null 2>&1; then
+            echo "rendered without a master key" && exit 1
+          fi
+
+      - name: Render (in-cluster databases)
+        run: helm template syncle deploy/helm/syncle --set masterKey.value=ci > /tmp/default.yaml
+
+      - name: Render (external databases, ingress, replicas, persistence)
+        run: |
+          helm template syncle deploy/helm/syncle \
+            --set masterKey.existingSecret=my-secret \
+            --set postgres.enabled=false --set postgres.external.url='postgresql://u:p@db:5432/s' \
+            --set redis.enabled=false --set redis.external.existingSecret=redis-secret \
+            --set ingress.enabled=true --set ingress.host=syncle.example.com \
+            --set 'ingress.tls[0].secretName=tls' --set 'ingress.tls[0].hosts[0]=syncle.example.com' \
+            --set api.replicas=2 --set api.persistence.enabled=true \
+            --set api.env.SYNCLE_CDC_SPOOL=on --set api.metricsToken=tok > /tmp/external.yaml
+
+      - name: Validate against the Kubernetes schemas
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.30.0 /tmp/default.yaml /tmp/external.yaml
+          kubeconform -strict -summary -kubernetes-version 1.27.0 /tmp/default.yaml /tmp/external.yaml

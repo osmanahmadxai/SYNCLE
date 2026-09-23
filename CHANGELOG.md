@@ -455,6 +455,13 @@ can no longer lose a row to a failed delivery.
 
 ### Added
 
+- **A Helm chart** (`deploy/helm/syncle`): the API, the web GUI, and — unless
+  pointed at your own — a PostgreSQL for Syncle's metadata and a Redis for its
+  queue, on persistent volumes. The master key is the one value it insists on
+  (a key generated inside a pod would be lost with it); external databases,
+  ingress with TLS, more than one API replica, every `SYNCLE_*` tunable under
+  `api.env`, and the metrics token are values. Linted, rendered and
+  schema-checked in CI, and held to the repository's version by a test.
 - **More than one account, each with a role — and an activity log that says who
   did what.** There was one account, the admin, and everybody who used Syncle
   used it. Now the admin makes more (Settings › Security › Accounts, or

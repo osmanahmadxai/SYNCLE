@@ -237,6 +237,22 @@ where it is lost if the volume is removed.
 
 ---
 
+### Kubernetes
+
+A Helm chart is in [`deploy/helm/syncle`](deploy/helm/syncle): the API, the
+GUI, and (unless you bring your own) a PostgreSQL and a Redis for Syncle
+itself. The master key is the one value you must set.
+
+```bash
+helm install syncle ./deploy/helm/syncle --namespace syncle --create-namespace \
+  --set masterKey.value="$(openssl rand -base64 32)"
+kubectl -n syncle logs deploy/syncle-api | grep -A2 'setup token'   # first-run token
+kubectl -n syncle port-forward svc/syncle 3002:3002                  # or enable the ingress
+```
+
+See the [self-hosting guide](https://syncle.dev/docs/self-hosting#kubernetes)
+for external databases, ingress/TLS, replicas and tunables.
+
 ### Run from source (for development)
 
 You'll need **Node 22+**, **pnpm 10+**, and **Docker**. The repo pins both via

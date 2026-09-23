@@ -1,0 +1,149 @@
+# Syncle on Kubernetes.
+#
+# The one thing you HAVE to set is the master key — it encrypts every stored
+# connection password and signs every session; without it the release refuses
+# to install. Everything else has a default that gives you a working, private,
+# single-replica Syncle with its own PostgreSQL and Redis inside the cluster.
+#
+#   helm install syncle ./deploy/helm/syncle \
+#     --set masterKey.value="$(openssl rand -base64 32)"
+#
+# Then the first-run setup token is in the API's log:
+#   kubectl logs deploy/syncle-api | grep -A2 'setup token'
+
+image:
+  repository: ghcr.io/osmanahmadxai/syncle
+  # empty = the chart's appVersion, as vX.Y.Z
+  tag: ''
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ''
+fullnameOverride: ''
+
+# ── the master key ─────────────────────────────────────────────────────────
+# Set ONE of `value` (the chart makes a Secret) or `existingSecret` (yours,
+# holding the key under `key`). Generate a key with `openssl rand -base64 32`.
+# Keep it: without it, every stored credential is unreadable.
+masterKey:
+  value: ''
+  existingSecret: ''
+  key: SYNCLE_MASTER_KEY
+  # changing the key: the OLD key(s), comma-separated, until Settings › Security
+  # says nothing depends on them any more (see the docs, "Changing the master key")
+  previous: ''
+
+# ── the API ────────────────────────────────────────────────────────────────
+api:
+  # more than one is safe: one process leads (the live change streams, the
+  # sweeps), the others share runs, polls and requests, and take over if it goes
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  # every SYNCLE_* tunable the API reads, by name — see the configuration page
+  # (docs/configuration). Left out = the API's default.
+  env: {}
+  #   SYNCLE_CDC_SPOOL: 'on'
+  #   SYNCLE_LOG_LEVEL: log
+  #   SYNCLE_AUDIT_RETENTION_DAYS: '365'
+  # the API's data directory: the first-run setup token file, the reset-code
+  # file, SQLite files (SYNCLE_SQLITE_DIR). With the master key set above,
+  # nothing irreplaceable lives here; keep it on a volume only if you use
+  # SQLite files and have one replica (a ReadWriteOnce volume fits one pod)
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClass: ''
+    accessModes: [ReadWriteOnce]
+  # the Prometheus endpoint (docs/self-hosting, "Monitoring"): empty = off
+  metricsToken: ''
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── the web GUI ────────────────────────────────────────────────────────────
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+service:
+  type: ClusterIP
+  port: 3002
+
+ingress:
+  enabled: false
+  className: ''
+  annotations: {}
+  #   cert-manager.io/cluster-issuer: letsencrypt
+  host: syncle.example.com
+  path: /
+  pathType: Prefix
+  tls: []
+  #   - secretName: syncle-tls
+  #     hosts: [syncle.example.com]
+
+# where the browser will reach Syncle, for the same-origin check on writes
+# (docs/self-hosting, "Where a request may come from"). Empty = derived from
+# the ingress host when the ingress is enabled; otherwise the API takes the
+# request's own Host, which is right for a port-forward
+webOrigin: ''
+
+# ── Syncle's own PostgreSQL (metadata) ─────────────────────────────────────
+postgres:
+  # in the cluster, as a StatefulSet with a volume. Set false to bring your own
+  enabled: true
+  image: postgres:16-alpine
+  user: syncle
+  password: '' # empty = generated once and kept in a Secret
+  database: syncle
+  storage: 8Gi
+  storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  # your own: a connection string, or a Secret that holds one under `key`
+  external:
+    url: ''
+    existingSecret: ''
+    key: DATABASE_URL
+
+# ── Syncle's own Redis (job queue, CDC spool, coordination) ───────────────
+redis:
+  enabled: true
+  image: redis:7-alpine
+  # a volume: the CDC spool (if enabled) lives here, and so does the job queue
+  storage: 1Gi
+  storageClass: ''
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  external:
+    url: ''
+    existingSecret: ''
+    key: REDIS_URL
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]

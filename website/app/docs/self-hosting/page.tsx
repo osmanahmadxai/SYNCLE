@@ -578,6 +578,61 @@ const ok = given.length === expected.length &&
         deliveries, and redirects are not followed.
       </p>
 
+      <h2 id="kubernetes">Kubernetes (Helm)</h2>
+      <p>
+        The repository ships a Helm chart at{' '}
+        <code>deploy/helm/syncle</code>: the API, the web GUI, and — unless
+        you point it at your own — a PostgreSQL for Syncle&apos;s own metadata
+        and a Redis for its job queue, as single-replica StatefulSets on
+        persistent volumes.
+      </p>
+      <CodeBlock>{`helm install syncle ./deploy/helm/syncle \\
+  --namespace syncle --create-namespace \\
+  --set masterKey.value="$(openssl rand -base64 32)"
+
+# the first-run setup token
+kubectl -n syncle logs deploy/syncle-api | grep -A2 'setup token'
+
+# the GUI, until you enable the ingress
+kubectl -n syncle port-forward svc/syncle 3002:3002`}</CodeBlock>
+      <p>
+        The <strong>master key is the one value you must set</strong> — the
+        chart refuses to install without <code>masterKey.value</code> or{' '}
+        <code>masterKey.existingSecret</code>, because a key generated inside
+        a pod would be lost with it, and with it every stored credential. Keep
+        it. Everything else has a default:
+      </p>
+      <ul>
+        <li>
+          <code>postgres.enabled=false</code> with{' '}
+          <code>postgres.external.url</code> (or{' '}
+          <code>existingSecret</code>/<code>key</code>) to use your own
+          PostgreSQL; the same under <code>redis</code>.
+        </li>
+        <li>
+          <code>ingress.enabled</code>, <code>ingress.host</code>,{' '}
+          <code>ingress.tls</code> to expose it — with TLS in front, since
+          Syncle serves plain HTTP. <code>WEB_ORIGIN</code> is derived from
+          the host (or set <code>webOrigin</code>).
+        </li>
+        <li>
+          <code>api.replicas</code> above one is{' '}
+          <a href="#more-than-one-api">safe</a>: the replicas share the same
+          key, database and Redis, one of them leads, and another takes over
+          if it goes.
+        </li>
+        <li>
+          every <code>SYNCLE_*</code> tunable from the{' '}
+          <a href="/docs/configuration">configuration page</a> goes under{' '}
+          <code>api.env</code>, by name; <code>api.metricsToken</code> turns
+          the <a href="#monitoring">metrics endpoint</a> on.
+        </li>
+        <li>
+          <code>helm upgrade</code> with a new <code>image.tag</code> upgrades
+          the whole release; the API applies its own migrations at start.
+        </li>
+      </ul>
+
       <h2 id="more-than-one-api">Running more than one API process</h2>
       <p>
         One API process is what the compose stack runs, and all most
