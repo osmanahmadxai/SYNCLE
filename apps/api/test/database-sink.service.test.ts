@@ -11,6 +11,7 @@ import type {
   DatabaseSchema,
   DatabaseTarget,
 } from '@syncle/core';
+import { UNCHANGED, UnsupportedError } from '@syncle/core';
 import { DatabaseSinkService } from '../src/bridges/database-sink.service';
 import type { ResolvedBridge } from '../src/bridges/bridges.types';
 
@@ -58,8 +59,19 @@ function makeAdapter() {
   return { adapter, calls };
 }
 
-/** service wired to stub adapters, keyed by connectionId */
-function makeService(adapters: Record<string, unknown>): DatabaseSinkService {
+/** no bridge reads what these tests write: the echo guard has nothing to say (it has tests of its own) */
+const NO_LOOPS = {
+  announce: async () => ({ receipt: null, unchanged: new Set<number>() }),
+  announceTruncate: async () => null,
+  retract: async () => undefined,
+};
+
+/** service wired to stub adapters, keyed by connectionId (all Postgres unless told otherwise) */
+function makeService(
+  adapters: Record<string, unknown>,
+  engines: Record<string, string> = {},
+  echo: unknown = NO_LOOPS,
+): DatabaseSinkService {
   const pool = {
     withAdapter: async (
       connectionId: string,
@@ -67,8 +79,14 @@ function makeService(adapters: Record<string, unknown>): DatabaseSinkService {
       fn: (a: unknown) => unknown,
     ) => fn(adapters[connectionId]),
   };
-  const connections = { resolve: async () => ({ engine: 'postgres' }) };
-  return new DatabaseSinkService(pool as never, connections as never);
+  const connections = {
+    resolve: async (id: string) => ({ engine: engines[id] ?? 'postgres' }),
+  };
+  return new DatabaseSinkService(
+    pool as never,
+    connections as never,
+    echo as never,
+  );
 }
 
 function makeBridge(): ResolvedBridge {
@@ -119,6 +137,293 @@ function col(name: string, dataType: string, nullable: boolean): ColumnSchema {
   };
 }
 
+describe('a target that another live bridge reads (see EchoGuardService)', () => {
+  /** an echo guard double: records what it was told, and answers as the test says */
+  function guard(answer: { unchanged?: number[] } = {}) {
+    const told: Array<{ rows: unknown; mode: string }> = [];
+    const retracted: unknown[] = [];
+    const receipt = { entries: [['k', 'v']] };
+    return {
+      told,
+      retracted,
+      receipt,
+      announce: async (
+        _b: unknown,
+        _t: unknown,
+        rows: unknown,
+        _source: unknown,
+        mode: string,
+      ) => {
+        told.push({ rows, mode });
+        return { receipt, unchanged: new Set(answer.unchanged ?? []) };
+      },
+      announceTruncate: async () => receipt,
+      retract: async (r: unknown) => void retracted.push(r),
+    };
+  }
+  const rows = [
+    { id: 1, name: 'a' },
+    { id: 2, name: 'b' },
+    { id: 3, name: 'c' },
+  ];
+
+  it('is told what is about to be written — as the TARGET will hold it — before it is', async () => {
+    const { adapter, calls } = makeAdapter();
+    const echo = guard();
+    const order: string[] = [];
+    const announce = echo.announce;
+    echo.announce = async (...args: Parameters<typeof announce>) => {
+      order.push('announce');
+      return announce(...args);
+    };
+    const upsertRow = adapter.upsertRow;
+    adapter.upsertRow = async (p) => {
+      order.push('write');
+      return upsertRow(p);
+    };
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const target = makeTarget({
+      mapping: [
+        { source: 'id', target: 'id' },
+        { source: 'name', target: 'full_name' },
+      ],
+    });
+    await svc.deliver(makeBridge(), [target], [rows[0]!], undefined);
+    expect(order).toEqual(['announce', 'write']);
+    expect(echo.told).toEqual([
+      { rows: [{ id: 1, full_name: 'a' }], mode: 'upsert' },
+    ]);
+    expect(calls.upsert).toHaveLength(1);
+    expect(echo.retracted).toEqual([]);
+  });
+
+  it('does not write the rows that are already exactly that, and says so', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, {}, guard({ unchanged: [0, 2] }));
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      rows,
+      undefined,
+    );
+    expect(calls.upsert.map((c) => (c.values as { id: number }).id)).toEqual([
+      2,
+    ]);
+    expect(outcome.status).toBe('success');
+    expect(outcome.responseBody).toBe(
+      'users_copy: wrote 1 (2 already up to date, not written)',
+    );
+  });
+
+  it('with nothing left to write it does not go to the database at all — and takes back what it said', async () => {
+    const { adapter, calls } = makeAdapter();
+    const echo = guard({ unchanged: [0, 1, 2] });
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      rows,
+      undefined,
+    );
+    expect(calls.upsert).toEqual([]);
+    expect(outcome.status).toBe('success');
+    expect(outcome.responseBody).toBe(
+      'users_copy: wrote 0 (3 already up to date, not written)',
+    );
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('a write that FAILS is taken back: no change will come, and the memory of one would be mistaken for somebody’s edit', async () => {
+    const { adapter } = makeAdapter();
+    adapter.upsertRow = async () => {
+      throw new Error('disk full');
+    };
+    const echo = guard();
+    const svc = makeService({ dst: adapter }, {}, echo);
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [rows[0]!],
+      undefined,
+    );
+    expect(outcome.status).toBe('failed');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('so is one that changed nothing', async () => {
+    const { adapter } = makeAdapter();
+    adapter.deleteRow = async () => ({ affectedRows: 0 });
+    const echo = guard();
+    const svc = makeService({ dst: adapter }, {}, echo);
+    await svc.deliver(makeBridge(), [makeTarget()], [rows[0]!], 'delete');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+
+  it('a delete is announced by its KEY; a soft delete as the UPDATE the table will log', async () => {
+    const hard = guard();
+    await makeService({ dst: makeAdapter().adapter }, {}, hard).deliver(
+      makeBridge(),
+      [makeTarget()],
+      [rows[0]!],
+      'delete',
+    );
+    expect(hard.told).toEqual([{ rows: [{ id: 1 }], mode: 'delete' }]);
+
+    const soft = guard();
+    const { adapter } = makeAdapter();
+    (adapter as unknown as { updateRow: unknown }).updateRow = async () => ({
+      affectedRows: 1,
+    });
+    await makeService({ dst: adapter }, {}, soft).deliver(
+      makeBridge(),
+      [
+        makeTarget({
+          onDelete: 'soft',
+          softDelete: { column: 'is_deleted', value: 'boolean' },
+        }),
+      ],
+      [rows[0]!],
+      'delete',
+    );
+    expect(soft.told).toEqual([
+      { rows: [{ id: 1, is_deleted: true }], mode: 'soft-delete' },
+    ]);
+  });
+
+  it('an append-only target is announced as inserts: there is no key to look by', async () => {
+    const echo = guard();
+    await makeService({ dst: makeAdapter().adapter }, {}, echo).deliver(
+      makeBridge(),
+      [makeTarget({ writeMode: 'insert', keyColumns: [] })],
+      [rows[0]!],
+      undefined,
+    );
+    expect(echo.told[0]!.mode).toBe('insert');
+  });
+
+  it('a TRUNCATE that fails is taken back too', async () => {
+    const { adapter } = makeAdapter();
+    (adapter as unknown as { truncateTable: unknown }).truncateTable =
+      async () => {
+        throw new Error('permission denied');
+      };
+    const echo = guard();
+    const outcome = await makeService({ dst: adapter }, {}, echo).deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{}],
+      'truncate',
+    );
+    expect(outcome.status).toBe('failed');
+    expect(echo.retracted).toEqual([echo.receipt]);
+  });
+});
+
+describe('a Redis target that says how a row becomes a key', () => {
+  const asHash = (extra: Partial<DatabaseTarget> = {}) =>
+    makeTarget({
+      table: 'keys',
+      // (what the schema derives from the template)
+      keyColumns: ['id'],
+      redis: { keyTemplate: 'user:{{id}}', type: 'hash', ttlSeconds: 60 },
+      ...extra,
+    });
+
+  it('writes the key the row becomes, found by that key', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const outcome = await svc.deliver(makeBridge(), [asHash()], [{ id: 7, name: 'Ada', note: null }], undefined);
+    expect(outcome.status).toBe('success');
+    expect(calls.upsert).toEqual([
+      {
+        schema: undefined,
+        table: 'keys',
+        values: {
+          key: 'user:7',
+          type: 'hash',
+          value: { id: '7', name: 'Ada', note: null },
+          ttl: 60,
+          fields: true,
+        },
+        keyColumns: ['key'],
+      },
+    ]);
+    // what is recorded of the delivery is the ROW, so that re-sending it goes the same way
+    expect(JSON.parse(outcome.requestBody!)).toEqual({ id: 7, name: 'Ada', note: null });
+  });
+
+  it('a delete removes that key, and nothing but the key is asked of the row', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const outcome = await svc.deliver(makeBridge(), [asHash()], [{ id: 7 }], 'delete');
+    expect(outcome.status).toBe('success');
+    expect(calls.delete).toEqual([{ schema: undefined, table: 'keys', identity: { key: 'user:7' } }]);
+  });
+
+  it('a row that cannot say its key fails — by name — instead of landing under half a key', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const target = asHash({
+      keyColumns: ['tenant', 'id'],
+      redis: { keyTemplate: 't:{{tenant}}:u:{{id}}', type: 'hash' },
+    });
+    for (const op of [undefined, 'delete'] as const) {
+      const outcome = await svc.deliver(makeBridge(), [target], [{ id: 7, tenant: null }], op);
+      expect(outcome.status).toBe('failed');
+      expect(outcome.error).toMatch(/no value for "tenant".*t:\{\{tenant\}\}:u:\{\{id\}\}/);
+    }
+    expect(calls.upsert).toEqual([]);
+    expect(calls.delete).toEqual([]);
+  });
+
+  it('the row is mapped FIRST: the key and the fields use the names the target has', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    const target = asHash({
+      keyColumns: ['user_id'],
+      mapping: [
+        { source: 'id', target: 'user_id' },
+        { source: 'name', target: 'full_name' },
+      ],
+      redis: { keyTemplate: 'user:{{user_id}}', type: 'json' },
+    });
+    await svc.deliver(makeBridge(), [target], [{ id: 7, name: 'Ada', secret: 'not mapped' }], undefined);
+    expect(calls.upsert[0]!.values).toEqual({
+      key: 'user:7',
+      type: 'string',
+      value: '{"user_id":7,"full_name":"Ada"}',
+      ttl: 0,
+    });
+  });
+
+  it('what another bridge would read back is announced as the KEY that was written', async () => {
+    const told: Array<{ keyColumns: string[]; rows: unknown; mode: string }> = [];
+    const echo = {
+      announce: async (_b: unknown, t: DatabaseTarget, rows: unknown, _s: unknown, mode: string) => {
+        told.push({ keyColumns: t.keyColumns, rows, mode });
+        return { receipt: null, unchanged: new Set<number>() };
+      },
+      announceTruncate: async () => null,
+      retract: async () => undefined,
+    };
+    const svc = makeService({ dst: makeAdapter().adapter }, { dst: 'redis' }, echo);
+    await svc.deliver(makeBridge(), [asHash()], [{ id: 7 }], 'delete');
+    expect(told).toEqual([{ keyColumns: ['key'], rows: [{ key: 'user:7' }], mode: 'delete' }]);
+  });
+
+  it('a Redis target WITHOUT a template is handed its row as it always was', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter }, { dst: 'redis' });
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget({ table: 'keys', keyColumns: ['key'] })],
+      [{ key: 'k1', value: 'v1', type: 'premium' }],
+      undefined,
+    );
+    expect(calls.upsert[0]!.values).toEqual({ key: 'k1', value: 'v1', type: 'premium' });
+  });
+});
+
 describe('DatabaseSinkService.deliver', () => {
   it('routes a delete op to deleteRow keyed by the target key columns', async () => {
     const { adapter, calls } = makeAdapter();
@@ -136,6 +441,177 @@ describe('DatabaseSinkService.deliver', () => {
     ]);
     expect(calls.upsert).toHaveLength(0);
     expect(calls.insert).toHaveLength(0);
+  });
+
+  it('does not attempt a delete on a target that has no key columns', async () => {
+    // an append-only (`insert`) target has nothing to delete BY. attempting it
+    // builds an empty WHERE, which every engine rejects — so each delete at the
+    // source failed the whole delivery, and under `abort` stopped the bridge
+    const log = makeAdapter();
+    const copy = makeAdapter();
+    const svc = makeService({ log: log.adapter, copy: copy.adapter });
+
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [
+        makeTarget({ connectionId: 'log', table: 'users_log', writeMode: 'insert', keyColumns: [] }),
+        makeTarget({ connectionId: 'copy' }),
+      ],
+      [{ id: 7, name: 'gone' }],
+      'delete',
+    );
+
+    expect(outcome.status).toBe('success');
+    expect(log.calls.delete).toEqual([]);
+    expect(log.calls.insert).toEqual([]); // and it is NOT appended as if it were a row
+    expect(copy.calls.delete).toHaveLength(1); // the keyed target still deletes
+    expect(outcome.responseBody).toMatch(/users_log: delete not applied/);
+  });
+
+  it('fails a delete that does not say WHICH row, instead of reporting "deleted 0"', async () => {
+    // the source sends only its own key with a delete. a target keyed on
+    // anything else gets a delete with no key in it: it matches nothing, and
+    // the row stays at the destination for ever, with a green tick beside it
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter });
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget({ keyColumns: ['email'] })],
+      [{ id: 7 }],
+      'delete',
+    );
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toMatch(/no value for key column "email"/);
+    expect(outcome.error).toMatch(/REPLICA IDENTITY FULL/);
+    expect(calls.delete).toEqual([]);
+  });
+
+  it('treats a NULL key the same way: it identifies no row either', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter });
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget({ keyColumns: ['tenant', 'id'] })],
+      [{ tenant: null, id: 7 }],
+      'delete',
+    );
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toMatch(/key column "tenant"/);
+    expect(calls.delete).toEqual([]);
+  });
+
+  it('checks every delete of a batch before removing any', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter });
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{ id: 1 }, { name: 'no key here' }, { id: 3 }],
+      'delete',
+    );
+    expect(outcome.status).toBe('failed');
+    expect(calls.delete).toEqual([]);
+  });
+
+  it('leaves a column the source did not send out of the write, instead of nulling it', async () => {
+    const { adapter, calls } = makeAdapter();
+    const svc = makeService({ dst: adapter });
+    const outcome = await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{ id: 1, status: 'done', body: UNCHANGED }],
+      'update',
+    );
+    expect(outcome.status).toBe('success');
+    expect(calls.upsert).toHaveLength(1);
+    const written = calls.upsert[0] as { values?: Record<string, unknown>; rows?: Record<string, unknown>[] };
+    const values = written.values ?? written.rows?.[0] ?? {};
+    expect(values).toEqual({ id: 1, status: 'done' });
+    expect(values).not.toHaveProperty('body');
+    // and it is not shown as data in the captured request either
+    expect(outcome.requestBody).not.toContain('Symbol');
+  });
+
+  describe('truncate', () => {
+    const withTruncate = (impl: (table: string, schema?: string) => Promise<void>) => {
+      const made = makeAdapter();
+      const truncated: Array<[string, string | undefined]> = [];
+      Object.assign(made.adapter, {
+        truncateTable: async (table: string, schema?: string) => {
+          truncated.push([table, schema]);
+          await impl(table, schema);
+        },
+      });
+      return { ...made, truncated };
+    };
+
+    it('empties every target, and writes nothing', async () => {
+      const a = withTruncate(async () => undefined);
+      const b = withTruncate(async () => undefined);
+      const svc = makeService({ a: a.adapter, b: b.adapter });
+      const outcome = await svc.deliver(
+        makeBridge(),
+        [
+          makeTarget({ connectionId: 'a', table: 'one', schema: 'app' }),
+          makeTarget({ connectionId: 'b', table: 'two' }),
+        ],
+        [{}],
+        'truncate',
+      );
+      expect(outcome.status).toBe('success');
+      expect(outcome.op).toBe('truncate');
+      expect(a.truncated).toEqual([['one', 'app']]);
+      expect(b.truncated).toEqual([['two', undefined]]);
+      for (const calls of [a.calls, b.calls]) {
+        expect(calls.upsert).toEqual([]);
+        expect(calls.insert).toEqual([]);
+        expect(calls.delete).toEqual([]);
+      }
+      expect(outcome.responseBody).toMatch(/one: truncated/);
+    });
+
+    it('does not fail a bridge over a destination that has no tables to empty', async () => {
+      const kv = withTruncate(async () => {
+        throw new UnsupportedError('truncateTable is not supported by redis');
+      });
+      const svc = makeService({ dst: kv.adapter }, { dst: 'redis' });
+      const outcome = await svc.deliver(makeBridge(), [makeTarget()], [{}], 'truncate');
+      expect(outcome.status).toBe('success');
+      expect(outcome.responseBody).toMatch(/truncate not applied/);
+    });
+
+    it('a truncate that really fails is a failed delivery', async () => {
+      const broken = withTruncate(async () => {
+        throw new Error('permission denied for table users_copy');
+      });
+      const svc = makeService({ dst: broken.adapter });
+      const outcome = await svc.deliver(makeBridge(), [makeTarget()], [{}], 'truncate');
+      expect(outcome.status).toBe('failed');
+      expect(outcome.error).toMatch(/permission denied/);
+    });
+
+    it('also empties an append-only target: it has no keys, and needs none for this', async () => {
+      const log = withTruncate(async () => undefined);
+      const svc = makeService({ dst: log.adapter });
+      const outcome = await svc.deliver(
+        makeBridge(),
+        [makeTarget({ writeMode: 'insert', keyColumns: [] })],
+        [{}],
+        'truncate',
+      );
+      expect(outcome.status).toBe('success');
+      expect(log.truncated).toHaveLength(1);
+    });
+
+    it('is skipped for a target an earlier attempt already emptied', async () => {
+      const a = withTruncate(async () => undefined);
+      const svc = makeService({ dst: a.adapter });
+      const target = makeTarget();
+      const { targetKey } = await import('../src/bridges/database-sink.service');
+      const outcome = await svc.deliver(makeBridge(), [target], [{}], 'truncate', new Set([targetKey(target)]));
+      expect(outcome.status).toBe('success');
+      expect(a.truncated).toEqual([]);
+    });
   });
 
   it('fails an upsert with no key columns instead of writing', async () => {
@@ -231,14 +707,183 @@ describe('DatabaseSinkService.deliver', () => {
     expect(outcome.status).toBe('success');
     expect(dst.calls.create).toHaveLength(1);
     const byName = new Map(dst.calls.create[0]!.columns.map((c) => [c.name, c]));
-    expect(byName.get('id')).toMatchObject({
-      type: 'BIGINT',
-      primaryKey: true,
-      nullable: false,
+    expect(byName.get('id')).toMatchObject({ primaryKey: true, nullable: false });
+    // Postgres on both sides: the source's own types, verbatim. (this used to
+    // expect DOUBLE PRECISION and TEXT — an exact decimal turned into a float
+    // and a bounded varchar into unbounded text, on a same-engine copy)
+    expect(byName.get('id')!.type).toBe('bigint');
+    expect(byName.get('price')!.type).toBe('numeric(10,2)');
+    expect(byName.get('meta')!.type).toBe('jsonb');
+    expect(byName.get('note')!.type).toBe('character varying(120)');
+  });
+
+  it('prefers the precise native type, and reads it in the SOURCE engine’s dialect', async () => {
+    const src = makeAdapter();
+    const precise = (name: string, dataType: string, nativeType: string) => ({
+      ...col(name, dataType, true),
+      nativeType,
     });
-    expect(byName.get('price')!.type).toBe('DOUBLE PRECISION');
-    expect(byName.get('meta')!.type).toBe('JSONB');
-    expect(byName.get('note')!.type).toBe('TEXT');
+    src.adapter.getSchema = async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [
+                { ...col('id', 'int unsigned', false) },
+                col('active', 'tinyint(1)', true),
+                col('seen', 'timestamp', true),
+                col('ratio', 'float', true),
+                // what Postgres' catalog says vs. what the column really is
+                precise('amount', 'numeric', 'numeric(38,10)'),
+                precise('tags', 'ARRAY', 'text[]'),
+              ],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dst = makeAdapter();
+    dst.adapter.browse = async () => {
+      throw new Error('relation "users_copy" does not exist');
+    };
+    const svc = makeService(
+      { src: src.adapter, dst: dst.adapter },
+      { src: 'mysql' },
+    );
+
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget({ createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+    const types = Object.fromEntries(
+      dst.calls.create[0]!.columns.map((c) => [c.name, c.type]),
+    );
+    expect(types).toEqual({
+      id: 'BIGINT', // int unsigned does not fit a signed INTEGER
+      active: 'BOOLEAN', // MySQL's tinyint(1)
+      seen: 'TIMESTAMP', // a MySQL timestamp is a wall-clock reading here
+      ratio: 'REAL', // MySQL float is single precision; Postgres float is double
+      amount: 'NUMERIC(38,10)', // from nativeType, not the catalog's bare "numeric"
+      tags: 'TEXT[]',
+    });
+  });
+
+  it('converts values for the target engine, and only when it has to', async () => {
+    const src = makeAdapter();
+    src.adapter.getSchema = async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [
+                col('id', 'int', false),
+                col('active', 'tinyint(1)', true),
+                col('seen', 'datetime', true),
+              ],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dst = makeAdapter();
+    const svc = makeService(
+      { src: src.adapter, dst: dst.adapter },
+      { src: 'mysql' },
+    );
+
+    await svc.deliver(
+      makeBridge(),
+      [makeTarget()],
+      [{ id: 1, active: 1, seen: '0000-00-00 00:00:00' }],
+      undefined,
+    );
+    // a MySQL 0/1 flag is a boolean in Postgres; a zero date is NULL anywhere else
+    expect((dst.calls.upsert[0] as { values: unknown }).values).toEqual({
+      id: 1,
+      active: true,
+      seen: null,
+    });
+  });
+
+  it('keeps each bridge’s source shape apart', async () => {
+    // the cache is keyed by bridge id: two bridges must never share a slot
+    const schemaOf = (column: string) => async () => ({
+      database: 'appdb',
+      namespaces: [
+        {
+          name: '',
+          tables: [
+            {
+              name: 'users',
+              kind: 'table' as const,
+              columns: [col('id', 'integer', false), col(column, 'text', true)],
+              indexes: [],
+              foreignKeys: [],
+              primaryKey: ['id'],
+              estimatedRows: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    });
+    const srcA = makeAdapter();
+    srcA.adapter.getSchema = schemaOf('alpha');
+    const srcB = makeAdapter();
+    srcB.adapter.getSchema = schemaOf('beta');
+    const dst = makeAdapter();
+    dst.adapter.browse = async () => {
+      throw new Error('does not exist');
+    };
+    const svc = makeService({
+      srcA: srcA.adapter,
+      srcB: srcB.adapter,
+      dst: dst.adapter,
+    });
+    const bridge = (id: string, connectionId: string) =>
+      ({
+        ...makeBridge(),
+        id,
+        source: { kind: 'table', connectionId, table: 'users' },
+      }) as ResolvedBridge;
+
+    await svc.deliver(
+      bridge('a', 'srcA'),
+      [makeTarget({ table: 'copy_a', createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+    await svc.deliver(
+      bridge('b', 'srcB'),
+      [makeTarget({ table: 'copy_b', createMissingTable: true })],
+      [{ id: 1 }],
+      undefined,
+    );
+
+    expect(dst.calls.create.map((c) => c.columns.map((x) => x.name))).toEqual([
+      ['id', 'alpha'],
+      ['id', 'beta'],
+    ]);
   });
 
   it('falls back to sample-row inference when no schema is available', async () => {

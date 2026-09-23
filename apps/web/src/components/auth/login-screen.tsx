@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ResetPassword } from './reset-password';
 
 export function LoginScreen() {
   const t = useTranslations('auth.login');
@@ -25,6 +26,7 @@ export function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   async function handleSubmit() {
     // the Enter-key handler bypasses the button's disabled state
@@ -64,12 +66,13 @@ export function LoginScreen() {
             priority
             className="mb-2 hidden h-8 w-auto dark:block"
           />
-          <CardTitle>{t('title')}</CardTitle>
-          <CardDescription>{t('description')}</CardDescription>
+          <CardTitle>{resetting ? t('resetTitle') : t('title')}</CardTitle>
+          {!resetting && <CardDescription>{t('description')}</CardDescription>}
         </CardHeader>
         <CardContent>
+          {resetting && <ResetPassword onBack={() => setResetting(false)} />}
           <form
-            className="grid gap-4"
+            className={resetting ? 'hidden' : 'grid gap-4'}
             onSubmit={(e) => {
               e.preventDefault();
               void handleSubmit();
@@ -104,6 +107,13 @@ export function LoginScreen() {
               )}
               {t('submit')}
             </Button>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground text-xs underline-offset-2 hover:underline"
+              onClick={() => setResetting(true)}
+            >
+              {t('forgot')}
+            </button>
           </form>
         </CardContent>
       </Card>

@@ -174,4 +174,19 @@ describe.runIf(ENABLED)('spooled delivery', () => {
     });
     expect(await spool.depth(s.bridgeId)).toBe(0);
   }, 600_000);
+
+  it('takes its spool with it when the bridge is deleted', async () => {
+    const s = await freshBridge();
+    await app.cdc.stop(s.bridgeId);
+    // entries that were read but never delivered: exactly what used to be left
+    // behind in Redis for good, because nothing ever called `clear`
+    await spool.append(s.bridgeId, [
+      { op: 'insert', row: { id: 1, name: 'stranded' }, cursor: '0/1#0/1.0' },
+      { op: 'insert', row: { id: 2, name: 'stranded' }, cursor: '0/1#0/1.1' },
+    ]);
+    expect(await spool.depth(s.bridgeId)).toBe(2);
+
+    await app.cdc.cleanup(s.bridgeId);
+    expect(await spool.depth(s.bridgeId)).toBe(0);
+  });
 });

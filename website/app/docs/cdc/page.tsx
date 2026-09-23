@@ -103,6 +103,280 @@ export default function Page() {
         off without skipping changes.
       </p>
 
+      <h4 id="postgres-table">What the table needs</h4>
+      <p>
+        PostgreSQL identifies the row an <code>UPDATE</code> or{' '}
+        <code>DELETE</code> touched by the table&apos;s{' '}
+        <strong>replica identity</strong> — its primary key, unless you have
+        set something else. A table with no primary key and no replica
+        identity can only report inserts. Worse, publishing updates or
+        deletes for such a table makes those statements <em>fail in your
+        database</em> (&quot;cannot update table … because it does not have a
+        replica identity and publishes updates&quot;). Syncle checks this
+        before it creates anything on the source and refuses to start the
+        bridge rather than break the application that owns the table. You
+        have three ways forward:
+      </p>
+      <ul>
+        <li>capture <code>insert</code> only — Syncle then publishes only inserts;</li>
+        <li>add a primary key;</li>
+        <li>
+          have the table send whole rows:{' '}
+          <code>ALTER TABLE your_table REPLICA IDENTITY FULL;</code>
+        </li>
+      </ul>
+      <p>
+        The same rule decides what a <strong>delete</strong> can do. A delete
+        message carries only the replica-identity columns, so a target keyed
+        on any other column would be handed a delete with no key in it —
+        which matches nothing and leaves the row behind for ever, without an
+        error. A bridge that captures deletes into a target keyed on a column
+        the delete does not carry is refused at start, with the three fixes
+        spelled out: key the target on the source&apos;s key, stop capturing
+        deletes, or switch the table to <code>REPLICA IDENTITY FULL</code>.
+        The readiness panel shows which columns the table identifies rows by.
+      </p>
+
+      <h4 id="postgres-behaviour">How particular changes are handled</h4>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>At the source</th>
+              <th>What Syncle does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                An <code>UPDATE</code> that does not touch a large column
+              </td>
+              <td>
+                PostgreSQL stores large values out of line (TOAST) and leaves
+                them out of an update that did not change them. Syncle leaves
+                such a column out of the write, so the destination keeps the
+                copy it has — it is never overwritten with <code>NULL</code>.
+                Where the value itself is needed — a source filter on that
+                column, an HTTP payload, a Redis destination, or a row whose
+                key changed — it is read back from the source table.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                An <code>UPDATE</code> that changes the primary key
+              </td>
+              <td>
+                The row has moved: the old key is deleted at the destination
+                and the row is written under the new one. (The delete is
+                applied only if the bridge captures deletes; without it the
+                old row stays, as any deleted row would.)
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>TRUNCATE</code>
+              </td>
+              <td>
+                Off by default: the destination keeps its rows, and the
+                timeline gets an amber entry saying the source was truncated
+                and that it was not applied. Add <code>truncate</code> to the
+                bridge&apos;s operations to empty the destination table too.
+              </td>
+            </tr>
+            <tr>
+              <td>A partitioned table</td>
+              <td>
+                Bridge the parent. The publication is created with{' '}
+                <code>publish_via_partition_root</code>, so rows written to
+                any partition arrive under the parent&apos;s name. Needs
+                PostgreSQL 13 or newer; on 12 the bridge is refused — bridge
+                each partition separately there.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                Bulk loads (<code>COPY</code>) and overlapping transactions
+              </td>
+              <td>
+                Nothing to configure. Changes are delivered in commit order,
+                a transaction at a time, and every row has its own position
+                even when hundreds share one WAL record — so a restart in the
+                middle of a large transaction resumes in the middle, without
+                repeating or skipping rows.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h4 id="postgres-slots">Replication slots and the source&apos;s disk</h4>
+      <p>
+        A replication slot makes PostgreSQL keep every byte of WAL written
+        since the slot&apos;s position —{' '}
+        <strong>for as long as the slot exists, whether or not anything is
+        reading it</strong>. A bridge that is paused or has failed keeps its
+        slot so that it can resume without a gap, and the source keeps
+        accumulating WAL for it. Left alone for long enough, that fills the
+        source&apos;s disk, and a PostgreSQL with a full disk stops accepting
+        writes. This is the one way a Syncle bridge can hurt the database it
+        reads from, so it is watched:
+      </p>
+      <ul>
+        <li>
+          Every minute (<code>SYNCLE_SLOT_CHECK_SECONDS</code>) Syncle
+          measures how much WAL each CDC bridge&apos;s slot is pinning. Past{' '}
+          <code>SYNCLE_SLOT_WARN_BYTES</code> (1 GiB) the bridge&apos;s job
+          view shows a warning with the amount and what to do, and the same
+          line goes to the log. It is also available from{' '}
+          <code>GET /api/bridges/:id/source-hold</code>.
+        </li>
+        <li>
+          <strong>The real safety net is on the server.</strong> On
+          PostgreSQL 13+, set <code>max_slot_wal_keep_size</code> (for
+          example <code>10GB</code>): past it the server invalidates the slot
+          instead of filling the disk, and that protects you even while
+          Syncle itself is switched off. The readiness check tells you when
+          it is unlimited, which is the default.
+        </li>
+        <li>
+          Optionally, <code>SYNCLE_SLOT_MAX_BYTES</code> makes Syncle do the
+          same from its side: a bridge that is <em>not running</em> and pins
+          more than that has its slot dropped. It is off by default, because
+          it trades a gap in that bridge for the source staying up, and that
+          is a decision for whoever runs the source. A running bridge is
+          never touched — it is behind, not abandoned.
+        </li>
+      </ul>
+      <p>
+        A slot is released as soon as it is no longer needed: when the bridge
+        is deleted, when it is edited into a watch or replay bridge, and when
+        it is pointed at another connection or database (the slot lives on
+        the <em>old</em> server, where nothing else would ever look for it
+        again). If the drop fails — the server is unreachable at that moment —
+        it is recorded and retried every minute until it succeeds;{' '}
+        <code>GET /api/bridges/cdc/cleanups</code> lists what is still
+        outstanding, and the connection it has to go through cannot be deleted
+        in the meantime. To remove one by hand:{' '}
+        <code>SELECT pg_drop_replication_slot(&apos;syncle_slot_…&apos;);</code>
+      </p>
+      <p>
+        Each CDC bridge uses one slot and one WAL sender, and a server has a
+        fixed number of both (<code>max_replication_slots</code>,{' '}
+        <code>max_wal_senders</code>; 10 each by default). The readiness
+        check counts them, and a bridge is not started on a server that has
+        none left.
+      </p>
+
+      <p>
+        A bridge that is running and has caught up holds next to nothing, also
+        when its own table is quiet and the rest of the database is not:
+        PostgreSQL 15 and later send a subscriber nothing for transactions that
+        touch no published table, only keepalives, and Syncle answers those
+        with the position the server reports whenever nothing it has received
+        is still undelivered — as PostgreSQL&apos;s own subscribers do. (Versions
+        up to 1.3 answered with their last delivery, and a bridge on a quiet
+        table made the server keep all the WAL the other tables wrote for as
+        long as it ran.)
+      </p>
+
+      <h4 id="shared-slot">Many tables, one slot</h4>
+      <p>
+        Thirty tables as thirty bridges are thirty slots, thirty WAL senders
+        and thirty decodings of the same WAL — on a server that allows ten of
+        each by default. A bridge whose <em>Replication slot</em> is set to{' '}
+        <em>Shared</em> (<code>{'trigger.slot: "shared"'}</code>) reads instead
+        through one slot per source connection and database, which every shared
+        bridge there uses: one connection, one decoding, each change handed to
+        the bridges whose table it belongs to. They stay ordinary bridges —
+        their own filters, transforms, targets, dead letters, schedule of
+        verifications — and <em>Bridge many tables</em> in the bridge list
+        (<code>POST /api/bridges/bulk</code>) makes one per table in a single
+        step.
+      </p>
+      <ul>
+        <li>
+          <strong>The slot is confirmed as far as the slowest member has got</strong>{' '}
+          — also a member that is stopped. That is what lets a member that
+          comes back find everything it missed; it is also why a member left
+          stopped holds WAL for all of them. Each member&apos;s page shows what{' '}
+          <em>it</em> still has to read, the alert and the{' '}
+          <code>SYNCLE_SLOT_MAX_BYTES</code> guard work per member (the guard
+          gives up that member&apos;s place, not the slot), and when a member
+          starts or resumes the stream restarts from the slowest position: the
+          others are sent what they have had again, and drop it.
+        </li>
+        <li>
+          <strong>A member joins behind a barrier.</strong> Adding a table to a
+          slot that already exists has no consistent starting point of its
+          own: a transaction that changed the table before it was published and
+          commits afterwards would be neither in the copy nor in the stream. So
+          the join waits for the transactions that were open at that moment to
+          end (<code>SYNCLE_SHARED_SLOT_JOIN_WAIT_MS</code>, default 60 s) and
+          only then takes its position. A transaction that never ends fails
+          the start with its pid, user and application name instead.
+        </li>
+        <li>
+          <strong>One member&apos;s operations are never imposed on another&apos;s table.</strong>{' '}
+          A publication that publishes updates makes PostgreSQL refuse{' '}
+          <code>UPDATE</code>s on a table without a replica identity, whoever
+          reads them. The shared slot has one publication per set of
+          operations (<code>syncle_sp_…_i</code>, <code>…_iud</code>, …), all
+          created before the slot, and a table is only ever in the ones its own
+          bridges ask for. Do not drop them: PostgreSQL fails the whole stream
+          for a publication that is missing <em>as of the change it is
+          decoding</em>, which is also why they are never created later.
+        </li>
+        <li>
+          <strong>Members advance together.</strong> The stream waits for each
+          delivery, so a member with a slow destination slows the others; with{' '}
+          <code>SYNCLE_CDC_SPOOL=on</code> reading and delivering are decoupled.
+          A member that fails stops by itself; the rest carry on.
+        </li>
+        <li>
+          <strong>Changing the setting on an existing bridge</strong> releases
+          what it had at once, and the bridge follows from its new place (or
+          copies again, if that is how it starts): a position in one slot means
+          nothing in another. The timeline says so, and{' '}
+          <a href="/docs/bridges#verify">reconcile</a> closes the gap.
+        </li>
+      </ul>
+      <p>
+        The last member to be deleted takes the slot and its publications with
+        it. To look from the server&apos;s side:{' '}
+        <code>
+          SELECT slot_name, active, confirmed_flush_lsn FROM
+          pg_replication_slots WHERE slot_name LIKE &apos;syncle_shared_%&apos;;
+        </code>
+      </p>
+
+      <h4 id="position-lost">When a bridge&apos;s place in the log is gone</h4>
+      <p>
+        A bridge resumes from a position in the source&apos;s change log, and
+        that position can stop existing: the slot was dropped (by hand, by{' '}
+        <code>SYNCLE_SLOT_MAX_BYTES</code>) or invalidated by the server
+        (<code>max_slot_wal_keep_size</code>); MySQL purged the binlog file;
+        MongoDB&apos;s oplog rolled past the resume token. Whatever changed at
+        the source between that position and now can no longer be read.
+      </p>
+      <p>
+        Syncle does not paper over that. The bridge stops (or refuses to
+        start) and says why; starting it again asks you to confirm{' '}
+        <strong>Continue from now</strong> —{' '}
+        <code>{'POST /api/bridges/:id/watch/start'}</code> with{' '}
+        <code>{'{ "fromNow": true }'}</code>. The timeline records the point
+        where the gap is, and a replay of the same bridge brings the
+        destination back in line. Earlier versions quietly made a new slot
+        (or restarted the change stream) at the current position and carried
+        on, leaving a hole in the destination that nothing showed.
+      </p>
+
+      <Note>
+        Bridges created before these positions existed keep working: the
+        saved cursor is understood as &quot;everything up to here&quot;. The
+        first start after the upgrade may deliver the last transaction again;
+        database destinations absorb that (writes are upserts), and an HTTP
+        receiver sees at most that one transaction twice.
+      </Note>
+
       <h3 id="mysql">MySQL</h3>
       <p>
         Syncle connects as a replication client and decodes row events from
@@ -147,8 +421,19 @@ server_id        = 1   # any unique id`}</CodeBlock>
         the server&apos;s <code>@@server_uuid</code> (and the GTID of the
         transaction it sits at). If the connection later reaches a different
         server — after a failover, say — the bridge refuses to resume rather
-        than reading unrelated offsets, and says so. Reset it to start from the
-        current position.
+        than reading unrelated offsets, and says so.
+      </p>
+      <p>
+        <strong>MySQL purges its binlog on its own schedule</strong>{' '}
+        (<code>binlog_expire_logs_seconds</code>, 30 days by default, often
+        far less on managed servers), whoever still needs it. A bridge paused
+        for longer than that has lost its place: the file its position is in
+        no longer exists. Syncle checks for this before it starts a bridge,
+        and in both cases asks you to confirm continuing from the current
+        position — see{' '}
+        <a href="#position-lost">when a bridge&apos;s place in the log is gone</a>.
+        Keep the binlog for at least as long as you might leave a bridge
+        stopped.
       </p>
 
       <h3 id="mongodb">MongoDB</h3>
@@ -168,9 +453,11 @@ server_id        = 1   # any unique id`}</CodeBlock>
         column could not find the row to remove downstream. On older servers
         this is a best-effort no-op and deletes carry only <code>_id</code>.
         The resume token is durable as long as it stays inside the oplog
-        window; if the bridge is paused long enough for the oplog to roll
-        past it, Syncle logs a warning and restarts from now instead of
-        failing.
+        window. If the bridge is paused long enough for the oplog to roll
+        past it, the bridge stops and says so, and starting it again asks you
+        to confirm continuing from now — see{' '}
+        <a href="#position-lost">when a bridge&apos;s place in the log is gone</a>.
+        Size the oplog for the longest pause you expect.
       </p>
 
       <h3 id="redis">Redis</h3>
@@ -193,8 +480,25 @@ server_id        = 1   # any unique id`}</CodeBlock>
         delivered as an <strong>update</strong>; <code>del</code>,{' '}
         <code>unlink</code>, <code>expired</code> and <code>evicted</code>{' '}
         arrive as deletes. Setting a TTL is not a delete — only the TTL
-        actually firing is. A filter on the <code>key</code> column acts as a
-        Redis-style glob (<code>user:*</code>) applied at the subscription.
+        actually firing is. A filter on the <code>key</code> column is a
+        Redis-style glob, read the same way by the change stream, by a replay
+        and by the copy a bridge makes before following: <em>equals</em> is
+        the glob as written (<code>user:*</code>, <code>session:??</code>,{' '}
+        <code>h[ae]llo</code>); <em>contains</em>, <em>starts with</em> and{' '}
+        <em>ends with</em> are <code>*value*</code>, <code>value*</code> and{' '}
+        <code>*value</code>. Syncle&apos;s own keys — its job queues, a
+        bridge&apos;s spool — are never delivered, from a stream or a replay,
+        when the Redis being read is the one Syncle runs on.
+      </p>
+      <p>
+        A Redis bridge that{' '}
+        <a href="/docs/bridges#copy-then-follow">copies its keys first</a>{' '}
+        has no log to take a place in. It subscribes first and holds what it
+        hears — the newest change per key — until the keys have been read
+        (by following <code>SCAN</code> to its end, which returns every key
+        that exists for the length of the read), then delivers what it held.
+        If the process stops mid-copy, what was held is gone with it, like
+        anything else Redis publishes to a subscriber that is not there.
       </p>
       <Note>
         Redis keyspace notifications are fire-and-forget pub/sub with no
@@ -203,6 +507,20 @@ server_id        = 1   # any unique id`}</CodeBlock>
         cursor. When every change matters, use a watch bridge on Redis
         instead.
       </Note>
+      <p>
+        A keyspace subscription hears <em>every</em> write to the database,
+        including ones Syncle makes itself. Two consequences are handled for
+        you. If the Redis you bridge from is also the Redis Syncle runs on (
+        <code>REDIS_URL</code> — a single shared Redis is a common small
+        setup), Syncle&apos;s own keys — its job queues under{' '}
+        <code>bull:bridge-jobs:</code> and <code>bull:bridge-watch:</code>,
+        and the CDC spool under <code>syncle:cdc:spool:</code> — are never
+        treated as changes. And a bridge whose destination is the{' '}
+        <em>same</em> Redis database it listens to is refused when it
+        starts: every row it wrote would be captured as a new change and
+        written again, without end. A different database number on the same
+        server is enough to separate them.
+      </p>
 
       <h3 id="sqlite">SQLite</h3>
       <p>
@@ -212,6 +530,21 @@ server_id        = 1   # any unique id`}</CodeBlock>
         therefore not supported — the readiness check reports it as such —
         and the right tool is a <a href="/docs/bridges">watch bridge</a>,
         which polls and works reliably on SQLite.
+      </p>
+
+      <h3 id="ssh">Sources behind an SSH tunnel</h3>
+      <p>
+        A connection that uses an <a href="/docs/workbench#ssh-tunnels">SSH
+        tunnel</a> can be the source of a CDC bridge on every engine. The
+        change stream gets a tunnel of its own, opened when the bridge starts
+        and closed when it stops; if the SSH connection drops — a bastion
+        restart, an idle timeout — the stream is stopped, a new tunnel is
+        opened and the stream resumes from its last checkpoint, retrying with
+        a backoff for as long as the bridge is meant to be running. Nothing is
+        lost across the gap: what had not been checkpointed had not been
+        acknowledged to the source either. The bastion&apos;s host key is
+        pinned the first time, exactly as for any other use of the
+        connection.
       </p>
 
       <h2 id="readiness">The readiness check</h2>
@@ -256,6 +589,21 @@ server_id        = 1   # any unique id`}</CodeBlock>
         token is populated on CDC deliveries only — a watch bridge sees rows,
         not operations; the other template tokens are covered in{' '}
         <a href="/docs/bridges">How bridges work</a>.
+      </p>
+      <p>
+        PostgreSQL sources have a fourth, opt-in operation:{' '}
+        <code>truncate</code>. With it, a <code>TRUNCATE</code> of the source
+        table empties every database target&apos;s table (a Redis target has
+        no table to empty, and says so in the delivery&apos;s result), and an
+        HTTP destination receives one delivery with an empty row and{' '}
+        <code>{'{{$op}}'}</code> set to <code>truncate</code>. It is always
+        delivered on its own, in order: rows written before the truncate are
+        delivered before it, and rows inserted after it are still there
+        afterwards. Without it, the truncate is recorded on the timeline as
+        a skipped entry explaining that the destination was left alone.
+        Other engines do not report a truncate as a change (in MySQL it is
+        DDL, not row events), so a bridge on them that asks for it is
+        refused at start instead of waiting for something that never comes.
       </p>
 
       <h2 id="lifecycle">Going live, stopping, and deleting</h2>
@@ -315,7 +663,10 @@ server_id        = 1   # any unique id`}</CodeBlock>
         Deleting a CDC bridge deprovisions what was created for it. On
         Postgres the replication slot and publication are dropped — this
         matters, because a slot nothing reads pins WAL on the source and
-        eventually fills its disk. On Redis, notifications are left enabled,
+        eventually fills its disk. The same happens when a CDC bridge is
+        edited into another kind of bridge or moved to another connection,
+        and a drop that fails is retried until it succeeds (see{' '}
+        <a href="#postgres-slots">replication slots and the source&apos;s disk</a>). On Redis, notifications are left enabled,
         since other consumers may rely on them; MySQL has nothing to remove,
         and MongoDB pre-images stay enabled. Deleting a workspace does the
         same teardown for every bridge in it.

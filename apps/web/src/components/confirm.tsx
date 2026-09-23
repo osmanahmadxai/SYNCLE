@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,6 +39,8 @@ export function useConfirm(): ConfirmFn {
 }
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const t = useTranslations('confirmDialog');
+  const tc = useTranslations('common');
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<ConfirmOptions>({ title: '' });
   const resolver = useRef<((value: boolean) => void) | null>(null);
@@ -76,7 +79,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => settle(false)}>
-              {options.cancelText ?? 'Cancel'}
+              {options.cancelText ?? tc('cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
               className={cn(
@@ -85,7 +88,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               )}
               onClick={() => settle(true)}
             >
-              {options.confirmText ?? 'Confirm'}
+              {options.confirmText ?? t('confirm')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

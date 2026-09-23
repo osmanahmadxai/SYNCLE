@@ -10,6 +10,7 @@
  * every ssh-level failure is normalized to a ConnectionError with an
  * "SSH: ..." prefix so connection tests read unambiguously.
  */
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -36,6 +37,17 @@ export interface SshClientLike {
   end(): unknown;
 }
 
+/** a host key's fingerprint in OpenSSH's form: `SHA256:` + unpadded base64 */
+export function hostKeyFingerprint(key: Buffer): string {
+  return `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`;
+}
+
+function sameFingerprint(a: string, b: string): boolean {
+  const x = Buffer.from(a.trim().replace(/=+$/, ''));
+  const y = Buffer.from(b.trim().replace(/=+$/, ''));
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
 const prefixed = (message: string): ConnectionError =>
   new ConnectionError(
     message.startsWith('SSH: ') ? message : `SSH: ${message}`,
@@ -53,6 +65,9 @@ export class SshTunnel {
   private readonly closeListeners: Array<() => void> = [];
   /** last ssh-level failure (e.g. a refused forward), kept for the caller */
   private lastError: ConnectionError | undefined;
+
+  /** fingerprint of the key the jump host presented, for pinning on first use */
+  hostKey: string | undefined;
 
   constructor(
     readonly localPort: number,
@@ -130,7 +145,14 @@ export class SshTunnelService {
     tunnel: SshTunnel | undefined,
   ): ConnectionConfig {
     if (!tunnel) return config;
-    return { ...config, host: tunnel.localHost, port: tunnel.localPort };
+    return {
+      ...config,
+      host: tunnel.localHost,
+      port: tunnel.localPort,
+      // the certificate is issued to the DATABASE's name, not to the tunnel's
+      // 127.0.0.1: TLS must go on verifying the host the user typed
+      tlsHostOverride: config.host,
+    };
   }
 
   private async open(config: ConnectionConfig): Promise<SshTunnel> {
@@ -143,11 +165,27 @@ export class SshTunnelService {
 
     const client = this.createClient();
 
+    // ssh2 accepts ANY host key unless told otherwise, so the hop this tunnel
+    // exists to protect could be impersonated by whoever answers on that
+    // address. a pinned fingerprint is enforced; with none pinned yet the key is
+    // accepted once and reported, so the caller can pin it (trust on first use)
+    const expected = ssh.hostKey?.trim();
+    let presented: string | undefined;
+    let mismatch = false;
+
     // 1) dial the jump host. auth failures and unreachable hosts land here
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error): void => {
         client.end();
-        reject(prefixed(err.message));
+        reject(
+          mismatch
+            ? prefixed(
+                `the host key of ${ssh.host} has CHANGED. expected ${expected}, got ${presented}. ` +
+                  'Either the server was reinstalled or something is impersonating it. ' +
+                  'Confirm the new fingerprint with whoever runs the host, then update it on this connection.',
+              )
+            : prefixed(err.message),
+        );
       };
       client.once('ready', () => {
         // hand post-ready errors to the drop handler installed below
@@ -164,6 +202,12 @@ export class SshTunnelService {
           // let a dead network surface as a close event, not a silent hang
           keepaliveInterval: 15_000,
           keepaliveCountMax: 3,
+          hostVerifier: (key: Buffer): boolean => {
+            presented = hostKeyFingerprint(key);
+            if (!expected) return true; // first use: accepted, then pinned
+            mismatch = !sameFingerprint(expected, presented);
+            return !mismatch;
+          },
           ...(ssh.authMethod === 'password'
             ? { password: ssh.password ?? '' }
             : {
@@ -186,7 +230,9 @@ export class SshTunnelService {
       });
       server.listen(0, '127.0.0.1', () => {
         const { port } = server.address() as AddressInfo;
-        resolve(new SshTunnel(port, client, server));
+        const opened = new SshTunnel(port, client, server);
+        opened.hostKey = presented;
+        resolve(opened);
       });
     });
 

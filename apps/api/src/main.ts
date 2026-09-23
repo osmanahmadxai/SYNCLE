@@ -4,9 +4,8 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { AppExceptionFilter } from './common/app-exception.filter';
-import { TransformInterceptor } from './common/transform.interceptor';
-import { runtimeConfig } from './common/runtime-config';
+import { configureApp } from './configure-app';
+import { logLevelsUpTo, runtimeConfig } from './common/runtime-config';
 
 const logger = new Logger('Bootstrap');
 
@@ -24,23 +23,15 @@ process.on('uncaughtException', (err) => {
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    // quiet the verbose route-mapping/bootstrap logs so the combined
-    // `pnpm dev` output stays readable. errors and warnings still show
-    logger: ['error', 'warn'],
+    // errors and warnings by default, which keeps the combined `pnpm dev`
+    // output readable; SYNCLE_LOG_LEVEL=log adds the lifecycle lines
+    logger: logLevelsUpTo(runtimeConfig.logLevel),
     // registered manually below so the JSON limit is explicit: backup/restore
     // payloads carry whole dumps and would 413 on the 100kb express default
     bodyParser: false,
   });
 
-  app.useBodyParser('json', { limit: '50mb' });
-  // the web app proxies /api to here, so X-Forwarded-Proto is what tells us
-  // the scheme the *browser* used — which decides whether the session cookie
-  // is marked Secure. without this every request looks like plain HTTP
-  app.set('trust proxy', true);
-  app.setGlobalPrefix('api');
-  app.enableCors({ origin: runtimeConfig.webOrigin, credentials: true });
-  app.useGlobalFilters(new AppExceptionFilter());
-  app.useGlobalInterceptors(new TransformInterceptor());
+  configureApp(app);
   app.enableShutdownHooks();
 
   await app.listen(runtimeConfig.port);
@@ -48,7 +39,8 @@ async function bootstrap(): Promise<void> {
   // this is the last thing to print after a `pnpm dev/start`, so show both
   // URLs here, the web one first since that's the one you actually open. the
   // plain console.log so it always shows regardless of the nest log level
-  const webPort = process.env.WEB_PORT ?? '3002';
+  const webPort = process.env.WEB_PORT?.trim() || '3002';
+  // eslint-disable-next-line no-console -- on purpose, see above
   console.log(
     `\n  Syncle · ready\n\n` +
       `    Web  http://localhost:${webPort}   ← open this\n` +

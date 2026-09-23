@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Post,
   Req,
   Res,
@@ -10,11 +11,15 @@ import type { Request, Response } from 'express';
 import {
   changePasswordSchema,
   loginSchema,
+  passwordResetRequestSchema,
+  passwordResetSchema,
   setupSchema,
   type AuthStatus,
   type AuthUser,
   type ChangePasswordDTO,
   type LoginDTO,
+  type PasswordResetDTO,
+  type PasswordResetRequestDTO,
   type SetupDTO,
   UnauthorizedError,
 } from '@syncle/core';
@@ -23,6 +28,8 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './current-user.decorator';
 import { Public } from './public.decorator';
+import { Audited } from '../audit/audited.decorator';
+import { SessionOnly } from './session-only.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -71,19 +78,53 @@ export class AuthController {
     return this.auth.toAuthUser(user);
   }
 
+  /**
+   * "I cannot sign in." a reset code is printed on the server's console (and
+   * put in its data directory): being able to read it there is the proof of
+   * being the operator. answers the same whatever happened
+   */
+  @Public()
+  @Post('reset/request')
+  @HttpCode(202)
+  async requestReset(
+    @Body(new ZodValidationPipe(passwordResetRequestSchema)) dto: PasswordResetRequestDTO,
+    @Req() req: Request,
+  ): Promise<{ requested: true }> {
+    await this.auth.requestPasswordReset(dto.username || undefined, req.ip ?? '');
+    return { requested: true };
+  }
+
+  /** a new password, with the code from the server's console; signs in, and ends every other session */
+  @Public()
+  @Post('reset')
+  async reset(
+    @Body(new ZodValidationPipe(passwordResetSchema)) dto: PasswordResetDTO,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthUser> {
+    const user = await this.auth.resetPassword(dto.resetCode, dto.newPassword, req.ip ?? '');
+    await this.auth.issueSession(res, user);
+    return this.auth.toAuthUser(user);
+  }
+
+  @SessionOnly()
   @Post('logout')
+  @Audited('auth.logout', () => ({ target: null }))
   logout(@Res({ passthrough: true }) res: Response): { success: true } {
     this.auth.clearSession(res);
     return { success: true };
   }
 
+  @SessionOnly()
   @Get('me')
   me(@CurrentUser() user: AppUser | undefined): AuthUser {
     if (!user) throw new UnauthorizedError();
     return this.auth.toAuthUser(user);
   }
 
+  @SessionOnly()
   @Post('change-password')
+  @Audited('auth.password_changed', () => ({ target: null }))
   async changePassword(
     @Body(new ZodValidationPipe(changePasswordSchema)) dto: ChangePasswordDTO,
     @CurrentUser() user: AppUser | undefined,

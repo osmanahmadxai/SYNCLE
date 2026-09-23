@@ -52,6 +52,65 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # The end-to-end suite: real PostgreSQL, MySQL, MongoDB and Redis (plus a
+  # TLS-only instance of each, and an SSH server the tests start themselves).
+  # Every data-loss bug fixed in this project was found by a test here and none
+  # by a unit test — and none of it ran in CI, so a pull request could break a
+  # change stream and still go green.
+  #
+  # Twice: with the CDC spool off (the default) and on. They are different
+  # pipelines between the reader and the destination, and the spool one was
+  # broken for a Redis source for months without anything noticing.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        spool: ['off', 'on']
+    env:
+      # not UTC, on purpose: the timestamp bugs only showed up where the
+      # process's zone and UTC disagree
+      TZ: Asia/Kabul
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core
+        run: pnpm build:core
+
+      # `certs` is a one-shot service the TLS servers depend on; it is started
+      # through them rather than named here, because --wait treats a container
+      # that has exited — even successfully — as not up
+      - name: Start the databases
+        run: >
+          docker compose -f docker-compose.test.yml up -d --wait --wait-timeout 240
+          pg mysql mongo redis pg-tls mysql-tls mongo-tls redis-tls
+
+      - name: Integration tests (spool ${{ matrix.spool }})
+        run: pnpm --filter @syncle/api test:integration
+        env:
+          SYNCLE_CDC_SPOOL: ${{ matrix.spool == 'on' && 'on' || '' }}
+
+      - name: Database logs
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs --no-color --tail 200
+
+      - name: Stop the databases
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
   # the installer path (`syncle up`) builds this image on user machines —
   # keep it green in CI so a broken Dockerfile can't reach them
   docker:
@@ -68,3 +127,48 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # the Helm chart: linted, rendered in its main shapes, and every manifest
+  # checked against the Kubernetes schemas — so a values key that stops
+  # rendering, or a field a newer API rejects, is caught before a release
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Lint
+        run: helm lint deploy/helm/syncle --set masterKey.value=ci
+
+      - name: Refuses to install without a master key
+        run: |
+          if helm template t deploy/helm/syncle > /dev/null 2>&1; then
+            echo "rendered without a master key" && exit 1
+          fi
+
+      - name: Render (in-cluster databases)
+        run: helm template syncle deploy/helm/syncle --set masterKey.value=ci > /tmp/default.yaml
+
+      - name: Render (external databases, ingress, replicas, persistence)
+        run: |
+          helm template syncle deploy/helm/syncle \
+            --set masterKey.existingSecret=my-secret \
+            --set postgres.enabled=false --set postgres.external.url='postgresql://u:p@db:5432/s' \
+            --set redis.enabled=false --set redis.external.existingSecret=redis-secret \
+            --set ingress.enabled=true --set ingress.host=syncle.example.com \
+            --set 'ingress.tls[0].secretName=tls' --set 'ingress.tls[0].hosts[0]=syncle.example.com' \
+            --set api.replicas=2 --set api.persistence.enabled=true \
+            --set api.env.SYNCLE_CDC_SPOOL=on --set api.metricsToken=tok > /tmp/external.yaml
+
+      - name: Validate against the Kubernetes schemas
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.30.0 /tmp/default.yaml /tmp/external.yaml
+          kubeconform -strict -summary -kubernetes-version 1.27.0 /tmp/default.yaml /tmp/external.yaml

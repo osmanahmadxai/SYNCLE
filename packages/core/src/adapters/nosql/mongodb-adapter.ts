@@ -3,7 +3,21 @@
  * is inferred by sampling documents (Mongo is schemaless). the query editor
  * speaks a small JSON dialect, see {@link MongodbAdapter.query}
  */
-import { MongoClient, ObjectId, type Db } from 'mongodb';
+import { mongoTlsOptions } from '../tls-options';
+import {
+  BSON,
+  Binary,
+  Decimal128,
+  Double,
+  Int32,
+  Long,
+  MongoClient,
+  ObjectId,
+  Timestamp,
+  UUID,
+  type Collection,
+  type Db,
+} from 'mongodb';
 import type {
   AdapterCapabilities,
   BackupDocument,
@@ -49,6 +63,8 @@ export const MONGODB_CAPABILITIES: AdapterCapabilities = {
   ddl: true,
   manageDatabases: false,
   backupFormats: ['json'],
+  // see browseFrom: a read of EVERY document pages by the typed `_id`
+  cursorPaging: true,
 };
 
 const SAMPLE_SIZE = 50;
@@ -95,6 +111,36 @@ function buildUpsert(
   return { filter, update };
 }
 
+/**
+ * drop whole-line `//` comments from a query document. the query editor's own
+ * starter text for MongoDB opens with one ("// Write a JSON command…"), and
+ * JSON has no comments — so pressing Run on the untouched starter answered
+ * "must be a JSON command document". (the Redis dialect has always skipped its
+ * `#` lines.) only a line that STARTS with `//` goes: JSON strings cannot span
+ * lines, so such a line is never inside one, and a `//` within a value — a URL
+ * — is left alone.
+ */
+export function stripLineComments(statement: string): string {
+  return statement
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('//'))
+    .join('\n');
+}
+
+/**
+ * through an SSH tunnel the driver must talk ONLY to the address it was given.
+ *
+ * left to itself it treats that address as a seed: it asks the server which
+ * members the replica set has, and then connects to THOSE — by the names the
+ * set knows them by, `mongo-1.internal:27017`, which is exactly what cannot be
+ * reached from this side of the tunnel. the first query then times out in
+ * server selection, on a connection that "tested" fine. a connection string
+ * says what it means and is left alone.
+ */
+export function mongoTunnelOptions(config: ConnectionConfig): { directConnection?: boolean } {
+  return config.tlsHostOverride !== undefined && !config.connectionString ? { directConnection: true } : {};
+}
+
 export class MongodbAdapter implements DatabaseAdapter {
   readonly engine = 'mongodb' as const;
   readonly capabilities = MONGODB_CAPABILITIES;
@@ -125,6 +171,10 @@ export class MongodbAdapter implements DatabaseAdapter {
       this.client = new MongoClient(this.uri(), {
         serverSelectionTimeoutMS: 8000,
         maxPoolSize: 5,
+        ...mongoTunnelOptions(this.config),
+        // with host/port fields the driver was never told about TLS: the
+        // "Use TLS" switch did nothing here and the connection was plaintext
+        ...mongoTlsOptions(this.config),
       });
       await this.client.connect();
       return this.client;
@@ -200,6 +250,7 @@ export class MongodbAdapter implements DatabaseAdapter {
     const coll = db.collection(params.table);
     const limit = Math.min(Math.max(params.limit, 1), 1000);
     const filter = buildMongoFilter(params.filters);
+    if (params.cursor !== undefined) return this.browseFrom(coll, params.cursor, filter, limit);
     const sort: Record<string, 1 | -1> = {};
     for (const s of params.sort ?? []) {
       sort[s.column] = s.direction === 'desc' ? -1 : 1;
@@ -235,6 +286,62 @@ export class MongodbAdapter implements DatabaseAdapter {
   }
 
   /**
+   * one page of a read that means to see every document, in `_id` order, after
+   * the `_id` the cursor holds.
+   *
+   * the cursor is that `_id` AS BSON (canonical extended JSON), not as the text
+   * a row shows it as. rows carry an ObjectId as its 24 hex characters, and a
+   * reader that paged by "`_id` greater than the last row's" was asking MongoDB
+   * to compare ObjectIds with a string: nothing is greater than a value of
+   * another type, page two was empty, and a replay of any collection ended —
+   * `completed` — 200 documents in.
+   *
+   * a comparison only matches its own BSON type, so the documents whose `_id`
+   * is of a type that sorts LATER are asked for by type: a collection that
+   * mixes kinds of `_id` is still read to the end.
+   */
+  private async browseFrom(
+    coll: Collection,
+    cursor: string,
+    filter: Record<string, unknown>,
+    limit: number,
+  ): Promise<BrowseResult> {
+    const started = performance.now();
+    let after: unknown;
+    if (cursor && cursor !== '0') {
+      try {
+        after = (BSON.EJSON.parse(cursor, { relaxed: false }) as { id: unknown }).id;
+      } catch {
+        throw new BadRequestError('That is not a cursor this collection handed out.');
+      }
+    }
+    const clauses = [filter, after === undefined ? {} : afterId(after)].filter((c) => Object.keys(c).length > 0);
+    const query = clauses.length > 1 ? { $and: clauses } : (clauses[0] ?? {});
+    const probed = await coll.find(query).sort({ _id: 1 }).limit(limit + 1).toArray();
+    const hasMore = probed.length > limit;
+    const docs = hasMore ? probed.slice(0, limit) : probed;
+    const hasFilters = Object.keys(filter).length > 0;
+    const total = hasFilters
+      ? await coll.countDocuments(filter).catch(() => null)
+      : await coll.estimatedDocumentCount().catch(() => null);
+    const rows = docs.map(normalizeDoc);
+    return {
+      columns: inferColumns(docs).map((c) => ({ name: c.name })),
+      rows,
+      rowCount: rows.length,
+      executionMs: Math.round(performance.now() - started),
+      command: 'find',
+      total,
+      estimated: !hasFilters,
+      hasMore,
+      primaryKey: ['_id'],
+      nextCursor: hasMore
+        ? BSON.EJSON.stringify({ id: docs[docs.length - 1]!._id }, { relaxed: false })
+        : null,
+    };
+  }
+
+  /**
    * runs a JSON command document:
    *   { "collection": "users", "find": { "active": true },
    *     "sort": { "createdAt": -1 }, "limit": 20 }
@@ -244,7 +351,7 @@ export class MongodbAdapter implements DatabaseAdapter {
   async query(statement: string): Promise<QueryResult> {
     let spec: Record<string, unknown>;
     try {
-      spec = JSON.parse(statement);
+      spec = JSON.parse(stripLineComments(statement));
     } catch {
       throw new BadRequestError(
         'MongoDB query must be a JSON command document, e.g. ' +
@@ -533,19 +640,91 @@ function coerceId(identity: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-function normalizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(doc)) {
-    out[k] = v instanceof ObjectId ? v.toHexString() : v;
+/**
+ * turn a BSON value into a plain JavaScript one that every other engine's
+ * driver can bind. the driver hands back wrapper objects for the types JSON has
+ * no word for, and a SQL driver that meets one either stringifies its internals
+ * (`{"$numberDecimal":…}`, an ObjectId wrapped in quotes) or rejects it:
+ *
+ *   ObjectId    → its 24-character hex string
+ *   Decimal128  → its decimal string, exact (a JS number would round it)
+ *   Long        → a number when that is exact, otherwise its decimal string
+ *   Int32/Double→ a number
+ *   Binary      → a Buffer; a UUID-subtype Binary → the canonical UUID string
+ *   Timestamp   → its decimal string (an internal replication value)
+ *
+ * applied at every depth, because a nested document lands in ONE json column
+ * and its members need the same treatment as top-level fields.
+ */
+export function normalizeMongoValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v;
+  if (typeof v !== 'object') return v;
+  if (v instanceof Date || Buffer.isBuffer(v)) return v;
+  if (v instanceof ObjectId) return v.toHexString();
+  if (v instanceof Decimal128) return v.toString();
+  // a Timestamp IS a Long underneath, so it has to be tested first
+  if (v instanceof Timestamp) return v.toString();
+  if (v instanceof Long) {
+    const n = v.toNumber();
+    return Number.isSafeInteger(n) ? n : v.toString();
   }
+  if (v instanceof Int32 || v instanceof Double) return v.valueOf();
+  if (v instanceof UUID) return v.toString();
+  if (v instanceof Binary) {
+    if (v.sub_type === Binary.SUBTYPE_UUID) {
+      try {
+        return v.toUUID().toString();
+      } catch {
+        /* not 16 bytes after all: fall through to raw bytes */
+      }
+    }
+    return Buffer.from(v.buffer);
+  }
+  if (Array.isArray(v)) return v.map(normalizeMongoValue);
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = normalizeMongoValue(x);
+    return out;
+  }
+  return v; // an unknown wrapper: leave it for the target's own coercion
+}
+
+/** {@link normalizeMongoValue} over a whole document */
+export function normalizeMongoDocument(
+  doc: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(doc)) out[k] = normalizeMongoValue(v);
   return out;
+}
+
+const normalizeDoc = normalizeMongoDocument;
+
+/** numeric labels, narrowest first: a field seen as both takes the wider one */
+const NUMERIC_WIDENING = ['int', 'long', 'number', 'decimal128'];
+
+/**
+ * fold one more sampled value's type into what a field has been seen as so far.
+ * the first document alone used to decide — so a field whose first value was
+ * null stayed "null" however many real values followed, and a bridge then
+ * created a text column for what was really a number or a date.
+ */
+export function mergeSampledType(seen: string | undefined, next: string): string {
+  if (seen === undefined || seen === 'null' || seen === 'undefined') return next;
+  if (next === 'null' || next === 'undefined' || next === seen) return seen;
+  const a = NUMERIC_WIDENING.indexOf(seen);
+  const b = NUMERIC_WIDENING.indexOf(next);
+  if (a >= 0 && b >= 0) return NUMERIC_WIDENING[Math.max(a, b)]!;
+  // genuinely different kinds in one field (a number here, a string there)
+  return 'mixed';
 }
 
 function inferColumns(docs: Record<string, unknown>[]): ColumnSchema[] {
   const seen = new Map<string, string>();
   for (const doc of docs) {
     for (const [k, v] of Object.entries(doc)) {
-      if (!seen.has(k)) seen.set(k, jsType(v));
+      seen.set(k, mergeSampledType(seen.get(k), jsType(v)));
     }
   }
   return [...seen.entries()].map(([name, dataType]) => ({
@@ -561,9 +740,24 @@ function inferColumns(docs: Record<string, unknown>[]): ColumnSchema[] {
   }));
 }
 
+/**
+ * the type label for a sampled value. these are the names the bridge type map
+ * knows MongoDB by (`packages/core/src/bridges/type-map.ts`), so a new label
+ * here needs an entry there.
+ */
 function jsType(v: unknown): string {
   if (v === null) return 'null';
   if (v instanceof ObjectId) return 'objectId';
+  if (v instanceof Decimal128) return 'decimal128';
+  if (v instanceof Timestamp) return 'string';
+  if (v instanceof Long) return 'long';
+  if (v instanceof Int32) return 'int';
+  if (v instanceof Double) return 'number';
+  if (v instanceof UUID) return 'uuid';
+  if (v instanceof Binary) {
+    return v.sub_type === Binary.SUBTYPE_UUID ? 'uuid' : 'binary';
+  }
+  if (Buffer.isBuffer(v)) return 'binary';
   if (Array.isArray(v)) return 'array';
   if (v instanceof Date) return 'date';
   return typeof v;
@@ -589,48 +783,113 @@ function scalarValue(f: FilterSpec): unknown {
   return v;
 }
 
-function buildMongoFilter(
+/**
+ * BSON types in the order MongoDB sorts them, as far as an `_id` can be one.
+ * numbers compare with each other whatever their width, so they are one group
+ */
+const ID_TYPE_ORDER: string[][] = [
+  ['null'],
+  ['int', 'long', 'double', 'decimal'],
+  ['string', 'symbol'],
+  ['object'],
+  ['binData'],
+  ['objectId'],
+  ['bool'],
+  ['date'],
+  ['timestamp'],
+];
+
+function idTypeGroup(v: unknown): number {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number' || typeof v === 'bigint') return 1;
+  if (v instanceof Int32 || v instanceof Long || v instanceof Double || v instanceof Decimal128) return 1;
+  if (typeof v === 'string') return 2;
+  if (v instanceof Binary) return 4;
+  if (v instanceof ObjectId) return 5;
+  if (typeof v === 'boolean') return 6;
+  if (v instanceof Date) return 7;
+  if (v instanceof Timestamp) return 8;
+  return 3;
+}
+
+/** every document that sorts after `_id: last`, whatever type its own `_id` is */
+export function afterId(last: unknown): Record<string, unknown> {
+  const later = ID_TYPE_ORDER.slice(idTypeGroup(last) + 1).flat();
+  const greater = { _id: { $gt: last } };
+  return later.length ? { $or: [greater, { _id: { $type: later } }] } : greater;
+}
+
+/**
+ * the forms an `_id` written as text may have in the collection. a row shows an
+ * ObjectId as its 24 hex characters, and that text comes back in filters — the
+ * keys of the rows picked in the builder, the keys a dead-letter retry re-reads
+ * its rows by. compared as the string it looks like, it matches nothing: an
+ * ObjectId is not a string. (a collection MAY key its documents by such a
+ * string, so that form is kept beside the ObjectId rather than replaced by it.)
+ */
+function idForms(column: string, v: unknown): unknown[] {
+  return column === '_id' && typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v)
+    ? [new ObjectId(v), v]
+    : [v];
+}
+
+function comparison(column: string, op: '$lt' | '$lte' | '$gt' | '$gte', v: unknown): Record<string, unknown> {
+  const forms = idForms(column, v);
+  if (forms.length === 1) return { [column]: { [op]: v } };
+  // a comparison matches its own BSON type only: ask once per form
+  return { $or: forms.map((form) => ({ [column]: { [op]: form } })) };
+}
+
+export function buildMongoFilter(
   filters: FilterSpec[] | undefined,
 ): Record<string, unknown> {
   if (!filters || filters.length === 0) return {};
-  const query: Record<string, unknown> = {};
+  // one clause per filter, ANDed. they used to be assigned into ONE object by
+  // column, so of "age >= 18" and "age < 65" only the last survived
+  const clauses: Record<string, unknown>[] = [];
   for (const f of filters) {
     switch (f.operator) {
-      case 'eq':
-        query[f.column] = scalarValue(f);
+      case 'eq': {
+        const forms = idForms(f.column, scalarValue(f));
+        clauses.push({ [f.column]: forms.length === 1 ? forms[0] : { $in: forms } });
         break;
-      case 'neq':
-        query[f.column] = { $ne: scalarValue(f) };
+      }
+      case 'neq': {
+        const forms = idForms(f.column, scalarValue(f));
+        clauses.push({ [f.column]: forms.length === 1 ? { $ne: forms[0] } : { $nin: forms } });
         break;
+      }
       case 'lt':
-        query[f.column] = { $lt: scalarValue(f) };
+        clauses.push(comparison(f.column, '$lt', scalarValue(f)));
         break;
       case 'lte':
-        query[f.column] = { $lte: scalarValue(f) };
+        clauses.push(comparison(f.column, '$lte', scalarValue(f)));
         break;
       case 'gt':
-        query[f.column] = { $gt: scalarValue(f) };
+        clauses.push(comparison(f.column, '$gt', scalarValue(f)));
         break;
       case 'gte':
-        query[f.column] = { $gte: scalarValue(f) };
+        clauses.push(comparison(f.column, '$gte', scalarValue(f)));
         break;
       case 'contains':
-        query[f.column] = { $regex: escapeRegex(f.value), $options: 'i' };
+        clauses.push({ [f.column]: { $regex: escapeRegex(f.value), $options: 'i' } });
         break;
       case 'startsWith':
-        query[f.column] = { $regex: `^${escapeRegex(f.value)}`, $options: 'i' };
+        clauses.push({ [f.column]: { $regex: `^${escapeRegex(f.value)}`, $options: 'i' } });
         break;
       case 'endsWith':
-        query[f.column] = { $regex: `${escapeRegex(f.value)}$`, $options: 'i' };
+        clauses.push({ [f.column]: { $regex: `${escapeRegex(f.value)}$`, $options: 'i' } });
         break;
       case 'isNull':
-        query[f.column] = null;
+        clauses.push({ [f.column]: null });
         break;
       case 'notNull':
-        query[f.column] = { $ne: null };
+        clauses.push({ [f.column]: { $ne: null } });
         break;
       case 'in':
-        query[f.column] = { $in: Array.isArray(f.value) ? f.value : [] };
+        clauses.push({
+          [f.column]: { $in: (Array.isArray(f.value) ? f.value : []).flatMap((v) => idForms(f.column, v)) },
+        });
         break;
       default:
         throw new BadRequestError(
@@ -638,7 +897,7 @@ function buildMongoFilter(
         );
     }
   }
-  return query;
+  return clauses.length === 1 ? clauses[0]! : { $and: clauses };
 }
 
 function finalize(

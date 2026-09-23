@@ -3,6 +3,9 @@
  * virtual relation ("keys") whose rows are { key, type, ttl, value }. the query
  * editor takes raw Redis commands, one per line
  */
+import { nodeTlsOptions } from '../tls-options';
+import { redisKeyPattern } from './redis-key-pattern';
+import { redisText } from '../../bridges/redis-target';
 import Redis from 'ioredis';
 import type {
   AdapterCapabilities,
@@ -42,9 +45,12 @@ export const REDIS_CAPABILITIES: AdapterCapabilities = {
   ddl: false,
   manageDatabases: false,
   backupFormats: ['json'],
+  cursorPaging: true,
 };
 
 const KEYSPACE = 'keys';
+/** SCAN calls one cursor-mode page may make: bounds the wait on a sparse MATCH */
+const MAX_SCANS_PER_PAGE = 1000;
 
 export class RedisAdapter implements DatabaseAdapter {
   readonly engine = 'redis' as const;
@@ -62,8 +68,12 @@ export class RedisAdapter implements DatabaseAdapter {
     const dbIndex = Number(
       this.config.options?.db ?? this.config.database ?? 0,
     );
+    // a `rediss://` string asks for TLS by itself; an explicit TLS setting
+    // beside it says how far to trust the certificate
+    const tls = nodeTlsOptions(this.config);
     this.client = this.config.connectionString
       ? new Redis(this.config.connectionString, {
+          ...(this.config.tls && tls ? { tls } : {}),
           lazyConnect: true,
           maxRetriesPerRequest: 2,
         })
@@ -73,7 +83,7 @@ export class RedisAdapter implements DatabaseAdapter {
           username: this.config.user || undefined,
           password: this.config.password || undefined,
           db: Number.isFinite(dbIndex) ? dbIndex : 0,
-          tls: this.config.ssl ? {} : undefined,
+          tls,
           lazyConnect: true,
           maxRetriesPerRequest: 2,
           connectTimeout: 8000,
@@ -82,16 +92,28 @@ export class RedisAdapter implements DatabaseAdapter {
     // away between commands); with no listener Node treats it as an unhandled
     // 'error' event and crashes the process. individual commands still reject
     // with their own errors, so swallowing here loses nothing
-    this.client.on('error', () => {});
+    // …but remember the last one: when a connection attempt fails, ioredis
+    // rejects with a bare "Connection is closed", and the REASON (a refused
+    // certificate, a wrong host name) only ever arrives on this event
+    this.client.on('error', (err: Error) => {
+      this.lastSocketError = err;
+    });
     return this.client;
   }
 
+  private lastSocketError: Error | null = null;
+
   async connect(): Promise<void> {
+    this.lastSocketError = null;
     try {
       await this.getClient().connect();
     } catch (err) {
+      const cause = this.lastSocketError as Error | null;
+      const message = (err as Error).message;
       throw new ConnectionError(
-        `Could not connect to Redis: ${(err as Error).message}`,
+        cause && cause.message !== message
+          ? `Could not connect to Redis: ${cause.message}`
+          : `Could not connect to Redis: ${message}`,
       );
     }
   }
@@ -200,13 +222,14 @@ export class RedisAdapter implements DatabaseAdapter {
     const client = this.getClient();
     if (client.status !== 'ready') await client.connect().catch(() => {});
 
-    const match =
-      params.filters?.find((f) => f.column === 'key')?.value ?? '*';
-    const pattern =
-      typeof match === 'string' && match ? `*${match}*` : '*';
+    const pattern = redisKeyPattern(params.filters);
 
     const limit = Math.min(Math.max(params.limit, 1), 500);
     const started = performance.now();
+
+    if (params.cursor !== undefined) {
+      return this.browseFrom(client, params.cursor || '0', pattern, limit, started);
+    }
 
     const keys: string[] = [];
     let cursor = '0';
@@ -237,6 +260,55 @@ export class RedisAdapter implements DatabaseAdapter {
       estimated: true,
       hasMore,
       primaryKey: ['key'],
+    };
+  }
+
+  /**
+   * one page of a read that means to see every key: it follows the SCAN cursor
+   * instead of slicing an offset out of a scan started over.
+   *
+   * SCAN's own guarantee is what makes this a faithful copy: a key that exists
+   * from the first call to the last is returned — at least once. keys added or
+   * removed meanwhile may or may not be, and a key can come up twice (the table
+   * was rehashed); a reader writes with upserts, so twice is once.
+   *
+   * values are read whole. the offset mode cuts a list or a sorted set to its
+   * first 25 entries, which is a preview for a grid and was, for a replay, 25
+   * entries of data and the silent loss of the rest.
+   */
+  private async browseFrom(
+    client: Redis,
+    from: string,
+    pattern: string,
+    limit: number,
+    started: number,
+  ): Promise<BrowseResult> {
+    const keys: string[] = [];
+    let cursor = from;
+    let scans = 0;
+    do {
+      const [next, batch] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', Math.max(100, limit));
+      keys.push(...batch);
+      cursor = next;
+      scans++;
+    } while (cursor !== '0' && keys.length < limit && scans < MAX_SCANS_PER_PAGE);
+
+    const unique = [...new Set(keys)];
+    const read = await Promise.all(unique.map((k) => this.readKey(client, k, true)));
+    // deleted between the SCAN and the read: not a key with no value
+    const rows = read.filter((r) => r.type !== 'none');
+    const dbsize = await client.dbsize().catch(() => null);
+    return {
+      columns: ['key', 'type', 'ttl', 'value'].map((name) => ({ name })),
+      rows,
+      rowCount: rows.length,
+      executionMs: Math.round(performance.now() - started),
+      command: 'scan',
+      total: dbsize,
+      estimated: true,
+      hasMore: cursor !== '0',
+      primaryKey: ['key'],
+      nextCursor: cursor === '0' ? null : cursor,
     };
   }
 
@@ -275,13 +347,12 @@ export class RedisAdapter implements DatabaseAdapter {
     };
   }
 
+  /** one key, written the way a batch of them is (see {@link pipelineWrite}) */
   async insertRow(p: InsertRowParams): Promise<QueryResult> {
-    const client = this.getClient();
-    if (client.status !== 'ready') await client.connect().catch(() => {});
     const key = String(p.values.key ?? '');
     if (!key) throw new QueryError('A "key" value is required');
-    await client.set(key, String(p.values.value ?? ''));
-    return writeResult(1, 'set');
+    const res = await this.pipelineWrite([p.values]);
+    return writeResult(res.affectedRows ?? 1, 'set');
   }
 
   async updateRow(p: UpdateRowParams): Promise<QueryResult> {
@@ -316,7 +387,21 @@ export class RedisAdapter implements DatabaseAdapter {
    * being a round trip and becomes a few bytes.
    */
 
-  /** the pipeline shared by every batched write; `SET` is already idempotent */
+  /**
+   * the pipeline shared by every batched write. a row is `{ key, value }` — a
+   * string, as it always was — and may say more:
+   *
+   *   type   'string' (default) · 'hash' · 'list' · 'set' · 'zset': what a row
+   *          read FROM Redis carries, so that Redis -> Redis copies a hash as a
+   *          hash (it used to arrive as the text "[object Object]")
+   *   ttl    seconds until the key expires; 0, negative or absent = it does not
+   *   fields a hash whose `value` is only SOME of its fields (null = remove that
+   *          field): written into the hash that is there. without it a hash, like
+   *          a list, a set and a sorted set, REPLACES the key — atomically, so
+   *          nobody reading meanwhile finds it gone
+   *
+   * every write is idempotent: the same batch twice leaves the same keys
+   */
   private async pipelineWrite(
     rows: Array<Record<string, unknown>>,
   ): Promise<QueryResult> {
@@ -324,17 +409,81 @@ export class RedisAdapter implements DatabaseAdapter {
     const client = this.getClient();
     if (client.status !== 'ready') await client.connect().catch(() => {});
     const pipeline = client.pipeline();
+    /** the hashes written field by field, and where each one's HSET sits in the pipeline */
+    const merged: Array<{ at: number; row: TypedRow }> = [];
+    /** rows that replace their key: each its own MULTI, after the pipeline */
+    const replaced: TypedRow[] = [];
+    let queued = 0;
     for (const values of rows) {
-      const key = String(values.key ?? '');
-      if (!key) throw new QueryError('A "key" value is required');
-      pipeline.set(key, String(values.value ?? ''));
+      const row = typedRow(values);
+      if (row.type === 'string') {
+        if (row.ttl > 0) pipeline.set(row.key, row.text, 'EX', row.ttl);
+        else pipeline.set(row.key, row.text);
+        queued++;
+        continue;
+      }
+      if (row.type === 'hash' && row.merge) {
+        if (row.set.length > 0) {
+          merged.push({ at: queued, row });
+          pipeline.hset(row.key, ...row.set);
+          queued++;
+        }
+        if (row.unset.length > 0) {
+          pipeline.hdel(row.key, ...row.unset);
+          queued++;
+        }
+        if (row.ttl > 0) pipeline.expire(row.key, row.ttl);
+        else pipeline.persist(row.key);
+        queued++;
+        continue;
+      }
+      replaced.push(row);
     }
-    const results = await pipeline.exec();
+    const results = queued > 0 ? await pipeline.exec() : [];
     // a pipeline reports per-command errors rather than throwing; surface the
     // first one instead of silently reporting every row as written
+    for (const [i, result] of (results ?? []).entries()) {
+      const err = result[0];
+      if (!err) continue;
+      // the key is there as something else (a string from an earlier setup of
+      // the bridge): what the bridge writes is what the key is — replaced below
+      const wrongType = merged.find((m) => m.at === i);
+      if (wrongType && /WRONGTYPE/.test(err.message)) {
+        replaced.push(wrongType.row);
+        continue;
+      }
+      throw new QueryError(err.message);
+    }
+    for (const row of replaced) await this.replaceKey(client, row);
+    return writeResult(rows.length, 'pipeline set');
+  }
+
+  /** DEL and write again, as one transaction */
+  private async replaceKey(client: Redis, row: TypedRow): Promise<void> {
+    const tx = client.multi().del(row.key);
+    switch (row.type) {
+      case 'string':
+        tx.set(row.key, row.text);
+        break;
+      case 'hash':
+        if (row.set.length > 0) tx.hset(row.key, ...row.set);
+        break;
+      case 'list':
+        if (row.members.length > 0) tx.rpush(row.key, ...row.members);
+        break;
+      case 'set':
+        if (row.members.length > 0) tx.sadd(row.key, ...row.members);
+        break;
+      case 'zset':
+        // read as [member, score, member, score, …]
+        for (let i = 0; i + 1 < row.members.length; i += 2)
+          tx.zadd(row.key, String(row.members[i + 1]), row.members[i]!);
+        break;
+    }
+    if (row.ttl > 0) tx.expire(row.key, row.ttl);
+    const results = await tx.exec();
     const failed = results?.find(([err]) => err);
     if (failed?.[0]) throw new QueryError(failed[0].message);
-    return writeResult(rows.length, 'pipeline set');
   }
 
   async insertRows(p: InsertRowsParams): Promise<QueryResult> {
@@ -508,6 +657,61 @@ export class RedisAdapter implements DatabaseAdapter {
 }
 
 /* ----- helpers ----- */
+
+type RedisText = string | Buffer;
+
+/** a row to write, read once: what kind of key it is, and what goes into it */
+type TypedRow = { key: string; ttl: number } & (
+  | { type: 'string'; text: RedisText }
+  | { type: 'hash'; merge: boolean; set: RedisText[]; unset: string[] }
+  | { type: 'list' | 'set' | 'zset'; members: RedisText[] }
+);
+
+const asText = (value: unknown): RedisText => {
+  const text = redisText(value);
+  if (text === null) return '';
+  return typeof text === 'string' ? text : Buffer.from(text);
+};
+
+/** the kinds of key a row can say it is; anything else in a `type` column is somebody's data */
+const WRITABLE_TYPES = new Set(['string', 'none', 'hash', 'list', 'set', 'zset']);
+
+function typedRow(values: Record<string, unknown>): TypedRow {
+  const key = String(values.key ?? '');
+  if (!key) throw new QueryError('A "key" value is required');
+  const value = values.value;
+  const type = typeof values.type === 'string' ? values.type : '';
+  // a stream read from another Redis arrives with no value at all: writing the
+  // empty string over the destination's stream would be a quiet way to lose one
+  if (type === 'stream')
+    throw new QueryError(`"${key}" is a Redis stream, which cannot be copied as a row.`);
+  // no `type`, or a column that happens to be called that (settings.type =
+  // 'premium'): a string, its `ttl` column not looked at — as it always was
+  if (!WRITABLE_TYPES.has(type)) return { key, ttl: 0, type: 'string', text: asText(value) };
+
+  const seconds = Number(values.ttl);
+  const ttl = Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 0;
+  switch (type) {
+    case 'hash': {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw new QueryError(`The hash "${key}" needs its fields: an object of field → value.`);
+      const set: RedisText[] = [];
+      const unset: string[] = [];
+      for (const [field, v] of Object.entries(value as Record<string, unknown>)) {
+        if (v === null || v === undefined) unset.push(field);
+        else set.push(field, asText(v));
+      }
+      return { key, ttl, type, merge: values.fields === true, set, unset };
+    }
+    case 'list':
+    case 'set':
+    case 'zset':
+      return { key, ttl, type, members: Array.isArray(value) ? value.map(asText) : [] };
+    default:
+      return { key, ttl, type: 'string', text: asText(value) };
+  }
+}
+
 
 function tokenizeCommand(line: string): string[] {
   const tokens: string[] = [];

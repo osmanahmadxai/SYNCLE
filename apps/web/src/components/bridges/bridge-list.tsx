@@ -2,6 +2,8 @@
 
 import { Plus, Radio, Zap, Network, Workflow, AlertTriangle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { ImportBridgesButton } from './import-bridges';
+import { BulkBridgesButton } from './bulk-bridges';
 import { destinationLabel, type Bridge } from '@syncle/core';
 import { useBridges, useBridgeStatuses } from '@/lib/queries';
 import { useStudio } from '@/lib/store';
@@ -67,15 +69,19 @@ export function BridgeList() {
           <Network className="h-3.5 w-3.5" />
           {t('map')}
         </button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 gap-1 px-2 text-xs"
-          onClick={() => openBridgeEditor()}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {t('newBridge')}
-        </Button>
+        <div className="flex items-center">
+          <BulkBridgesButton />
+          <ImportBridgesButton />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={() => openBridgeEditor()}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t('newBridge')}
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="min-h-0 flex-1 px-2 pb-2">

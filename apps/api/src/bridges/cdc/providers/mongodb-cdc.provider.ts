@@ -6,8 +6,9 @@
  * aren't available on a standalone mongod.
  *
  * resume token (`change._id`) gets serialized into the cursor. on a long pause
- * the oplog can roll past the token (`ChangeStreamHistoryLost`); we catch that,
- * warn, and restart from "now" rather than crash-looping.
+ * the oplog can roll past the token (`ChangeStreamHistoryLost`). the bridge is
+ * then stopped and says why: carrying on from "now" would leave a hole in the
+ * destination that nothing showed (see CdcStreamHandlers.onPositionLost).
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
@@ -23,6 +24,7 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
+import { mongoTlsOptions, mongoTunnelOptions, normalizeMongoDocument } from '@syncle/core/adapters';
 import type { ResolvedBridge } from '../../bridges.types';
 import { backoffMs, delay, type CdcChange, type CdcProvider, type CdcStreamContext, type CdcStreamHandle } from '../cdc-provider';
 
@@ -47,6 +49,15 @@ export class MongodbCdcProvider implements CdcProvider {
 
   /* ----- connection ----- */
 
+  /**
+   * the change stream gets the SAME TLS treatment as the adapter's connection.
+   * it was never told about TLS at all, so with "Use TLS" switched on every
+   * change still crossed the network in plaintext.
+   */
+  private clientOptions(conn: ConnectionConfig): Record<string, unknown> {
+    return { serverSelectionTimeoutMS: 8000, ...mongoTunnelOptions(conn), ...mongoTlsOptions(conn) };
+  }
+
   private uri(conn: ConnectionConfig): string {
     if (conn.connectionString) return conn.connectionString;
     const auth =
@@ -65,7 +76,7 @@ export class MongodbCdcProvider implements CdcProvider {
     const instructions: string[] = [];
     let client: MongoClient | null = null;
     try {
-      client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+      client = new MongoClient(this.uri(conn), this.clientOptions(conn));
       await client.connect();
       const hello = (await client.db('admin').command({ hello: 1 })) as {
         setName?: string;
@@ -118,7 +129,7 @@ export class MongodbCdcProvider implements CdcProvider {
   ): Promise<void> {
     if (bridge.source.kind !== 'table') return;
     const table = bridge.source.table;
-    const client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
     try {
       await client.connect();
       const db = client.db(bridge.source.database || conn.database || 'test');
@@ -140,6 +151,41 @@ export class MongodbCdcProvider implements CdcProvider {
     /* no-op */
   }
 
+  /**
+   * a resume token for "now": a change stream is opened, asked once for
+   * whatever it has (nothing — it has only just been opened), and the token the
+   * server hands back with that empty answer is kept. a stream started after it
+   * delivers every change made from this moment on
+   */
+  async capturePosition(
+    _bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+  ): Promise<string | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
+    try {
+      await client.connect();
+      const collection = client.db(src.database || conn.database || 'test').collection(src.table);
+      const stream = collection.watch([], {});
+      try {
+        await stream.tryNext();
+        const token: unknown = stream.resumeToken;
+        if (!token) {
+          throw new Error(
+            'MongoDB did not hand out a resume token for an empty change stream (this needs MongoDB 4.0.7 or later)',
+          );
+        }
+        return this.serializeToken(token);
+      } finally {
+        await stream.close().catch(() => undefined);
+      }
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }
+
   /* ----- the stream ----- */
 
   async startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle> {
@@ -151,7 +197,7 @@ export class MongodbCdcProvider implements CdcProvider {
     const ops = new Set<CdcOperation>(bridge.trigger.operations);
     const matchTypes = operationTypes(ops);
 
-    const client = new MongoClient(this.uri(conn), { serverSelectionTimeoutMS: 8000 });
+    const client = new MongoClient(this.uri(conn), this.clientOptions(conn));
     await client.connect();
     const db = client.db(src.database || conn.database || 'test');
     const collection = db.collection(src.table);
@@ -182,7 +228,8 @@ export class MongodbCdcProvider implements CdcProvider {
           for await (const change of stream as AsyncIterable<ChangeStreamDocument>) {
             if (stopped) break;
             const mapped = this.mapChange(change);
-            if (mapped) await handlers.onChange(mapped);
+            if (mapped && 'skip' in mapped) await handlers.onSkip?.(mapped.skip);
+            else if (mapped) await handlers.onChange(mapped);
             resumeToken = (change as { _id?: unknown })._id ?? resumeToken;
           }
           // iterator ended without error (e.g. closed by stop())
@@ -193,6 +240,17 @@ export class MongodbCdcProvider implements CdcProvider {
           const historyLost =
             e.codeName === 'ChangeStreamHistoryLost' || e.code === 286;
           if (historyLost) {
+            if (handlers.onPositionLost) {
+              // this used to restart from "now" and mention it in the log. the
+              // destination then had a hole in it that nothing on the bridge
+              // showed. it stops instead, and the next start accepts the gap
+              // in so many words
+              stopped = true;
+              await handlers.onPositionLost(
+                'The resume token is older than the MongoDB oplog window: the oplog rolled over while the bridge was not reading it.',
+              );
+              break;
+            }
             handlers.onError(
               new Error(
                 'Resume token is older than the MongoDB oplog window — restarting from now. Changes during the gap were not captured.',
@@ -219,20 +277,30 @@ export class MongodbCdcProvider implements CdcProvider {
     };
   }
 
-  /** map a change-stream event into the normalized shape, or null to skip */
-  private mapChange(change: ChangeStreamDocument): CdcChange | null {
+  /**
+   * map a change-stream event into the normalized shape; `skip` for one that is
+   * passed without being delivered, null for one that is not ours at all
+   */
+  private mapChange(change: ChangeStreamDocument): CdcChange | { skip: string } | null {
     const cursor = this.serializeToken((change as { _id?: unknown })._id);
     switch (change.operationType) {
       case 'insert':
       case 'update':
       case 'replace': {
         const full = (change as { fullDocument?: Record<string, unknown> }).fullDocument;
-        // on update the doc may have been deleted before updateLookup ran
+        // an update's document is looked up AFTER the event, and may be gone by
+        // then: deleted a moment later. what was delivered in that case was the
+        // `_id` on its own, as an "update" — a row of NULLs written over a good
+        // one, or refused by the destination, which stopped the bridge. there
+        // is nothing to update it TO; the delete is next in the stream
+        if (!full && change.operationType !== 'insert') return { skip: cursor };
         const row =
           full ?? ((change as { documentKey?: Record<string, unknown> }).documentKey ?? {});
         // replace behaves like an overwrite, so report it as an update
         const op: CdcOperation = change.operationType === 'insert' ? 'insert' : 'update';
-        return { op, row, cursor };
+        // plain values, exactly as a replay reads them: an ObjectId left as an
+        // object reaches a SQL driver as `"507f…"`, quotes and all
+        return { op, row: normalizeMongoDocument(row), cursor };
       }
       case 'delete': {
         // prefer the pre-image (full prior document, incl. business keys); fall
@@ -240,7 +308,7 @@ export class MongodbCdcProvider implements CdcProvider {
         const before = (change as { fullDocumentBeforeChange?: Record<string, unknown> })
           .fullDocumentBeforeChange;
         const key = (change as { documentKey?: Record<string, unknown> }).documentKey ?? {};
-        return { op: 'delete', row: before ?? key, cursor };
+        return { op: 'delete', row: normalizeMongoDocument(before ?? key), cursor };
       }
       default:
         return null; // drop, rename, invalidate, etc

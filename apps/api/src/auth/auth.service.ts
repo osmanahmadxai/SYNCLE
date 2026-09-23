@@ -6,6 +6,7 @@
  * invalidates every outstanding cookie.
  */
 import {
+  createHash,
   randomBytes,
   randomUUID,
   scrypt as scryptCb,
@@ -13,7 +14,7 @@ import {
 } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
   AppError,
@@ -25,11 +26,23 @@ import {
 import { AttemptLimiter } from '../common/attempt-limiter';
 import type { AppUser } from '@prisma/client';
 import { CryptoService } from '../common/crypto.service';
+import { AuditService, SYSTEM } from '../audit/audit.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 import { SettingsStoreService } from '../settings/settings-store.service';
 
 const scrypt = promisify(scryptCb);
+
+/** a reset code lives this long… */
+const RESET_TTL_MS = 15 * 60_000;
+/** …a new one is made at most this often… */
+const RESET_MIN_INTERVAL_MS = 60_000;
+/** …and it is gone after this many wrong guesses, wherever they came from */
+const RESET_MAX_FAILURES = 10;
+export const CLEARED_RESET = { resetCodeHash: null, resetCodeMintedAt: null, resetCodeExpiresAt: null, resetCodeFailures: 0 };
+
+/** what is stored of a reset code (72 random bits: a fast hash is enough, and it is compared in constant time) */
+const hashResetCode = (code: string): string => createHash('sha256').update(code.trim()).digest('hex');
 
 /** the session cookie name; cookies aren't port-scoped, so this is host-wide */
 export const SESSION_COOKIE = 'db_session';
@@ -66,6 +79,9 @@ interface SessionPayload {
   iat: number;
 }
 
+/** the random value the first-run setup token is derived from (see mintSetupToken); gone once an account exists */
+const SETUP_NONCE_KEY = 'install.setupNonce';
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger('Auth');
@@ -73,13 +89,29 @@ export class AuthService implements OnModuleInit {
   private setupToken: string | null = null;
   /** per-ip:username lockout against online password guessing */
   private readonly loginLimiter = new AttemptLimiter();
+  /**
+   * …and per user name alone, whatever address the attempt claims to come from.
+   *
+   * the address is `req.ip`, and with `trust proxy` on that is the left-most
+   * X-Forwarded-For entry — which the bundled web proxy relays exactly as the
+   * browser sent it. so a guesser who puts a new made-up address in that header
+   * on every attempt got a fresh key every time, and the lockout above never
+   * fired: unlimited guesses. this one cannot be dodged. it is deliberately
+   * gentle — ten failures, then at most a minute — because the one person it
+   * can inconvenience is the operator, while a guesser is held to about one
+   * attempt a minute: 1,440 a day against a password.
+   */
+  private readonly usernameLimiter = new AttemptLimiter(10, 5_000, 60_000);
   /** per-ip lockout against setup-token guessing */
   private readonly setupLimiter = new AttemptLimiter(5, 60_000);
+  /** …and against guessing a password-reset code */
+  private readonly resetLimiter = new AttemptLimiter(5, 60_000);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
     private readonly settings: SettingsStoreService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   /* ----- account lifecycle ----- */
@@ -102,7 +134,7 @@ export class AuthService implements OnModuleInit {
       this.logger.warn(`Skipped setup-token mint: ${(err as Error).message}`);
       return;
     }
-    this.printSetupBanner(this.mintSetupToken());
+    this.printSetupBanner(await this.mintSetupToken());
   }
 
   async hasAccount(): Promise<boolean> {
@@ -123,9 +155,12 @@ export class AuthService implements OnModuleInit {
     if (this.setupToken == null) {
       // boot couldn't reach the DB (or the token was consumed by a failed
       // race) — mint now so the console always shows a usable token
-      this.printSetupBanner(this.mintSetupToken());
+      this.printSetupBanner(await this.mintSetupToken());
     }
-    if (!tokensEqual(setupToken, this.setupToken!)) {
+    // (asked for again, not remembered: with more than one process, the token
+    // that counts is the one they all share — see mintSetupToken)
+    const expected = (await this.sharedSetupToken()) ?? this.setupToken!;
+    if (!tokensEqual(setupToken, expected)) {
       this.setupLimiter.fail(`setup:${ip}`);
       throw new UnauthorizedError(
         'Invalid setup token. It is printed in the server logs at startup.',
@@ -136,17 +171,29 @@ export class AuthService implements OnModuleInit {
         id: randomUUID(),
         username,
         passwordHash: await this.hashPassword(password),
+        // (signed in by the setup itself: that is a sign-in)
+        lastLoginAt: new Date(),
       },
     });
     this.setupToken = null;
     this.clearSetupTokenFile();
+    // the next first run (a wiped users table) gets a token of its own
+    await this.forgetSetupNonce();
     this.setupLimiter.succeed(`setup:${ip}`);
+    await this.audit?.record({
+      actor: { type: 'user', id: user.id, name: user.username },
+      action: 'auth.setup',
+      target: { type: 'user', id: user.id, name: user.username },
+      ip,
+    });
     return user;
   }
 
   async login(username: string, password: string, ip: string): Promise<AppUser> {
     const key = `${ip}:${username}`;
+    const nameKey = `user:${username.trim().toLowerCase()}`;
     this.assertNotLocked(this.loginLimiter, key);
+    this.assertNotLocked(this.usernameLimiter, nameKey);
     const user = await this.prisma.appUser.findUnique({ where: { username } });
     // verify against a decoy hash even when the user is missing, so a wrong
     // username and a wrong password take the same time (no user enumeration)
@@ -156,9 +203,32 @@ export class AuthService implements OnModuleInit {
     );
     if (!user || !ok) {
       this.loginLimiter.fail(key);
+      this.usernameLimiter.fail(nameKey);
+      await this.audit?.record({
+        actor: { type: 'user', id: user?.id ?? null, name: username.trim().slice(0, 60) },
+        action: 'auth.login_failed',
+        ip,
+      });
       throw new UnauthorizedError('Incorrect username or password.');
     }
+    if (user.disabledAt) {
+      // (said only once the password was right: nobody learns from this that the account exists)
+      await this.audit?.record({
+        actor: { type: 'user', id: user.id, name: user.username },
+        action: 'auth.login_failed',
+        details: { reason: 'disabled' },
+        ip,
+      });
+      throw new UnauthorizedError('This account is disabled. Ask an admin.');
+    }
     this.loginLimiter.succeed(key);
+    this.usernameLimiter.succeed(nameKey);
+    await this.prisma.appUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => undefined);
+    await this.audit?.record({
+      actor: { type: 'user', id: user.id, name: user.username },
+      action: 'auth.login',
+      ip,
+    });
     return user;
   }
 
@@ -173,10 +243,48 @@ export class AuthService implements OnModuleInit {
     }
   }
 
-  private mintSetupToken(): string {
-    this.setupToken = randomBytes(9).toString('base64url');
+  /**
+   * the token used to be a random value in THIS process's memory. with two
+   * processes each printed its own, and the setup form — answered by whichever
+   * process the request reached — refused the other one's token half the time.
+   *
+   * it is now the same for every process of an installation: derived, under the
+   * master key, from a random value kept in the database for as long as no
+   * account exists. nothing in the database gives it away (the master key is
+   * needed), it survives a restart before setup is finished, and a database
+   * that is set up again gets another one. a process that cannot reach the
+   * database falls back to a token of its own, as before
+   */
+  private async mintSetupToken(): Promise<string> {
+    this.setupToken = (await this.sharedSetupToken()) ?? randomBytes(9).toString('base64url');
     this.persistSetupToken(this.setupToken);
     return this.setupToken;
+  }
+
+  private async forgetSetupNonce(): Promise<void> {
+    try {
+      await this.prisma.appSetting.deleteMany({ where: { key: SETUP_NONCE_KEY } });
+    } catch {
+      /* the account exists, which is what makes the token worthless */
+    }
+  }
+
+  private async sharedSetupToken(): Promise<string | null> {
+    try {
+      const settings = this.prisma.appSetting;
+      let row = await settings.findUnique({ where: { key: SETUP_NONCE_KEY } });
+      if (!row) {
+        const nonce = randomBytes(16).toString('base64url');
+        // two processes starting together: one creates it, the other reads it
+        row = await settings
+          .create({ data: { key: SETUP_NONCE_KEY, valueJson: JSON.stringify(nonce) } })
+          .catch(() => settings.findUnique({ where: { key: SETUP_NONCE_KEY } }));
+      }
+      if (!row) return null;
+      return this.crypto.derive('setup-token', String(JSON.parse(row.valueJson))).slice(0, 12);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -216,6 +324,7 @@ export class AuthService implements OnModuleInit {
    * setup. Same reasoning as the ready banner in main.ts.
    */
   private printSetupBanner(token: string): void {
+    // eslint-disable-next-line no-console -- on purpose, see above: it must print whatever the log level
     console.log(this.setupBanner(token));
   }
 
@@ -227,6 +336,130 @@ export class AuthService implements OnModuleInit {
       `  │      ${token.padEnd(44)}│`,
       '  └──────────────────────────────────────────────────┘',
     ].join('\n');
+  }
+
+  /* ----- a password that has been forgotten ----- */
+
+  /**
+   * somebody at the login screen says they cannot sign in.
+   *
+   * there is no e-mail to send a link to, and the proof of being the operator is
+   * what it was on the first day: being able to read the server's console, or
+   * its data directory. so a code is made, PRINTED THERE, and asked for in the
+   * browser. whoever pressed the button without that access has made a line
+   * appear in a log they cannot read.
+   *
+   * answers nothing either way — not whether there is an account, not whether
+   * a code was made. at most one code a minute, so the button can neither flood
+   * the log nor keep replacing a code the operator is busy typing in; a code
+   * lives for fifteen minutes, works once, and dies after ten wrong guesses
+   * whoever made them. only its hash is stored, so it works whichever API
+   * process the reset then reaches.
+   */
+  async requestPasswordReset(username?: string, ip?: string): Promise<void> {
+    // named, or — as before there were roles — the first admin
+    const user = username
+      ? await this.prisma.appUser.findUnique({ where: { username } })
+      : await this.prisma.appUser.findFirst({ where: { role: 'admin' }, orderBy: { createdAt: 'asc' } });
+    if (!user) return; // nothing to reset: first-run setup is the way in (or no such name)
+    if (user.disabledAt) return; // a disabled account cannot sign in, with any password
+    const now = Date.now();
+    const fresh =
+      user.resetCodeHash &&
+      user.resetCodeMintedAt &&
+      user.resetCodeExpiresAt &&
+      user.resetCodeExpiresAt.getTime() > now &&
+      now - user.resetCodeMintedAt.getTime() < RESET_MIN_INTERVAL_MS;
+    if (fresh) return;
+
+    const code = randomBytes(9).toString('base64url');
+    await this.prisma.appUser.update({
+      where: { id: user.id },
+      data: {
+        resetCodeHash: hashResetCode(code),
+        resetCodeMintedAt: new Date(now),
+        resetCodeExpiresAt: new Date(now + RESET_TTL_MS),
+        resetCodeFailures: 0,
+      },
+    });
+    try {
+      writeFileSync(runtimeConfig.resetCodeFile, `${code}\n`, { mode: 0o600 });
+    } catch (err) {
+      this.logger.warn(`Could not write the reset-code file: ${(err as Error).message}`);
+    }
+    // eslint-disable-next-line no-console -- like the setup token: it must print whatever the log level
+    console.log(
+      [
+        '',
+        '  ┌──────────────────────────────────────────────────┐',
+        `  │  Password reset code for ${user.username.slice(0, 24).padEnd(24)}│`,
+        '  │  (valid for 15 minutes)                          │',
+        `  │      ${code.padEnd(44)}│`,
+        '  │  Nobody asked for this? Then ignore it.          │',
+        '  └──────────────────────────────────────────────────┘',
+      ].join('\n'),
+    );
+    await this.audit?.record({
+      actor: { ...SYSTEM, name: 'anonymous' },
+      action: 'auth.reset_requested',
+      target: { type: 'user', id: user.id, name: user.username },
+      ip: ip ?? null,
+    });
+  }
+
+  /** set a new password with a reset code; every session there was ends */
+  async resetPassword(code: string, newPassword: string, ip: string): Promise<AppUser> {
+    const key = `reset:${ip}`;
+    this.assertNotLocked(this.resetLimiter, key);
+    // the code says whose it is: the one account with a live code it matches
+    const candidates = await this.prisma.appUser.findMany({
+      where: { resetCodeHash: { not: null }, resetCodeExpiresAt: { gt: new Date() }, disabledAt: null },
+    });
+    const given = hashResetCode(code);
+    const user = candidates.find((c) => tokensEqual(given, c.resetCodeHash!));
+    if (!user) {
+      this.resetLimiter.fail(key);
+      // guesses from many addresses add up too: ten of them and a code is gone
+      // (a wrong guess counts against every code that is out)
+      for (const c of candidates) {
+        const failures = c.resetCodeFailures + 1;
+        await this.prisma.appUser.update({
+          where: { id: c.id },
+          data: failures >= RESET_MAX_FAILURES ? CLEARED_RESET : { resetCodeFailures: failures },
+        });
+        if (failures >= RESET_MAX_FAILURES) this.clearResetCodeFile();
+      }
+      throw new UnauthorizedError('That reset code is not valid, or is no longer. Ask for a new one: it is printed in the server logs.');
+    }
+    const updated = await this.prisma.appUser.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: await this.hashPassword(newPassword),
+        // whoever was signed in with the old password no longer is
+        sessionVersion: { increment: 1 },
+        ...CLEARED_RESET,
+        // (signed in by the reset itself)
+        lastLoginAt: new Date(),
+      },
+    });
+    this.clearResetCodeFile();
+    this.resetLimiter.succeed(key);
+    this.logger.warn(`The password of "${updated.username}" was reset with a reset code.`);
+    await this.audit?.record({
+      actor: { type: 'user', id: updated.id, name: updated.username },
+      action: 'auth.password_reset',
+      target: { type: 'user', id: updated.id, name: updated.username },
+      ip,
+    });
+    return updated;
+  }
+
+  private clearResetCodeFile(): void {
+    try {
+      rmSync(runtimeConfig.resetCodeFile, { force: true });
+    } catch (err) {
+      this.logger.warn(`Could not remove the reset-code file: ${(err as Error).message}`);
+    }
   }
 
   async changePassword(
@@ -241,13 +474,17 @@ export class AuthService implements OnModuleInit {
     }
     // bump sessionVersion so every existing cookie (including other devices)
     // stops validating; the caller re-issues a fresh cookie for this session
-    return this.prisma.appUser.update({
+    const updated = await this.prisma.appUser.update({
       where: { id: userId },
       data: {
         passwordHash: await this.hashPassword(newPassword),
         sessionVersion: { increment: 1 },
+        // a reset that was asked for is moot now, and must not outlive the password it was for
+        ...CLEARED_RESET,
       },
     });
+    this.clearResetCodeFile();
+    return updated;
   }
 
   /* ----- session cookie ----- */
@@ -284,6 +521,11 @@ export class AuthService implements OnModuleInit {
    * the configured TTL.
    */
   async userFromRequest(req: Request): Promise<AppUser | null> {
+    return (await this.sessionFromRequest(req))?.user ?? null;
+  }
+
+  /** the user a request's cookie stands for, and how old that cookie is */
+  async sessionFromRequest(req: Request): Promise<{ user: AppUser; ageSec: number } | null> {
     const token = readCookie(req, SESSION_COOKIE);
     if (!token) return null;
     const payload = this.crypto.verifyToken<SessionPayload>(token);
@@ -297,13 +539,35 @@ export class AuthService implements OnModuleInit {
       where: { id: payload.uid },
     });
     if (!user || user.sessionVersion !== payload.v) return null;
-    return user;
+    if (user.disabledAt) return null; // (its version was bumped when it was disabled; belt and braces)
+    return { user, ageSec };
+  }
+
+  /**
+   * the timeout is described everywhere — the setting, its hint, the docs — as
+   * minutes of INACTIVITY. it was nothing of the kind: the cookie's issue time
+   * was set at login and never again, so a session ended that long after
+   * signing in however busy it had been. with the setting at 15 minutes an
+   * operator was thrown out every quarter of an hour, mid-edit.
+   *
+   * an active session is given a fresh cookie once it is a tenth of the way
+   * through its life (and at least a minute old, so that a page making twenty
+   * requests does not get twenty cookies).
+   */
+  async renewIfDue(res: Response, session: { user: AppUser; ageSec: number }): Promise<boolean> {
+    const ttlSec = (await this.settings.resolved()).sessionTtlMinutes * 60;
+    if (session.ageSec < Math.max(60, ttlSec / 10)) return false;
+    // headers can no longer be set once a handler has started streaming
+    if (res.headersSent) return false;
+    await this.issueSession(res, session.user);
+    return true;
   }
 
   toAuthUser(user: AppUser): AuthUser {
     return {
       id: user.id,
       username: user.username,
+      role: user.role === 'operator' || user.role === 'viewer' ? user.role : 'admin',
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     };
@@ -311,7 +575,7 @@ export class AuthService implements OnModuleInit {
 
   /* ----- password hashing (scrypt) ----- */
 
-  private async hashPassword(password: string): Promise<string> {
+  async hashPassword(password: string): Promise<string> {
     const salt = randomBytes(SALT_BYTES);
     const derived = (await scrypt(password, salt, SCRYPT_KEYLEN)) as Buffer;
     return `${salt.toString('hex')}:${derived.toString('hex')}`;
@@ -356,7 +620,14 @@ function readCookie(req: Request, name: string): string | null {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
     if (part.slice(0, eq).trim() === name) {
-      return decodeURIComponent(part.slice(eq + 1).trim());
+      // whatever the client sent. `%%%` is not valid percent-encoding, and
+      // decodeURIComponent THROWS on it — which turned a junk cookie into a 500
+      // from every route instead of a 401
+      try {
+        return decodeURIComponent(part.slice(eq + 1).trim());
+      } catch {
+        return null;
+      }
     }
   }
   return null;

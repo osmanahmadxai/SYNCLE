@@ -4,7 +4,10 @@ import {
   destinationLabel,
   destinationNodeKeys,
   mapRow,
-  normalizeType,
+  ORIGINS,
+  originsOf,
+  UNCHANGED,
+  withOrigins,
 } from './bridge';
 import type { BridgeDestination } from './bridge-config';
 
@@ -21,18 +24,27 @@ describe('mapRow', () => {
     expect(out).toEqual({ user_id: 7, name: 'Ada' });
     expect(out).not.toHaveProperty('extra');
   });
-});
 
-describe('normalizeType', () => {
-  it('collapses engine-specific types into portable categories', () => {
-    expect(normalizeType('character varying(255)')).toBe('text');
-    expect(normalizeType('bigint')).toBe('bigint');
-    expect(normalizeType('integer')).toBe('integer');
-    expect(normalizeType('timestamp with time zone')).toBe('timestamp');
-    expect(normalizeType('jsonb')).toBe('json');
-    expect(normalizeType('boolean')).toBe('boolean');
-    expect(normalizeType('uuid')).toBe('uuid');
-    expect(normalizeType('numeric(10,2)')).toBe('number');
+  it('leaves out a column the source reported as unchanged, rather than nulling it', () => {
+    // Postgres omits a large column an UPDATE did not touch. writing NULL for
+    // it wiped the destination's copy; leaving it out of the write keeps it
+    const row = { id: 1, status: 'done', body: UNCHANGED, note: null };
+    expect(mapRow(row, [])).toEqual({ id: 1, status: 'done', note: null });
+    expect(mapRow(row, [])).not.toHaveProperty('body');
+  });
+
+  it('does the same through an explicit mapping', () => {
+    const out = mapRow({ id: 1, body: UNCHANGED, status: 'done' }, [
+      { source: 'id', target: 'id' },
+      { source: 'body', target: 'payload' },
+      { source: 'status', target: 'state' },
+    ]);
+    expect(out).toEqual({ id: 1, state: 'done' });
+    expect(out).not.toHaveProperty('payload');
+  });
+
+  it('UNCHANGED is one shared symbol, so it survives crossing package copies', () => {
+    expect(UNCHANGED).toBe(Symbol.for('syncle.unchanged'));
   });
 });
 
@@ -53,8 +65,8 @@ describe('buildCreateTableSpec', () => {
     expect(id.primaryKey).toBe(true);
     expect(id.nullable).toBe(false);
     expect(id.type).toBe('INT');
-    // a non-key text column on MySQL stays TEXT
-    expect(spec.columns.find((c) => c.name === 'name')!.type).toBe('TEXT');
+    // MySQL's TEXT stops at 64 KB and the source's `text` does not
+    expect(spec.columns.find((c) => c.name === 'name')!.type).toBe('LONGTEXT');
   });
 
   it('uses an indexable type for a text KEY column on MySQL', () => {
@@ -110,5 +122,42 @@ describe('destination display helpers', () => {
       idempotency: false,
     };
     expect(destinationLabel(http)).toBe('POST api.example.com');
+  });
+});
+
+describe('where a row has been (loop prevention)', () => {
+  const row = { id: 1, name: 'Ada' };
+
+  it('rides beside the columns: nothing that writes, prints or maps the row sees it', () => {
+    const marked = withOrigins(row, ['table-a']);
+    expect(originsOf(marked)).toEqual(['table-a']);
+    expect(Object.entries(marked)).toEqual(Object.entries(row)); // same columns, same values
+    expect(Object.keys(marked)).toEqual(['id', 'name']);
+    // a copy of the row keeps it: `{ ...row, $op }` on the way to a sink is still that row
+    expect(originsOf({ ...marked, extra: true })).toEqual(['table-a']);
+    expect(JSON.stringify(marked)).toBe('{"id":1,"name":"Ada"}');
+    // a mapped row is a NEW row, built column by column: whoever maps carries it over
+    expect(originsOf(mapRow(marked, []))).toEqual([]);
+    expect(mapRow(marked, [])).toEqual(row);
+  });
+
+  it('leaves the row it was given alone', () => {
+    const marked = withOrigins(row, ['table-a']);
+    expect(marked).not.toBe(row);
+    expect(originsOf(row)).toEqual([]);
+    const origins = ['table-a'];
+    const kept = withOrigins(row, origins);
+    origins.push('table-b');
+    expect(originsOf(kept)).toEqual(['table-a']);
+  });
+
+  it('a row that has been nowhere is just the row', () => {
+    expect(withOrigins(row, [])).toBe(row);
+    expect(originsOf({})).toEqual([]);
+    expect(originsOf({ [ORIGINS]: 'not a list' } as never)).toEqual([]);
+  });
+
+  it('is one shared symbol, so it survives crossing package copies', () => {
+    expect(ORIGINS).toBe(Symbol.for('syncle.origins'));
   });
 });

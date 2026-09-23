@@ -1,6 +1,6 @@
 {
   "name": "syncle",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Syncle \u2014 keep any databases in sync, live and across engines (PostgreSQL, MySQL, SQLite, MongoDB, Redis), with HTTP endpoints as an extra destination.",
   "author": "Osman Ahmadzai",
@@ -24,7 +24,20 @@
       "@prisma/engines",
       "prisma",
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "multer@<2.3.0": "^2.3.0",
+      "qs@<6.16.0": "^6.16.0",
+      "body-parser@<1.20.6": "^1.20.6",
+      "nanoid@<3.3.18": "^3.3.18",
+      "postcss@<8.5.23": "^8.5.23",
+      "postcss-selector-parser@<6.1.3": "^6.1.3",
+      "sharp@<0.35.4": "^0.35.4"
+    },
+    "patchedDependencies": {
+      "@powersync/mysql-zongji@0.6.0": "patches/@powersync__mysql-zongji@0.6.0.patch",
+      "@vlasky/mysql@2.18.7": "patches/@vlasky__mysql@2.18.7.patch"
+    }
   },
   "scripts": {
     "dev": "node scripts/setup-env.mjs && pnpm --filter @syncle/core build && concurrently -n api,web -c magenta,cyan \"pnpm --filter @syncle/api dev\" \"pnpm --filter @syncle/web dev\"",
@@ -48,9 +61,12 @@
     "benchmark": "node scripts/benchmark.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "concurrently": "^9.1.0",
+    "eslint": "^9.39.4",
     "prettier": "^3.3.3",
     "prettier-plugin-tailwindcss": "^0.6.8",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.70.0"
   }
 }

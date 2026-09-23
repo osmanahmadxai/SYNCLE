@@ -115,6 +115,36 @@ for (const source of SOURCES) {
         const carriedLast = shapeOf(dest) === 'kv' ? last?.value : last?.name;
         expect(String(carriedLast)).toBe(`row-${ROWS - 1}`);
 
+        // and, while the bridge is still listening: verify agrees that the copy is the source
+        // — or says plainly that this kind of destination cannot be asked
+        const { BridgesController } = await import('../../src/bridges/bridges.controller');
+        const controller = app.ctx.get(BridgesController);
+        const started = await controller.startVerification(s.bridgeId, { mode: 'verify', deleteExtra: false });
+        const v = await waitFor(`verification ${LABEL[source]} -> ${LABEL[dest]}`, async () => {
+          const now = await controller.verification(s.bridgeId, started.id);
+          return ['completed', 'failed', 'canceled'].includes(now.status) ? now : null;
+        });
+        expect({ status: v.status, error: v.error }).toEqual({ status: 'completed', error: null });
+        const [t] = v.targets;
+        if (shapeOf(dest) === 'kv') {
+          expect(t!.unsupported).toMatch(/cannot be asked for rows by key/);
+        } else if (shapeOf(source) === 'kv') {
+          // this Redis database is the one Syncle's own queues and other tests' keys live in, and a
+          // bridge that follows changes "from now" never copied those: they ARE missing, and verify
+          // is right to say so. what it must not say is that a key this bridge delivered is different
+          expect({ unsupported: t!.unsupported, different: t!.samples.different }).toEqual({ unsupported: null, different: [] });
+          expect(t!.checked).toBeGreaterThanOrEqual(ROWS);
+          expect(t!.samples.missing.map((k) => String(k[0])).filter((k) => /^\d+$/.test(k) && Number(k) <= ROWS)).toEqual([]);
+        } else {
+          expect({ unsupported: t!.unsupported, checked: t!.checked, samples: t!.samples, notes: t!.notes }).toEqual({
+            unsupported: null,
+            checked: ROWS,
+            samples: { missing: [], different: [], extra: [] },
+            notes: [],
+          });
+          expect(v.inSync).toBe(true);
+        }
+
         await app.cdc.stop(s.bridgeId).catch(() => undefined);
         await app.cdc.cleanup(s.bridgeId).catch(() => undefined);
       }, 180_000);

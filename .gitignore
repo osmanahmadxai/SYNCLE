@@ -21,6 +21,12 @@ apps/api/prisma/*.db-journal
 apps/api/prisma/*.db-wal
 apps/api/prisma/*.db-shm
 
+# the query editor's assets, copied out of node_modules at build time (apps/web/scripts/copy-monaco.mjs)
+apps/web/public/monaco/
+
+# throwaway PKI for the TLS integration tests (scripts/test-certs.sh)
+.test-certs/
+
 # misc
 .DS_Store
 *.pem

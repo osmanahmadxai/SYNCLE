@@ -29,14 +29,27 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import {
-  buildCreateTableSpec,
+  UnsupportedError,
   mapRow,
+  renderRedisKey,
+  toRedisRow,
+  parseColumnType,
+  planTargetTable,
+  rowConverterFor,
+  transformedType,
+  canBecomeNull,
+  columnsAdded,
+  copiedColumn,
   type CdcOperation,
+  type ColumnTypeWarning,
+  type DatabaseEngine,
   type DatabaseTarget,
+  type PortableKind,
   type TargetColumnShape,
 } from '@syncle/core';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { ConnectionStoreService } from '../connections/connection-store.service';
+import { EchoGuardService, type WriteMode } from './echo-guard.service';
 import type { DeliveryOutcome } from './bridges.types';
 import type { ResolvedBridge } from './bridges.types';
 
@@ -50,15 +63,25 @@ export class DatabaseSinkService {
   private readonly ensured = new Set<string>();
   /** cached source column shapes per bridge (resolved once) */
   private readonly sourceCols = new Map<string, TargetColumnShape[] | null>();
+  /**
+   * cached value converters, per bridge and target (`null` = nothing to
+   * convert). see `value-map.ts`: what a driver READS for a column is not
+   * always something another engine's driver can WRITE.
+   */
+  private readonly converters = new Map<string, ((row: Row) => Row) | null>();
 
   constructor(
     private readonly pool: AdapterPoolService,
     private readonly connections: ConnectionStoreService,
+    private readonly echo: EchoGuardService,
   ) {}
 
   /** drop cached schema/existence state for a bridge (on edit/delete) */
   forget(bridgeId: string): void {
     this.sourceCols.delete(bridgeId);
+    for (const key of this.converters.keys()) {
+      if (key.startsWith(`${bridgeId}::`)) this.converters.delete(key);
+    }
     // ensured keys are keyed by target identity, not bridge, so leave them;
     // a changed target table name produces a new key anyway.
   }
@@ -92,11 +115,68 @@ export class DatabaseSinkService {
         summaries.push(`${label}: skipped (already written by a previous attempt)`);
         continue;
       }
+      // a target with no key columns (append-only `insert` mode) has nothing to
+      // delete BY. attempting it builds an empty WHERE, which every engine
+      // rejects — so each delete on the source would fail the whole delivery
+      if (op === 'delete' && target.keyColumns.length === 0) {
+        succeeded.push(key);
+        summaries.push(`${label}: delete not applied (target has no key columns)`);
+        continue;
+      }
+      // this target keeps what it was sent (an archive, a warehouse): a delete
+      // — or the source being emptied — is not an error here, and not applied
+      if ((op === 'delete' || op === 'truncate') && target.onDelete === 'ignore') {
+        succeeded.push(key);
+        summaries.push(`${label}: ${op} not applied (this target ignores deletes)`);
+        continue;
+      }
+      // marking EVERY row would be the faithful soft version of a TRUNCATE, and
+      // is not something to do on the strength of one event: said, not done
+      if (op === 'truncate' && target.onDelete === 'soft') {
+        succeeded.push(key);
+        summaries.push(`${label}: truncate not applied (this target soft-deletes; its rows were left as they are)`);
+        continue;
+      }
       try {
         await this.ensureTarget(bridge, target, rows[0] ?? {});
-        const affected = await this.writeRows(target, rows, op);
+        if (op === 'truncate') {
+          // (said first, like a write: see EchoGuardService)
+          const said = await this.echo.announceTruncate(bridge, target, rows[0]);
+          try {
+            summaries.push(`${label}: ${await this.truncate(target)}`);
+          } catch (err) {
+            await this.echo.retract(said);
+            throw err;
+          }
+          succeeded.push(key);
+          continue;
+        }
+        const convert = await this.converterFor(bridge, target);
+        const mapped = mapForTarget(target, convert ? rows.map(convert) : rows, op);
+        // a table another live bridge reads: what is about to be written there
+        // is said first, so that bridge knows this instance's writes when they
+        // come back to it (see EchoGuardService). anywhere else this does nothing
+        const heard = await this.echo.announce(
+          bridge,
+          target.redis ? { ...target, keyColumns: identityColumns(target) } : target,
+          announced(target, mapped, op),
+          rows,
+          writeModeOf(target, op),
+        );
+        const writing = heard.unchanged.size > 0 ? mapped.filter((_, i) => !heard.unchanged.has(i)) : mapped;
+        let affected = 0;
+        try {
+          if (writing.length > 0) affected = await this.writeRows(target, writing, op);
+        } catch (err) {
+          await this.echo.retract(heard.receipt);
+          throw err;
+        }
+        // nothing changed, so nothing will come back
+        if (affected === 0) await this.echo.retract(heard.receipt);
         succeeded.push(key);
-        summaries.push(`${label}: ${op === 'delete' ? 'deleted' : 'wrote'} ${affected}`);
+        const did = op !== 'delete' ? 'wrote' : target.onDelete === 'soft' ? 'marked as deleted' : 'deleted';
+        const same = heard.unchanged.size > 0 ? ` (${heard.unchanged.size} already up to date, not written)` : '';
+        summaries.push(`${label}: ${did} ${affected}${same}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         firstError ??= `${label}: ${message}`;
@@ -106,11 +186,7 @@ export class DatabaseSinkService {
 
     // requestBody mirrors what we attempted to write (mapped to the first
     // target's columns), so the monitor can show the exact payload
-    const mappedPreview = rows.map((r) => mapRow(r, targets[0]?.mapping ?? []));
-    const serialized = JSON.stringify(
-      mappedPreview.length === 1 ? mappedPreview[0] : mappedPreview,
-    );
-    const requestBody = serialized.slice(0, SUMMARY_LIMIT);
+    const { requestBody, bodyTruncated } = previewBody(rows, targets);
 
     return {
       status: firstError ? 'failed' : 'success',
@@ -122,16 +198,33 @@ export class DatabaseSinkService {
       durationMs: Math.round(performance.now() - started),
       op: op ?? null,
       // a capped capture can't be replayed faithfully; the resend path refuses it
-      bodyTruncated: serialized.length > SUMMARY_LIMIT,
+      bodyTruncated,
       // checkpoint only matters while the delivery is failed; a success clears it
       succeededTargets: firstError ? succeeded : null,
     };
   }
 
-  /** write every row to one target, returning the affected-row count */
+  /** empty one target, as the source was emptied */
+  private async truncate(target: DatabaseTarget): Promise<string> {
+    return this.pool.withAdapter(target.connectionId, target.database, async (adapter) => {
+      try {
+        await adapter.truncateTable(target.table, target.schema);
+        return 'truncated';
+      } catch (err) {
+        // a key-value store has no table to empty; say so rather than fail a
+        // bridge over an operation its destination has no word for
+        if (err instanceof UnsupportedError) {
+          return 'truncate not applied (this engine has no tables to truncate)';
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** write every row (already mapped to the target's columns) to one target, returning the affected-row count */
   private async writeRows(
     target: DatabaseTarget,
-    rows: Row[],
+    mapped: Row[],
     op: CdcOperation | undefined,
   ): Promise<number> {
     let affected = 0;
@@ -140,22 +233,51 @@ export class DatabaseSinkService {
       target.database,
       async (adapter) => {
         const { schema, table } = target;
+        const keyColumns = identityColumns(target);
 
         // one set-based statement per batch where the engine supports it,
         // otherwise the original row-at-a-time loop. Both paths must produce
         // the same rows and the same `affected` count — only the number of
         // round trips differs.
+        const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
         const writeBatch = async (): Promise<void> => {
-          const mapped = rows.map((row) => mapRow(row, target.mapping));
           const isUpsert = op !== 'delete' && target.writeMode !== 'insert';
-          if (isUpsert && target.keyColumns.length === 0) {
+          if (isUpsert && keyColumns.length === 0) {
             throw new Error(
               'Upsert needs at least one key column; set keys or use insert mode',
             );
           }
 
           if (op === 'delete') {
-            const identities = mapped.map((m) => pick(m, target.keyColumns));
+            const identities = mapped.map((m) => pick(m, keyColumns));
+            // a delete that does not say WHICH row is not a smaller delete: it
+            // matches nothing, reports "deleted 0", and the row stays for ever.
+            // that is a failure, and it has to look like one
+            for (const identity of identities) {
+              const blank = keyColumns.find(
+                (k) => identity[k] === undefined || identity[k] === null,
+              );
+              if (blank !== undefined) {
+                throw new Error(
+                  `the delete carries no value for key column "${blank}", so it cannot say which row to remove. ` +
+                    'The source only sends its own key with a delete: key this target on that, ' +
+                    'or make the source send whole rows (PostgreSQL: REPLICA IDENTITY FULL; MongoDB: pre-images).',
+                );
+              }
+            }
+            if (soft) {
+              // the row stays; it is marked. one UPDATE per row: a row that was
+              // never here is not created just to be marked deleted
+              // a point in time, in the form this engine's driver binds: SQLite
+              // takes no Date object, and the others store one exactly
+              const now = new Date();
+              const mark = soft.value === 'boolean' ? true : adapter.engine === 'sqlite' ? now.toISOString() : now;
+              for (const identity of identities) {
+                const res = await adapter.updateRow({ schema, table, identity, changes: { [soft.column]: mark } });
+                affected += res.affectedRows ?? 0;
+              }
+              return;
+            }
             if (adapter.deleteRows) {
               const res = await adapter.deleteRows({ schema, table, identities });
               affected += res.affectedRows ?? 0;
@@ -186,7 +308,7 @@ export class DatabaseSinkService {
               schema,
               table,
               rows: mapped,
-              keyColumns: target.keyColumns,
+              keyColumns: keyColumns,
             });
             affected += res.affectedRows ?? mapped.length;
             return;
@@ -196,7 +318,7 @@ export class DatabaseSinkService {
               schema,
               table,
               values,
-              keyColumns: target.keyColumns,
+              keyColumns: keyColumns,
             });
             affected += res.affectedRows ?? 1;
           }
@@ -269,25 +391,23 @@ export class DatabaseSinkService {
       );
     }
 
-    const engine = (await this.connections.resolve(target.connectionId)).engine;
-    const columns = await this.targetColumns(bridge, target, sampleRow);
-    if (columns.length === 0) {
+    const plan = await this.planTable(bridge, target, sampleRow);
+    if (plan.spec.columns.length === 0) {
       throw new Error('Cannot create target table: no columns to derive');
     }
     await this.pool.withAdapter(target.connectionId, target.database, (adapter) =>
-      adapter.createTable(
-        buildCreateTableSpec(
-          target.table,
-          target.schema,
-          columns,
-          target.keyColumns,
-          engine,
-        ),
-      ),
+      adapter.createTable(plan.spec),
     );
     this.logger.log(
-      `Created target table ${targetLabel(target)} (${columns.length} cols)`,
+      `Created target table ${targetLabel(target)} (${plan.spec.columns.length} cols)`,
     );
+    // a column the target cannot represent faithfully is said out loud, once,
+    // at the moment the table is made — not discovered later as a bad value
+    for (const w of plan.warnings) {
+      this.logger.warn(
+        `${targetLabel(target)}.${w.column} (${w.sourceType} → ${w.targetType}): ${w.message}`,
+      );
+    }
     await this.ensureKeyIndex(target);
     this.ensured.add(key);
   }
@@ -318,6 +438,229 @@ export class DatabaseSinkService {
   }
 
   /**
+   * the `CREATE TABLE` a target would get, and every column it cannot hold
+   * faithfully. used when the table is actually created, and by the preview so
+   * the DDL can be read BEFORE anything runs.
+   */
+  async planTable(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+    sampleRow: Row,
+  ): Promise<{ spec: ReturnType<typeof planTargetTable>['spec']; warnings: ColumnTypeWarning[] }> {
+    const engine = (await this.connections.resolve(target.connectionId)).engine;
+    const columns = await this.targetColumns(bridge, target, sampleRow);
+    // type names are read in the SOURCE engine's dialect, but only when they
+    // really came from its catalog; inferred types are engine-neutral
+    const known = await this.resolveSourceCols(bridge);
+    const sourceEngine = known ? await this.sourceEngine(bridge) : undefined;
+    return planTargetTable(
+      target.table,
+      target.schema,
+      columns,
+      target.keyColumns,
+      engine,
+      sourceEngine,
+    );
+  }
+
+  /**
+   * how this bridge's rows have to change to be writable on this target, or
+   * null when they don't (always, between two instances of one engine). built
+   * from the source's column types, so it needs the schema: a query source, or
+   * a source that cannot be introspected, is written as read.
+   */
+  private async converterFor(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+  ): Promise<((row: Row) => Row) | null> {
+    const cacheKey = `${bridge.id}::${targetKey(target)}`;
+    const cached = this.converters.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    let convert: ((row: Row) => Row) | null = null;
+    try {
+      const columns = await this.resolveSourceCols(bridge);
+      const source = columns ? await this.sourceEngine(bridge) : undefined;
+      if (columns && source) {
+        const engine = (await this.connections.resolve(target.connectionId)).engine;
+        // a transformed column no longer holds what its source type says (a
+        // boolean cast to text, a timestamp hashed): converting it by the
+        // SOURCE's type would mangle it. it is converted by what it has become,
+        // which is spelled the PostgreSQL way
+        const transforms = bridge.transform.columns;
+        const byName = new Map(columns.map((c) => [c.name, c]));
+        const untouched: TargetColumnShape[] = [];
+        const reshaped: { name: string; sourceType: string }[] = [];
+        // the columns the steps ADD are in the row too, and need converting as
+        // much as any other: a `{{$now}}` cast to a date, a copy of a timestamp
+        for (const name of [...byName.keys(), ...columnsAdded(transforms, [...byName.keys()])]) {
+          const sourceType = transformedType(transforms, name);
+          if (sourceType) {
+            reshaped.push({ name, sourceType });
+            continue;
+          }
+          // a plain copy holds what its origin holds, under its own name
+          const origin = byName.get(copiedColumn(transforms, name) ?? name);
+          if (origin) untouched.push({ ...origin, name });
+        }
+        // (a row kept in Redis under a key template is there to be READ by
+        // something: moments in time go as ISO-8601)
+        const opts = { isoInstants: !!target.redis };
+        const first = rowConverterFor(untouched, source, engine, opts);
+        const second = reshaped.length ? rowConverterFor(reshaped, 'postgres', engine, opts) : null;
+        convert = first && second ? (row) => second(first(row)) : (first ?? second);
+      }
+    } catch {
+      convert = null; // unknown shape: write what was read, as before
+    }
+    this.converters.set(cacheKey, convert);
+    return convert;
+  }
+
+  /**
+   * a target's rows exactly as {@link deliver} would write them — converted for
+   * the target's engine, mapped to its columns, a soft-delete marker cleared —
+   * without writing anything. `rows` are shaped rows, as `deliver` takes them.
+   * (for verify: "what should be there" has to be worked out by the code that
+   * puts it there, or the two drift apart)
+   */
+  async expectedRows(bridge: ResolvedBridge, target: DatabaseTarget, rows: Row[]): Promise<Row[]> {
+    const convert = await this.converterFor(bridge, target);
+    const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+    return rows.map((row) => {
+      const out = mapRow(convert ? convert(row) : row, target.mapping);
+      if (soft) out[soft.column] = soft.value === 'boolean' ? false : null;
+      return out;
+    });
+  }
+
+  /**
+   * what KIND of value each column of a target holds, going by the source
+   * column it comes from (or by what a transform turned it into). a column of a
+   * source with no types — or one nothing is known about — is simply absent
+   */
+  async columnKinds(bridge: ResolvedBridge, target: DatabaseTarget): Promise<Record<string, PortableKind>> {
+    const source = await this.resolveSourceCols(bridge);
+    const engine = source ? await this.sourceEngine(bridge) : undefined;
+    const kinds: Record<string, PortableKind> = {};
+    if (!source || !engine) return kinds;
+    const steps = bridge.transform.columns;
+    const byName = new Map(source.map((c) => [c.name, c]));
+    const pairs =
+      target.mapping.length > 0
+        ? target.mapping.map((m) => ({ name: m.target, source: m.source }))
+        : [...source.map((c) => c.name), ...columnsAdded(steps, source.map((c) => c.name))].map((name) => ({ name, source: name }));
+    for (const { name, source: sourceName } of pairs) {
+      try {
+        const reshaped = transformedType(steps, sourceName);
+        if (reshaped) {
+          kinds[name] = parseColumnType(reshaped, 'postgres').kind;
+          continue;
+        }
+        const known = byName.get(copiedColumn(steps, sourceName) ?? sourceName);
+        if (known) kinds[name] = parseColumnType(known.sourceType, engine).kind;
+      } catch {
+        /* a type nothing can read: compared by what the values are */
+      }
+    }
+    return kinds;
+  }
+
+  /**
+   * what a run would do to this target's TABLE, without doing it: is it there,
+   * and if not, exactly which columns it would be created with and which of
+   * them cannot hold everything the source column can. nothing is written.
+   */
+  async describeTarget(
+    bridge: ResolvedBridge,
+    target: DatabaseTarget,
+    sampleRow: Row,
+  ): Promise<{
+    exists: boolean | null;
+    columns?: Array<{
+      name: string;
+      sourceType: string;
+      type: string;
+      nullable: boolean;
+      primaryKey: boolean;
+    }>;
+    warnings: ColumnTypeWarning[];
+  }> {
+    let exists: boolean | null;
+    try {
+      exists = await this.pool.withAdapter(target.connectionId, target.database, (adapter) =>
+        adapter
+          .browse({ schema: target.schema, table: target.table, limit: 1, offset: 0 })
+          .then(
+            () => true,
+            () => false,
+          ),
+      );
+    } catch {
+      exists = null; // the target connection itself is unreachable
+    }
+    if (exists !== false || !target.createMissingTable) {
+      return { exists, warnings: exists ? await this.markerWarnings(target) : [] };
+    }
+
+    const plan = await this.planTable(bridge, target, sampleRow);
+    const shapes = await this.targetColumns(bridge, target, sampleRow);
+    const sourceTypeOf = new Map(shapes.map((c) => [c.name, c.sourceType]));
+    return {
+      exists,
+      columns: plan.spec.columns.map((c) => ({
+        name: c.name,
+        sourceType: sourceTypeOf.get(c.name) ?? '',
+        type: c.type,
+        nullable: c.nullable,
+        primaryKey: c.primaryKey,
+      })),
+      warnings: plan.warnings,
+    };
+  }
+
+  /**
+   * a soft delete writes to a column of the TARGET. an existing table that does
+   * not have it fails every write, deletes or not — the marker is taken off by
+   * every upsert — so the dry run says so before anything runs
+   */
+  private async markerWarnings(target: DatabaseTarget): Promise<ColumnTypeWarning[]> {
+    if (target.onDelete !== 'soft' || !target.softDelete) return [];
+    const column = target.softDelete.column;
+    try {
+      const names = await this.pool.withAdapter(target.connectionId, target.database, async (adapter) => {
+        const schema = await adapter.getSchema(target.database);
+        const tables = schema.namespaces
+          .filter((n) => !target.schema || n.name === target.schema)
+          .flatMap((n) => n.tables);
+        return tables.find((t) => t.name === target.table)?.columns.map((c) => c.name) ?? null;
+      });
+      // schemaless (a MongoDB collection) or unreadable: nothing to hold it to
+      if (!names || names.length === 0 || names.includes(column)) return [];
+      return [
+        {
+          column,
+          sourceType: '',
+          targetType: '',
+          message:
+            `"${target.table}" has no column "${column}" to mark deleted rows with, and an existing table is never altered: ` +
+            `add it (${target.softDelete.value === 'boolean' ? 'a boolean' : 'a nullable timestamp'}) or every write to this target will fail.`,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  }
+
+  private async sourceEngine(bridge: ResolvedBridge): Promise<DatabaseEngine | undefined> {
+    try {
+      return (await this.connections.resolve(bridge.source.connectionId)).engine;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * the target's columns to create: the mapped target names, typed from the
    * source table's REAL column types (schema introspection, cached per bridge)
    * so bridge.ts's normalizeType/engineColumnType translation gets a proper
@@ -337,21 +680,44 @@ export class DatabaseSinkService {
 
     // which target columns to create: the explicit mapping, else identity over
     // the source schema when known, else whatever the sample row carries
+    const steps = bridge.transform.columns;
     const pairs: { name: string; source: string }[] =
       target.mapping.length > 0
         ? target.mapping.map((m) => ({ name: m.target, source: m.source }))
         : source
-          ? source.map((c) => ({ name: c.name, source: c.name }))
+          ? [
+              ...source.map((c) => c.name),
+              // an identity mapping sends the whole row, and the row has the
+              // columns the steps ADD: a table without them would refuse it
+              ...columnsAdded(steps, source.map((c) => c.name)),
+            ].map((name) => ({ name, source: name }))
           : Object.keys(mappedSample).map((name) => ({ name, source: name }));
 
-    return pairs.map(({ name, source: sourceName }) => {
-      const known = byName.get(sourceName);
+    const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+    const marker: TargetColumnShape[] =
+      soft && !pairs.some((p) => p.name === soft.column)
+        ? [{ name: soft.column, sourceType: soft.value === 'boolean' ? 'boolean' : 'timestamptz', generic: true, nullable: true }]
+        : [];
+
+    const planned = pairs.map(({ name, source: sourceName }) => {
+      // a plain copy of a column (`{{price}}`) is typed like the column it copies
+      const known = byName.get(copiedColumn(steps, sourceName) ?? sourceName);
+      const isKey = target.keyColumns.includes(name);
+      // NOT NULL at the source means nothing once a step can write NULL
+      const nullable =
+        (known ? known.nullable : !isKey) || (!isKey && canBecomeNull(steps, sourceName));
+      // what the transforms turned the column INTO decides its type: a hashed
+      // integer is text, and created as an integer it would refuse every row
+      const reshaped = transformedType(steps, sourceName);
+      if (reshaped) return { name, sourceType: reshaped, generic: true, nullable };
       return {
         name,
         sourceType: known ? known.sourceType : inferType(mappedSample[name]),
-        nullable: known ? known.nullable : !target.keyColumns.includes(name),
+        nullable,
       };
     });
+    // the soft-delete marker is a column of the TARGET only: it comes last
+    return [...planned, ...marker];
   }
 
   /**
@@ -378,7 +744,9 @@ export class DatabaseSinkService {
         if (table) {
           cols = table.columns.map((c) => ({
             name: c.name,
-            sourceType: c.dataType,
+            // the precise spelling where the engine gives one: Postgres'
+            // catalog label drops precision, length and array element types
+            sourceType: c.nativeType ?? c.dataType,
             nullable: c.nullable,
           }));
         }
@@ -393,13 +761,81 @@ export class DatabaseSinkService {
 
 /* ----- helpers ----- */
 
+/** the rows as one target takes them: its column names, and its soft-delete mark taken off */
+export function mapForTarget(target: DatabaseTarget, rows: Row[], op: CdcOperation | undefined): Row[] {
+  const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+  return rows.map((row) => {
+    const out = mapRow(row, target.mapping);
+    // a Redis target that says how a row becomes a key: from here on the row IS
+    // that key — `{ key, type, value, ttl }`, which is what the adapter writes.
+    // a delete only has to say which key (and says so, if it cannot)
+    if (target.redis) {
+      return op === 'delete'
+        ? { key: renderRedisKey(target.redis.keyTemplate, out) }
+        : { ...toRedisRow(target.redis, out) };
+    }
+    // a row that is written exists at the source: whatever a delete
+    // marked it with before is taken off by the write that brings it back
+    if (soft && op !== 'delete') out[soft.column] = soft.value === 'boolean' ? false : null;
+    return out;
+  });
+}
+
+/**
+ * the columns a written row is found by. a Redis key template's target is keyed
+ * on the COLUMNS of the template everywhere else (what a delete has to carry,
+ * what makes an update a move); once the row has become a key, it is found by
+ * that key
+ */
+function identityColumns(target: DatabaseTarget): string[] {
+  return target.redis ? ['key'] : target.keyColumns;
+}
+
+function writeModeOf(target: DatabaseTarget, op: CdcOperation | undefined): WriteMode {
+  if (op === 'delete') return target.onDelete === 'soft' ? 'soft-delete' : 'delete';
+  return target.writeMode === 'insert' ? 'insert' : 'upsert';
+}
+
+/**
+ * what a write will look like in the target table's own change log. a delete
+ * goes by its key and nothing else; a soft delete is an UPDATE of the row that
+ * sets the mark (a timestamp mark is "now", which cannot be known beforehand, so
+ * only a boolean mark is part of what is compared)
+ */
+function announced(target: DatabaseTarget, mapped: Row[], op: CdcOperation | undefined): Row[] {
+  if (op !== 'delete') return mapped;
+  const soft = target.onDelete === 'soft' ? target.softDelete : undefined;
+  return mapped.map((row) => ({
+    ...pick(row, identityColumns(target)),
+    ...(soft?.value === 'boolean' ? { [soft.column]: true } : {}),
+  }));
+}
+
+/**
+ * the capped payload shown in the monitor for a set of rows: mapped to the
+ * first target's columns, exactly as {@link DatabaseSinkService.deliver} records
+ * it. `bodyTruncated` marks a capture that can no longer be replayed faithfully.
+ */
+export function previewBody(
+  rows: Row[],
+  targets: DatabaseTarget[],
+): { requestBody: string; bodyTruncated: boolean } {
+  const mapped = rows.map((r) => mapRow(r, targets[0]?.mapping ?? []));
+  const serialized = JSON.stringify(mapped.length === 1 ? mapped[0] : mapped);
+  return {
+    requestBody: serialized.slice(0, SUMMARY_LIMIT),
+    bodyTruncated: serialized.length > SUMMARY_LIMIT,
+  };
+}
+
 function pick(row: Row, keys: string[]): Row {
   const out: Row = {};
   for (const k of keys) out[k] = row[k];
   return out;
 }
 
-function targetKey(t: DatabaseTarget): string {
+/** stable identity of a target, as persisted in `succeededTargets` checkpoints */
+export function targetKey(t: DatabaseTarget): string {
   return `${t.connectionId}::${t.database ?? ''}::${t.schema ?? ''}::${t.table}`;
 }
 

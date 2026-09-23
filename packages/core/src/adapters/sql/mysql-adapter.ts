@@ -1,4 +1,13 @@
 /** MySQL / MariaDB adapter backed by `mysql2` with a per-connection pool */
+import type { EventEmitter } from 'node:events';
+import { connect as netConnect, isIP } from 'node:net';
+import type { PeerCertificate } from 'node:tls';
+import {
+  effectiveTls,
+  mysqlTlsOptions,
+  tlsServerName,
+  verifyPeerIdentity,
+} from '../tls-options';
 import mysql, {
   type FieldPacket,
   type Pool,
@@ -14,6 +23,7 @@ import type {
   QueryResult,
   TableSchema,
 } from '../types';
+import { withDatabase } from '../connection-string';
 import { ConnectionError, QueryError } from '../../errors';
 import { quoteIdent } from '../../sql';
 import {
@@ -43,6 +53,7 @@ export const MYSQL_CAPABILITIES: AdapterCapabilities = {
   rowEditing: true,
   transactions: true,
   ddl: true,
+  keysetPaging: true,
   manageDatabases: true,
   backupFormats: ['json', 'sql'],
 };
@@ -63,23 +74,73 @@ export class MysqlAdapter extends BaseSqlAdapter {
       connectTimeout: 10_000,
       namedPlaceholders: false,
       dateStrings: true,
+      // a JavaScript Date is an instant. mysql2 formats one in the PROCESS's
+      // zone by default, so the wall-clock time stored for the same instant
+      // depended on where the API happened to run. UTC, always. (reads are
+      // unaffected: `dateStrings` returns the stored text untouched.)
+      timezone: 'Z',
       // BIGINT/DECIMAL beyond 2^53 would otherwise be silently rounded as
       // JS numbers
       supportBigNumbers: true,
       bigNumberStrings: true,
     } as const;
+    const ssl = mysqlTlsOptions(this.config);
+    const verifyFull = effectiveTls(this.config).mode === 'verify-full';
+    const dialHost = this.config.host;
+    const dialPort = this.config.port ?? 3306;
+    // mysql2 checks a certificate's name against `host` and nothing else, so
+    // when the name to verify is not the address being dialled — an SSH tunnel's
+    // loopback end, or an explicit server name — `host` carries the NAME and the
+    // socket is opened to the real address by hand. that way the check happens
+    // inside the TLS handshake, before any credentials are sent
+    const verifyName = verifyFull ? tlsServerName(this.config) : undefined;
+    const nameIsHost = !!verifyName && isIP(verifyName) === 0;
+    const rerouted = nameIsHost && verifyName !== dialHost;
+
     this.pool = this.config.connectionString
-      ? mysql.createPool({ uri: this.config.connectionString, ...shared })
+      ? mysql.createPool({
+          // the URI's database wins over a `database` option beside it
+          uri: withDatabase(this.config.connectionString, this.config.database),
+          ...(this.config.tls && ssl ? { ssl } : {}),
+          ...shared,
+        })
       : mysql.createPool({
-          host: this.config.host,
-          port: this.config.port ?? 3306,
+          host: rerouted ? verifyName : dialHost,
+          port: dialPort,
           user: this.config.user,
           password: this.config.password,
           database: this.config.database,
-          ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+          ...(ssl ? { ssl: { ...ssl, verifyIdentity: nameIsHost } } : {}),
+          ...(rerouted
+            ? { stream: () => netConnect({ host: dialHost, port: dialPort }) }
+            : {}),
           ...shared,
         });
+
+    if (verifyFull) {
+      // mysql2 skips the name check altogether when `host` is an IP address.
+      // verify every new connection once more, against IP SANs too, and refuse
+      // to use one that fails. (for an IP this runs just after the handshake
+      // rather than inside it; the chain has already been verified by then.)
+      (this.pool as unknown as { pool: EventEmitter }).pool.on(
+        'connection',
+        (conn: { stream?: { getPeerCertificate?: () => PeerCertificate }; destroy(): void }) => {
+          const failure = verifyPeerIdentity(this.config, conn.stream?.getPeerCertificate?.());
+          if (failure) {
+            this.tlsFailure = failure;
+            conn.destroy();
+          }
+        },
+      );
+    }
     return this.pool;
+  }
+
+  /** a server whose certificate is not for the host we meant is never used */
+  private tlsFailure: string | null = null;
+
+  private assertTrusted(): void {
+    if (this.tlsFailure) throw new ConnectionError(this.tlsFailure);
   }
 
   async connect(): Promise<void> {
@@ -90,11 +151,13 @@ export class MysqlAdapter extends BaseSqlAdapter {
     try {
       const conn = await this.getPool().getConnection();
       try {
+        this.assertTrusted();
         await conn.ping();
       } finally {
         conn.release();
       }
     } catch (err) {
+      if (this.tlsFailure) throw new ConnectionError(this.tlsFailure);
       throw new ConnectionError(
         `Could not connect to MySQL: ${(err as Error).message}`,
       );
@@ -161,11 +224,18 @@ export class MysqlAdapter extends BaseSqlAdapter {
       );
       return normalizeMysqlResult(sql, rows, fields, started);
     } catch (err) {
+      // a connection dropped for failing identity verification surfaces here as
+      // a generic "connection closed": say what actually happened
+      this.assertTrusted();
       throw new QueryError((err as Error).message, { sql });
     }
   }
 
   /** borrow a pooled connection and drive its native transaction API */
+  protected override readOnlyBeginSql(): string {
+    return 'START TRANSACTION READ ONLY';
+  }
+
   protected override async acquireTransactionConnection(): Promise<SqlTransactionConnection> {
     const conn: PoolConnection = await this.getPool().getConnection();
     return {

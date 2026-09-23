@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { QueryColumn } from '@syncle/core';
@@ -38,6 +39,8 @@ export function RowEditorDialog({
   onOpenChange,
   onSaved,
 }: Props) {
+  const t = useTranslations('rowEditor');
+  const tc = useTranslations('common');
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -53,12 +56,12 @@ export function RowEditorDialog({
         { schema, table, values: payload },
         database,
       );
-      toast.success('Row inserted');
+      toast.success(t('rowInserted'));
       setValues({});
       onSaved();
       onOpenChange(false);
     } catch (err) {
-      toast.error('Insert failed', {
+      toast.error(t('insertFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -70,10 +73,8 @@ export function RowEditorDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Insert row into {table}</DialogTitle>
-          <DialogDescription>
-            Leave a field empty to use its default / NULL.
-          </DialogDescription>
+          <DialogTitle>{t('title', { table })}</DialogTitle>
+          <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 py-2">
           {columns.map((col) => (
@@ -98,11 +99,11 @@ export function RowEditorDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSave} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Insert
+            {t('insert')}
           </Button>
         </DialogFooter>
       </DialogContent>

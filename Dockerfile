@@ -25,6 +25,9 @@ RUN apt-get update \
 #    apps/api/prisma is copied first because @syncle/api's postinstall runs
 #    `prisma generate`, which needs the schema.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# dependency patches are applied BY `pnpm install`, so they have to be in the
+# image before it runs (a frozen lockfile that names a missing patch fails)
+COPY patches patches
 COPY packages/core/package.json packages/core/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
@@ -66,6 +69,11 @@ RUN pnpm --filter @syncle/api deploy --prod --legacy /out/api \
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
+# what this image is. passed by the release workflow (the tag it was built
+# from); a local build leaves it empty and the API falls back to its
+# package.json. see apps/api/src/common/version.ts
+ARG SYNCLE_VERSION=
+ENV SYNCLE_VERSION=$SYNCLE_VERSION
 WORKDIR /app
 
 # openssl for Prisma's engines; nothing else from the build toolchain.

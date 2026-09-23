@@ -11,47 +11,92 @@
  * logic, now behind the {@link CdcProvider} interface.
  */
 import { Injectable, Logger } from '@nestjs/common';
-import type {
-  CdcOperation,
-  CdcReadiness,
-  CdcReadinessDTO,
-  ConnectionConfig,
-  DatabaseEngine,
+import {
+  BadRequestError,
+  sourceColumnFor,
+  type CdcOperation,
+  type CdcReadiness,
+  type CdcReadinessDTO,
+  type ConnectionConfig,
+  type DatabaseEngine,
 } from '@syncle/core';
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
+import { nodeTlsOptions, withDatabase } from '@syncle/core/adapters';
 import { AdapterPoolService } from '../../../connections/adapter-pool.service';
+import {
+  clientIsDrained,
+  identifyingColumns,
+  lsnAfter,
+  lsnForClient,
+  normalizeLsn,
+  parsePgCursor,
+  present,
+  reservesOldRow,
+  rowMoved,
+  sameValue,
+  withUnchanged,
+} from './postgres-lsn';
+import { PgSharedSlotService } from './postgres-shared-slot';
 import type { ResolvedBridge } from '../../bridges.types';
 import {
   backoffMs,
   delay,
   type CdcChange,
   type CdcProvider,
+  type CdcSourceHold,
   type CdcStreamContext,
   type CdcStreamHandle,
 } from '../cdc-provider';
 
-/** compare Postgres LSNs ("H/L" hex). true if `a` is strictly after `b` */
-export function lsnAfter(a: string, b: string | null): boolean {
-  if (!b) return true;
-  try {
-    const big = (l: string) => {
-      const [h, lo] = l.split('/');
-      if (!h || !lo) throw new Error('invalid LSN');
-      return (BigInt('0x' + h) << 32n) | BigInt('0x' + lo);
-    };
-    return big(a) > big(b);
-  } catch {
-    // be conservative: treat a parse failure as "not after" to avoid dupes
-    return false;
-  }
+export {
+  formatLsn,
+  lsnAfter,
+  lsnForClient,
+  normalizeLsn,
+  parsePgCursor,
+  present,
+  sameValue,
+  withUnchanged,
+  type PgPosition,
+} from './postgres-lsn';
+
+/** one decoded pgoutput message, as far as it is looked at */
+interface PgMessage {
+  tag: string;
+  commitLsn?: string;
+  commitEndLsn?: string;
+  relation?: { name: string; schema: string; keyColumns?: string[] };
+  relations?: Array<{ name: string; schema: string } | undefined>;
+  new?: Record<string, unknown>;
+  old?: Record<string, unknown> | null;
+  key?: Record<string, unknown> | null;
+}
+
+/** what identifies a row in the table's change messages */
+export interface ReplicaIdentity {
+  /** 'd' default (primary key) · 'i' an index · 'f' the whole row · 'n' nothing */
+  kind: 'd' | 'i' | 'f' | 'n';
+  /** columns an UPDATE/DELETE's old-row image carries; empty = it carries none */
+  columns: string[];
+  partitioned: boolean;
+  serverVersion: number;
 }
 
 @Injectable()
 export class PostgresCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'postgres';
+  readonly capturesTruncate = true;
   private readonly logger = new Logger('BridgeCdc:pg');
 
-  constructor(private readonly pool: AdapterPoolService) {}
+  constructor(
+    private readonly pool: AdapterPoolService,
+    private readonly shared: PgSharedSlotService,
+  ) {}
+
+  /** does this bridge read through the slot it shares with the others on its connection? */
+  private isShared(bridge: ResolvedBridge): boolean {
+    return bridge.trigger.kind === 'cdc' && bridge.trigger.slot === 'shared';
+  }
 
   cursorAfter(a: string, b: string | null): boolean {
     return lsnAfter(a, b);
@@ -88,7 +133,91 @@ export class PostgresCdcProvider implements CdcProvider {
           `Grant replication to the connection's role:  ALTER ROLE "${conn.user ?? 'your_user'}" REPLICATION;`,
         );
       }
-      return { engine: 'postgres', supported: true, ready: logical && canReplicate, checks, instructions };
+      // table-level facts. they do not block readiness on their own — what a
+      // bridge may capture depends on its operations, which `provision` checks —
+      // but whoever is building the bridge should see them now, not at start
+      try {
+        const identity = await this.replicaIdentity(dto.connectionId, dto.database, dto.schema, dto.table);
+        const described =
+          identity.kind === 'f'
+            ? 'the whole row (REPLICA IDENTITY FULL)'
+            : identity.columns.length
+              ? identity.columns.join(', ')
+              : 'none';
+        checks.push({
+          label: 'table has a replica identity',
+          ok: identity.columns.length > 0 || identity.kind === 'f',
+          detail: `identifies rows by: ${described}`,
+        });
+        if (identity.columns.length === 0 && identity.kind !== 'f') {
+          instructions.push(
+            'This table has no primary key and no replica identity, so only INSERTs can be captured from it. ' +
+              'To capture updates and deletes, add a primary key, or run:  ' +
+              `ALTER TABLE ${this.qualified(dto.schema, dto.table)} REPLICA IDENTITY FULL;`,
+          );
+        }
+        if (identity.partitioned && identity.serverVersion < 130000) {
+          checks.push({
+            label: 'partitioned table (needs PostgreSQL 13+)',
+            ok: false,
+            detail: 'changes are reported under the partitions’ names on this server version',
+          });
+          instructions.push(
+            'This is a partitioned table on PostgreSQL 12 or older, where a publication cannot report changes under the parent’s name. Bridge each partition separately, or upgrade to 13+.',
+          );
+        }
+      } catch {
+        /* the table may not exist yet while the bridge is being drafted */
+      }
+      const capacity = await this.capacity(dto).catch(() => null);
+      let room = true;
+      const advisories: string[] = [];
+      if (capacity) {
+        // a slot and a walsender each. a bridge that already has its slot needs
+        // no new one, so it is not failed by a server that is otherwise full
+        const slotOk = capacity.ownsSlot || capacity.slotsUsed < capacity.slotsMax;
+        // a slot that is being read already has its sender: a bridge that joins
+        // a shared slot somebody is reading needs no other
+        const senderOk = capacity.slotActive || capacity.sendersUsed < capacity.sendersMax;
+        room = slotOk && senderOk;
+        checks.push({
+          label: 'a free replication slot',
+          ok: slotOk,
+          detail: `${capacity.slotsUsed} of ${capacity.slotsMax} in use${capacity.ownsSlot ? (dto.slot === 'shared' ? ' (one of them is the shared slot this bridge reads through)' : ' (one of them is this bridge’s)') : ''}`,
+        });
+        checks.push({
+          label: 'a free WAL sender',
+          ok: senderOk,
+          detail: `${capacity.sendersUsed} of ${capacity.sendersMax} in use`,
+        });
+        if (!slotOk) {
+          instructions.push(
+            `Every replication slot on this server is taken (max_replication_slots = ${capacity.slotsMax}), and each CDC bridge needs one. ` +
+              'Raise max_replication_slots (needs a restart), or free one: delete a bridge you no longer need, or drop a slot nothing reads — ' +
+              `SELECT slot_name, active FROM pg_replication_slots;`,
+          );
+        }
+        if (!senderOk) {
+          instructions.push(
+            `Every WAL sender on this server is busy (max_wal_senders = ${capacity.sendersMax}). Raise max_wal_senders (needs a restart) or stop another replication client.`,
+          );
+        }
+        if (capacity.keepLimitMb === -1) {
+          advisories.push(
+            'Nothing limits how much WAL a replication slot can pin on this server (max_slot_wal_keep_size = -1). ' +
+              'A bridge that is paused — or a Syncle that is switched off — keeps its slot, and the server keeps every change since, until the disk is full. ' +
+              'Setting max_slot_wal_keep_size (for example 10GB) makes the server give up the slot instead; the bridge then needs a fresh start, but the database stays up.',
+          );
+        }
+      }
+      return {
+        engine: 'postgres',
+        supported: true,
+        ready: logical && canReplicate && room,
+        checks,
+        instructions,
+        ...(advisories.length ? { advisories } : {}),
+      };
     } catch (err) {
       return {
         engine: 'postgres',
@@ -98,6 +227,125 @@ export class PostgresCdcProvider implements CdcProvider {
         instructions: ['Could not query the database to check readiness.'],
       };
     }
+  }
+
+  /** how many replication slots and WAL senders the server has left */
+  private async capacity(dto: CdcReadinessDTO): Promise<{
+    slotsMax: number;
+    slotsUsed: number;
+    sendersMax: number;
+    sendersUsed: number;
+    ownsSlot: boolean;
+    /** …and somebody is reading it right now: its walsender is one of the ones counted as busy */
+    slotActive: boolean;
+    /** max_slot_wal_keep_size in MB; -1 = unlimited; null = the server predates it (< 13) */
+    keepLimitMb: number | null;
+  }> {
+    // a shared bridge's slot is the one it shares: there is one already, or this
+    // bridge will be the one to make it
+    const slot =
+      dto.slot === 'shared'
+        ? this.shared.slotName(this.shared.keyOf({ connectionId: dto.connectionId, database: dto.database }))
+        : dto.bridgeId
+          ? this.slotName(dto.bridgeId)
+          : '';
+    const res = await this.pool.withAdapter(dto.connectionId, dto.database, (a) =>
+      a.query(
+        `select current_setting('max_replication_slots')::int as slots_max,
+                (select count(*) from pg_replication_slots)::int as slots_used,
+                current_setting('max_wal_senders')::int as senders_max,
+                (select count(*) from pg_stat_replication)::int as senders_used,
+                exists(select 1 from pg_replication_slots where slot_name = $1) as owns_slot,
+                exists(select 1 from pg_replication_slots where slot_name = $1 and active) as slot_active,
+                (select setting from pg_settings where name = 'max_slot_wal_keep_size') as keep_limit`,
+        [slot],
+      ),
+    );
+    const row = (res.rows[0] ?? {}) as Record<string, unknown>;
+    const keep = row.keep_limit;
+    return {
+      slotsMax: Number(row.slots_max ?? 0),
+      slotsUsed: Number(row.slots_used ?? 0),
+      sendersMax: Number(row.senders_max ?? 0),
+      sendersUsed: Number(row.senders_used ?? 0),
+      ownsSlot: row.owns_slot === true,
+      slotActive: row.slot_active === true,
+      keepLimitMb: keep === null || keep === undefined ? null : Number(keep),
+    };
+  }
+
+  /* ----- what the bridge holds on the source ----- */
+
+  async inspect(
+    bridgeId: string,
+    bridge: ResolvedBridge,
+    _conn?: ConnectionConfig,
+    cursor: string | null = null,
+  ): Promise<CdcSourceHold | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    if (this.isShared(bridge)) return this.shared.inspect(bridgeId, src, cursor);
+    const name = this.slotName(bridgeId);
+    return this.pool.withAdapter(src.connectionId, src.database, async (a) => {
+      const server = await a.query(
+        `select current_setting('server_version_num')::int as version,
+                (select setting from pg_settings where name = 'max_slot_wal_keep_size') as keep_limit`,
+      );
+      const info = (server.rows[0] ?? {}) as { version?: number; keep_limit?: string | null };
+      // wal_status / safe_wal_size arrived with max_slot_wal_keep_size, in 13
+      const modern = Number(info.version ?? 0) >= 130000;
+      const res = await a.query(
+        `select s.active,
+                pg_wal_lsn_diff(
+                  case when pg_is_in_recovery() then pg_last_wal_receive_lsn() else pg_current_wal_lsn() end,
+                  s.restart_lsn
+                )::text as retained
+                ${modern ? ', s.wal_status' : ''}
+         from pg_replication_slots s
+         where s.slot_name = $1`,
+        [name],
+      );
+      const limitMb = info.keep_limit == null ? -1 : Number(info.keep_limit);
+      const limitBytes = limitMb >= 0 ? limitMb * 1024 * 1024 : null;
+      const row = res.rows[0] as { active?: boolean; retained?: string | null; wal_status?: string | null } | undefined;
+      if (!row) {
+        return {
+          engine: 'postgres',
+          kind: 'replication-slot',
+          name,
+          exists: false,
+          active: null,
+          retainedBytes: null,
+          limitBytes,
+          status: 'lost',
+          detail: `replication slot "${name}" does not exist on the server`,
+        };
+      }
+      // restart_lsn is NULL once the server has invalidated the slot
+      const retained = row.retained == null ? null : Math.max(0, Number(row.retained));
+      const status: CdcSourceHold['status'] =
+        row.wal_status === 'lost' || (modern && row.retained == null)
+          ? 'lost'
+          : row.wal_status === 'unreserved'
+            ? 'at-risk'
+            : 'ok';
+      return {
+        engine: 'postgres',
+        kind: 'replication-slot',
+        name,
+        exists: true,
+        active: row.active === true,
+        retainedBytes: retained,
+        limitBytes,
+        status,
+        detail:
+          status === 'lost'
+            ? `the server invalidated replication slot "${name}": it needed more WAL than max_slot_wal_keep_size allows`
+            : status === 'at-risk'
+              ? `replication slot "${name}" is past max_slot_wal_keep_size; the server will invalidate it at the next checkpoint`
+              : undefined,
+      };
+    });
   }
 
   /* ----- provisioning ----- */
@@ -112,13 +360,147 @@ export class PostgresCdcProvider implements CdcProvider {
     return `"${id.replace(/"/g, '""')}"`;
   }
 
+  private qualified(schema: string | undefined, table: string): string {
+    return `${this.quoteIdent(schema || 'public')}.${this.quoteIdent(table)}`;
+  }
+
+  /** how the table identifies a row in its UPDATE/DELETE messages */
+  private async replicaIdentity(
+    connectionId: string,
+    database: string | undefined,
+    schema: string | undefined,
+    table: string,
+  ): Promise<ReplicaIdentity> {
+    return this.pool.withAdapter(connectionId, database, async (a) => {
+      const res = await a.query(
+        `select c.relreplident as kind, c.relkind,
+                current_setting('server_version_num')::int as version,
+                coalesce((
+                  -- ::text: the driver does not parse a name[] and hands back the string '{id}'
+                  select array_agg(att.attname::text order by k.ord)
+                  from pg_index i
+                  cross join lateral unnest(i.indkey) with ordinality as k(attnum, ord)
+                  join pg_attribute att on att.attrelid = i.indrelid and att.attnum = k.attnum
+                  where i.indrelid = c.oid
+                    and case c.relreplident when 'd' then i.indisprimary
+                                            when 'i' then i.indisreplident
+                                            else false end
+                ), '{}'::text[]) as columns
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = $1 and c.relname = $2`,
+        [schema || 'public', table],
+      );
+      const row = res.rows[0] as
+        | { kind?: string; relkind?: string; version?: number; columns?: string[] }
+        | undefined;
+      if (!row) throw new Error(`Table ${this.qualified(schema, table)} was not found.`);
+      return {
+        kind: (row.kind as ReplicaIdentity['kind']) ?? 'd',
+        columns: Array.isArray(row.columns) ? row.columns : [],
+        partitioned: row.relkind === 'p',
+        serverVersion: Number(row.version ?? 0),
+      };
+    });
+  }
+
+  /**
+   * refuse, BEFORE anything is created on the source, a bridge this table
+   * cannot serve. both refusals are about harm that would otherwise be silent:
+   *
+   * 1. publishing UPDATE/DELETE for a table with no replica identity makes
+   *    those statements FAIL at the source ("cannot update table … because it
+   *    does not have a replica identity and publishes updates"). creating the
+   *    publication would break the application that owns the database.
+   * 2. a DELETE message carries only the replica-identity columns. a target
+   *    keyed on any other column is handed a delete with no key in it, which
+   *    matches nothing: the row stays at the destination for ever, no error.
+   */
+  private assertServable(bridge: ResolvedBridge, identity: ReplicaIdentity): void {
+    if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') return;
+    const table = this.qualified(bridge.source.schema, bridge.source.table);
+    const ops = new Set<CdcOperation>(bridge.trigger.operations);
+    const full = identity.kind === 'f';
+
+    if ((ops.has('update') || ops.has('delete')) && !full && identity.columns.length === 0) {
+      throw new BadRequestError(
+        `${table} has no primary key and no replica identity, so PostgreSQL can only report INSERTs for it — ` +
+          'and publishing updates or deletes for such a table would make UPDATE and DELETE on it fail in your database. ' +
+          'Either capture inserts only, add a primary key, or run:  ' +
+          `ALTER TABLE ${table} REPLICA IDENTITY FULL;`,
+      );
+    }
+    if (identity.partitioned && identity.serverVersion < 130000) {
+      throw new BadRequestError(
+        `${table} is partitioned, and PostgreSQL ${Math.floor(identity.serverVersion / 10000)} reports its changes under the partitions' names. ` +
+          'Bridge each partition separately, or upgrade the server to 13+.',
+      );
+    }
+    if (!ops.has('delete') || full || bridge.destination.kind !== 'database') return;
+
+    const carried = new Set(identity.columns);
+    for (const target of bridge.destination.targets) {
+      const missing = target.keyColumns
+        .map((key) => sourceColumnFor(key, target.mapping))
+        .filter((column) => !carried.has(column));
+      if (missing.length > 0) {
+        throw new BadRequestError(
+          `Deletes cannot reach ${target.table}: it is keyed on ${target.keyColumns.join(', ')}, ` +
+            `but a DELETE on ${table} only carries ${identity.columns.join(', ')} ` +
+            `(${missing.join(', ')} would be missing). Key the target on ${identity.columns.join(', ')}, ` +
+            'stop capturing deletes, or have the table send whole rows:  ' +
+            `ALTER TABLE ${table} REPLICA IDENTITY FULL;`,
+        );
+      }
+    }
+  }
+
   async provision(bridgeId: string, bridge: ResolvedBridge): Promise<void> {
-    if (bridge.source.kind !== 'table') return;
+    if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') return;
     const src = bridge.source;
     const schema = src.schema || 'public';
     const pub = this.pubName(bridgeId);
     const slot = this.slotName(bridgeId);
     const target = `${this.quoteIdent(schema)}.${this.quoteIdent(src.table)}`;
+
+    const identity = await this.replicaIdentity(src.connectionId, src.database, src.schema, src.table);
+    this.assertServable(bridge, identity);
+    if (this.isShared(bridge)) {
+      // a slot of its own that an earlier setting of this bridge left behind
+      // would go on pinning WAL with nobody reading it
+      await this.dropOwn(bridgeId, bridge).catch((err) =>
+        this.logger.warn(`could not remove the bridge's own slot while joining the shared one: ${(err as Error).message}`),
+      );
+      await this.shared.join(bridgeId, bridge, identity.serverVersion);
+      return;
+    }
+    // …and the other way round: no longer a member of the shared one
+    if (await this.shared.isMember(bridgeId)) {
+      await this.shared.leave(bridgeId, src).catch((err) =>
+        this.logger.warn(`could not leave the shared replication slot: ${(err as Error).message}`),
+      );
+    }
+
+    // publish ONLY what the bridge captures. a publication that publishes
+    // updates imposes the replica-identity requirement on the table even if
+    // nobody reads them, so "insert only" has to mean insert only on the server
+    // …with one exception: truncate is ALWAYS published. it costs the table
+    // nothing (no replica identity is needed for it), and a bridge that is not
+    // told about a TRUNCATE cannot even say that its destination has stopped
+    // matching — whether it is APPLIED is still the bridge's own choice
+    const publish = (['insert', 'update', 'delete', 'truncate'] as const)
+      .filter(
+        (op) =>
+          op === 'truncate' ||
+          (bridge.trigger.kind === 'cdc' && bridge.trigger.operations.includes(op)),
+      )
+      .join(', ');
+    // a partitioned table's changes are logged against its PARTITIONS; without
+    // this they arrive under the partition's name and are discarded as another
+    // table's — a partitioned source streamed nothing at all. harmless otherwise
+    const options =
+      `publish = '${publish}'` +
+      (identity.serverVersion >= 130000 ? ', publish_via_partition_root = true' : '');
 
     await this.pool.withAdapter(src.connectionId, src.database, async (a) => {
       // check the publication exists and points at the correct table. if the
@@ -135,10 +517,17 @@ export class PostgresCdcProvider implements CdcProvider {
         | { schemaname?: string; tablename?: string }
         | undefined;
       if (pubInfo.rows.length === 0) {
-        await a.query(`CREATE PUBLICATION ${this.quoteIdent(pub)} FOR TABLE ${target}`);
-      } else if (existing?.schemaname !== schema || existing?.tablename !== src.table) {
-        await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET TABLE ${target}`);
-        this.logger.log(`Updated CDC publication "${pub}" to target table "${schema}"."${src.table}"`);
+        await a.query(
+          `CREATE PUBLICATION ${this.quoteIdent(pub)} FOR TABLE ${target} WITH (${options})`,
+        );
+      } else {
+        if (existing?.schemaname !== schema || existing?.tablename !== src.table) {
+          await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET TABLE ${target}`);
+          this.logger.log(`Updated CDC publication "${pub}" to target table "${schema}"."${src.table}"`);
+        }
+        // publications made before this existed publish everything and never
+        // set the partition option; and the bridge's operations may have changed
+        await a.query(`ALTER PUBLICATION ${this.quoteIdent(pub)} SET (${options})`);
       }
 
       const hasSlot = await a.query(
@@ -152,6 +541,15 @@ export class PostgresCdcProvider implements CdcProvider {
   }
 
   async deprovision(bridgeId: string, bridge: ResolvedBridge): Promise<void> {
+    if (bridge.source.kind !== 'table') return;
+    // whichever of the two this bridge has used: a setting that was changed and
+    // never started again leaves the other behind
+    await this.shared.leave(bridgeId, bridge.source);
+    await this.dropOwn(bridgeId, bridge);
+  }
+
+  /** drop the slot and the publication a bridge has for itself */
+  private async dropOwn(bridgeId: string, bridge: ResolvedBridge): Promise<void> {
     if (bridge.source.kind !== 'table') return;
     const slot = this.slotName(bridgeId);
     const pub = this.pubName(bridgeId);
@@ -177,25 +575,42 @@ export class PostgresCdcProvider implements CdcProvider {
           else lastError = message;
         }
       }
-      if (!dropped) {
-        this.logger.error(
-          `Could not drop replication slot "${slot}" — it will keep pinning WAL on the source until dropped manually: ${lastError}`,
-        );
-      }
+      // the publication costs the source nothing; the slot is what matters
       await a.query(`DROP PUBLICATION IF EXISTS ${this.quoteIdent(pub)}`).catch(() => undefined);
+      if (!dropped) {
+        // NOT swallowed: a slot nothing reads pins WAL until the disk is full,
+        // and once the bridge is gone this is the last anyone hears of its name.
+        // the caller queues it and tries again
+        throw new Error(`could not drop replication slot "${slot}": ${lastError}`);
+      }
     });
   }
 
   /* ----- the stream ----- */
+
+  /**
+   * nothing to take: {@link provision} created the slot, and a slot's position
+   * IS the moment it was created (the server waits for the transactions open at
+   * that moment to end, so none of them straddles it). a stream opened with no
+   * cursor starts there, however much later it is opened
+   */
+  async capturePosition(bridgeId?: string, bridge?: ResolvedBridge): Promise<string | null> {
+    // a shared slot was there before this bridge: its place is the one it took
+    // when it joined, behind the barrier (see postgres-shared-slot.ts)
+    if (bridgeId && bridge && this.isShared(bridge)) return this.shared.position(bridgeId);
+    return null;
+  }
 
   async startStream(ctx: CdcStreamContext): Promise<CdcStreamHandle> {
     const { bridgeId, bridge, conn, handlers } = ctx;
     if (bridge.source.kind !== 'table' || bridge.trigger.kind !== 'cdc') {
       throw new Error('Postgres CDC requires a table source and cdc trigger.');
     }
+    if (this.isShared(bridge)) return this.shared.open(ctx, (c, database) => this.clientConfig(c, database));
     const src = bridge.source;
     const ops = new Set<CdcOperation>(bridge.trigger.operations);
     const schema = src.schema || 'public';
+    const identifying = identifyingColumns(bridge.destination, ctx.primaryKey);
 
     const plugin = new PgoutputPlugin({
       protoVersion: 1,
@@ -208,7 +623,21 @@ export class PostgresCdcProvider implements CdcProvider {
     // highest LSN the orchestrator has durably checkpointed (seeded from the
     // resume cursor). this is the ONLY position we ever confirm to the server,
     // so the slot can never advance past a change that isn't persisted yet
-    let ackedLsn: string | null = ctx.fromCursor;
+    let ackedLsn: string | null = await this.confirmedPosition(
+      bridgeId,
+      src,
+      ctx.fromCursor ? (parsePgCursor(ctx.fromCursor)?.ack ?? null) : null,
+    );
+    // the transaction being decoded: its commit LSN (from BEGIN), and the last
+    // change position handed out with how many changes have shared it. every
+    // change's cursor is derived from these
+    let txn: { commit: string; lsn: string; shared: number } | null = null;
+    // what has been handed to the orchestrator, and what it has confirmed back:
+    // when the second has caught up with the first (and no transaction is being
+    // decoded), NOTHING of this bridge's is in flight — see the keepalive below
+    let handed: string | null = null;
+    let confirmedCursor: string | null = ctx.fromCursor;
+    let handling = 0;
     // surface each distinct failure ONCE (a slot already in use, bad auth, …)
     // instead of spamming onError on every backoff retry
     let lastReported: string | null = null;
@@ -219,6 +648,8 @@ export class PostgresCdcProvider implements CdcProvider {
     };
 
     const makeService = (): LogicalReplicationService => {
+      // a reconnect starts over at a transaction's BEGIN
+      txn = null;
       const service = new LogicalReplicationService(this.clientConfig(conn, src.database), {
         // manual acknowledge: auto-ack confirms an LSN on receipt, so a crash
         // between receipt and the orchestrator persisting the cursor would
@@ -229,55 +660,164 @@ export class PostgresCdcProvider implements CdcProvider {
         flowControl: { enabled: true }, // backpressure, await each delivery
       });
 
-      // messages we don't deliver are deterministically skippable (begin/
-      // commit/relation, disabled ops, other tables), and flow control has
-      // fully processed everything before them, so confirming their LSN is
-      // safe and keeps the slot from pinning WAL on a mostly-filtered stream
-      const ackSkipped = (lsn: string): void => {
-        ackedLsn = lsn;
-        void service.acknowledge(lsn).catch(() => undefined);
+      // messages we don't deliver (begin/commit/relation, disabled ops, other
+      // tables) still have to move the slot along, or a mostly-skipped stream
+      // pins WAL on the source. but their LSN must NOT be confirmed from here.
+      // flow control only guarantees the rows before them were HANDED to the
+      // orchestrator — which batches, so those rows are typically still in
+      // memory. confirming a COMMIT's LSN at this point put the slot's restart
+      // position past its own transaction's undelivered rows: a failed delivery
+      // or a crash then had nothing left to re-read. the orchestrator is told
+      // instead, and confirms the position once everything before it is durable
+      const skip = (lsn: string): Promise<void> => {
+        if (!handlers.onSkip) return Promise.resolve();
+        handed = lsn;
+        return handlers.onSkip(lsn);
+      };
+      const hand = (c: CdcChange): Promise<void> => {
+        handed = c.cursor;
+        return handlers.onChange(c);
+      };
+
+      const decode = async (lsn: string, msg: PgMessage): Promise<void> => {
+
+          if (msg.tag === 'begin') {
+            txn = msg.commitLsn ? { commit: normalizeLsn(msg.commitLsn), lsn: '', shared: 0 } : null;
+            return;
+          }
+          if (msg.tag === 'commit') {
+            const commit = msg.commitLsn ? normalizeLsn(msg.commitLsn) : txn?.commit;
+            txn = null;
+            // the end of the transaction: the one position that, once everything
+            // before it is durable, may be confirmed to the server
+            if (commit) await skip(`${commit}#c:${normalizeLsn(msg.commitEndLsn ?? lsn)}`);
+            return;
+          }
+          // the position of the change being handled; each call is a new one.
+          // the bare `lsn` is only a fallback for a change that arrives outside
+          // a transaction, which pgoutput never sends
+          const at = (): string => {
+            if (!txn) return lsn;
+            txn.shared = txn.lsn === lsn ? txn.shared + 1 : 0;
+            txn.lsn = lsn;
+            return `${txn.commit}#${lsn}.${txn.shared}`;
+          };
+
+          if (msg.tag === 'truncate') {
+            const ours = (msg.relations ?? []).some(
+              (r) => r?.name === src.table && r?.schema === schema,
+            );
+            if (!ours) return void (await skip(at()));
+            if (ops.has('truncate')) {
+              await hand({ op: 'truncate', row: {}, cursor: at() });
+            } else if (handlers.onNotice) {
+              // emptying someone's destination is not something to do on a
+              // default. but a destination that has silently stopped matching
+              // its source is not acceptable either: say so, on the timeline
+              const noticed = at();
+              handed = noticed;
+              await handlers.onNotice(
+                `${schema}.${src.table} was TRUNCATEd at the source. That was not applied to the destination, ` +
+                  'which still holds the rows: this bridge does not capture truncates. ' +
+                  'Add "truncate" to its operations to mirror them.',
+                noticed,
+              );
+            } else {
+              await skip(at());
+            }
+            return;
+          }
+
+          // relation / type / origin / message: descriptions of what follows,
+          // tagged with the NEXT change's position. they are not positions of
+          // their own — treating one as passed is treating that change as done
+          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') return;
+
+          if (!ops.has(msg.tag as CdcOperation)) {
+            await skip(at());
+            return;
+          }
+          if (!msg.relation || msg.relation.name !== src.table || msg.relation.schema !== schema) {
+            await skip(at());
+            return;
+          }
+          if (msg.tag === 'delete') {
+            await hand({ op: 'delete', row: present(msg.old ?? msg.key ?? {}), cursor: at() });
+            return;
+          }
+
+          // an UPDATE that changes the row's key is the row MOVING. the old-row
+          // image is there exactly when that can have happened: `key` when the
+          // identity columns changed, `old` under REPLICA IDENTITY FULL. writing
+          // the new row alone left the old one at the destination for ever
+          let keyChanged = false;
+          if (msg.tag === 'update') {
+            const before = msg.key ?? msg.old;
+            const identityColumns = msg.relation.keyColumns ?? [];
+            if (before && reservesOldRow(msg, identityColumns, sameValue)) {
+              const cursor = at(); // taken either way: see reservesOldRow
+              // (not "did an identity column change": under REPLICA IDENTITY FULL
+              // every column is one, and every update would be a move — see rowMoved)
+              if (rowMoved(msg, identityColumns, identifying, sameValue)) {
+                await hand({ op: 'delete', row: present(before), cursor });
+                keyChanged = true;
+              }
+            }
+          }
+
+          const change: CdcChange = {
+            op: msg.tag as CdcOperation,
+            row: withUnchanged(msg.new ?? {}),
+            cursor: at(),
+            ...(keyChanged ? { keyChanged } : {}),
+          };
+          await hand(change);
       };
 
       service.on(
         'data',
-        async (
-          lsn: string,
-          msg: {
-            tag: string;
-            relation?: { name: string; schema: string };
-            new?: Record<string, unknown>;
-            old?: Record<string, unknown>;
-            key?: Record<string, unknown>;
-          },
-        ) => {
+        async (lsn: string, msg: PgMessage) => {
           // data is flowing, so the subscription is healthy: reset the backoff
           attempt = 0;
           lastReported = null;
-          if (msg.tag !== 'insert' && msg.tag !== 'update' && msg.tag !== 'delete') {
-            ackSkipped(lsn);
-            return;
+          handling++;
+          try {
+            await decode(lsn, msg);
+          } finally {
+            handling--;
           }
-          if (!ops.has(msg.tag as CdcOperation)) {
-            ackSkipped(lsn);
-            return;
-          }
-          if (!msg.relation || msg.relation.name !== src.table || msg.relation.schema !== schema) {
-            ackSkipped(lsn);
-            return;
-          }
-          const row = msg.tag === 'delete' ? (msg.old ?? msg.key ?? {}) : (msg.new ?? {});
-          const change: CdcChange = { op: msg.tag as CdcOperation, row, cursor: lsn };
-          await handlers.onChange(change);
         },
       );
 
       // with the ack timer off, keepalive replies are our only standby-status
       // traffic. reply with the last PERSISTED position (the server ignores
       // stale ones) or wal_sender_timeout would kill an idle stream
-      service.on('heartbeat', (_lsn: string, _ts: number, shouldRespond: boolean) => {
-        if (shouldRespond && ackedLsn) {
-          void service.acknowledge(ackedLsn).catch(() => undefined);
+      //
+      // …and when NOTHING of this bridge's is in flight, with the position the
+      // keepalive itself reports: how far the server has decoded. PostgreSQL 15+
+      // no longer sends transactions that touch nothing published, so a bridge
+      // on a quiet table in a busy database is sent nothing but keepalives —
+      // and, answering them with its last delivery, never let the slot move:
+      // the server kept every byte of WAL the REST of the database wrote, for as
+      // long as the bridge ran (measured: 20 MB behind after 40 transactions on
+      // another table). everything that commits before that position has been
+      // sent by the time the keepalive is, so with nothing received and not yet
+      // confirmed, the position is safe to confirm — which is what PostgreSQL's
+      // own subscribers answer. a transaction still open then commits AFTER it,
+      // and is sent whole
+      service.on('heartbeat', (lsn: string, _ts: number, shouldRespond: boolean) => {
+        const idle =
+          handling === 0 &&
+          txn === null &&
+          clientIsDrained(service) &&
+          (handed === null || (confirmedCursor !== null && !lsnAfter(handed, confirmedCursor)));
+        if (idle) {
+          const reported = normalizeLsn(lsn);
+          if (parsePgCursor(reported) && (!ackedLsn || lsnAfter(reported, ackedLsn))) ackedLsn = reported;
         }
+        const at = ackedLsn && lsnForClient(ackedLsn);
+        // (an idle position is worth telling the server unasked: it is what lets it discard WAL)
+        if ((shouldRespond || idle) && at) void service.acknowledge(at).catch(() => undefined);
       });
 
       service.on('error', (err: Error) => report(err));
@@ -312,8 +852,18 @@ export class PostgresCdcProvider implements CdcProvider {
       // called by the orchestrator once the cursor for this change is durably
       // persisted: only now may the slot's confirmed LSN move past the change
       ack: async (cursor: string) => {
-        ackedLsn = cursor;
-        await current?.acknowledge(cursor).catch(() => undefined);
+        // a position INSIDE a transaction confirms nothing: the server can only
+        // be told "everything up to here is safe" at a transaction's end. after
+        // a restart it re-sends the unfinished transaction whole, and the
+        // watermark drops the changes already delivered
+        if (!confirmedCursor || lsnAfter(cursor, confirmedCursor)) confirmedCursor = cursor;
+        const confirm = parsePgCursor(cursor)?.ack;
+        const at = confirm && lsnForClient(confirm);
+        if (!confirm || !at) return;
+        // (a keepalive may have carried the position further than a transaction's end already)
+        if (ackedLsn && !lsnAfter(confirm, ackedLsn)) return;
+        ackedLsn = confirm;
+        await current?.acknowledge(at).catch(() => undefined);
       },
       stop: async () => {
         stopped = true;
@@ -322,20 +872,47 @@ export class PostgresCdcProvider implements CdcProvider {
     };
   }
 
+  /**
+   * what keepalives are answered with until the first transaction is confirmed:
+   * the further of the saved cursor and what the slot already holds. answering
+   * with the slot's own position changes nothing on the server, but NOT
+   * answering gets an idle stream disconnected every wal_sender_timeout — a
+   * bridge started on a quiet table, or resumed in the middle of a transaction,
+   * had nothing to answer with
+   */
+  private async confirmedPosition(
+    bridgeId: string,
+    src: { connectionId: string; database?: string },
+    fromCursor: string | null,
+  ): Promise<string | null> {
+    let slot: string | null = null;
+    try {
+      const res = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+        a.query(
+          `select confirmed_flush_lsn::text as lsn from pg_replication_slots where slot_name = $1`,
+          [this.slotName(bridgeId)],
+        ),
+      );
+      const value = res.rows[0]?.lsn;
+      slot = typeof value === 'string' && value ? value : null;
+    } catch {
+      slot = null; // best effort: the saved cursor alone is what it used to be
+    }
+    if (!slot || !fromCursor) return slot ?? fromCursor;
+    return lsnAfter(slot, fromCursor) ? slot : fromCursor;
+  }
+
   private clientConfig(conn: ConnectionConfig, database?: string) {
     if (conn.connectionString) {
       // logical replication is per-database: the stream must open against the
       // bridge's source database, not whatever database the saved string names
-      if (database) {
-        try {
-          const u = new URL(conn.connectionString);
-          u.pathname = `/${database}`;
-          return { connectionString: u.toString() } as Record<string, unknown>;
-        } catch {
-          /* unparseable string, fall back to using it verbatim */
-        }
-      }
-      return { connectionString: conn.connectionString } as Record<string, unknown>;
+      const ssl = conn.tls ? nodeTlsOptions(conn) : undefined;
+      return {
+        connectionString: withDatabase(conn.connectionString, database),
+        // a TLS setting chosen beside the string says how far to trust the
+        // certificate, exactly as it does for the ordinary connection
+        ...(ssl ? { ssl } : {}),
+      } as Record<string, unknown>;
     }
     return {
       host: conn.host,
@@ -343,7 +920,10 @@ export class PostgresCdcProvider implements CdcProvider {
       user: conn.user,
       password: conn.password,
       database: database || conn.database,
-      ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+      // the same trust decision as the ordinary connection — this one used to
+      // hard-code `rejectUnauthorized: false`, so the change stream was never
+      // verified even where the connection it belongs to was
+      ssl: nodeTlsOptions(conn),
     } as Record<string, unknown>;
   }
 }

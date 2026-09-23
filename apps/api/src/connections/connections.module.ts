@@ -8,6 +8,9 @@ import { SshTunnelService } from './ssh-tunnel.service';
 @Module({
   controllers: [ConnectionsController],
   providers: [ConnectionStoreService, AdapterPoolService, SshTunnelService],
-  exports: [ConnectionStoreService, AdapterPoolService],
+  // SshTunnelService: a change stream opens its own connections, so it needs
+  // its own tunnel — one that lives as long as the stream, not as long as a
+  // pooled adapter
+  exports: [ConnectionStoreService, AdapterPoolService, SshTunnelService],
 })
 export class ConnectionsModule {}

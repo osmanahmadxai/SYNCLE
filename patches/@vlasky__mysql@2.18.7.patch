@@ -1,0 +1,25 @@
+diff --git a/lib/Connection.js b/lib/Connection.js
+index a8b8522ee792cc0d321e7d42315edd90c419c8d1..37fec2c3cce3e81a1fd76d819f3c0064de0c4110 100644
+--- a/lib/Connection.js
++++ b/lib/Connection.js
+@@ -314,7 +314,19 @@ if (tls.TLSSocket) {
+       secureSocket.on('secure', function() {
+         secureEstablished = true;
+ 
+-        onSecure(rejectUnauthorized ? this.ssl.verifyError() : null);
++        var verifyError = rejectUnauthorized ? this.ssl.verifyError() : null;
++
++        // [syncle patch] This client verifies the certificate CHAIN only: it
++        // never checks that the certificate was issued for the host being
++        // dialled, so any certificate from a trusted CA was accepted for any
++        // server. When `ssl.verifyServerName` is set, the name is checked here
++        // - inside the handshake, before credentials are sent.
++        var expected = connection.config.ssl.verifyServerName;
++        if (!verifyError && expected) {
++          verifyError = tls.checkServerIdentity(expected, this.getPeerCertificate()) || null;
++        }
++
++        onSecure(verifyError);
+       });
+ 
+       // start TLS communications

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Editor, { type Monaco, type OnMount } from '@monaco-editor/react';
+import Editor, { loader, type Monaco, type OnMount } from '@monaco-editor/react';
+import { useTranslations } from 'next-intl';
 import { useTheme } from 'next-themes';
 import { Loader2, Play, Plus, Sparkles, X } from 'lucide-react';
 import { format } from 'sql-formatter';
@@ -9,6 +10,9 @@ import { toast } from 'sonner';
 import type { QueryLanguage, QueryResult } from '@syncle/core';
 import { api, ApiError } from '@/lib/api';
 import { useConnections, useDrivers, useSchema } from '@/lib/queries';
+import { statementVerdict } from '@/lib/statement-guard';
+import { useConfirm } from '@/components/confirm';
+import { ConnectionBadges } from '@/components/connections/connection-badges';
 import { useStudio } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import {
@@ -19,6 +23,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { ResultTable } from './result-table';
 
+// the editor's own code is served by this app (copied out of node_modules at
+// build time: scripts/copy-monaco.mjs). left alone, the wrapper fetches it from
+// a public CDN at run time — no editor on a network without internet, and
+// somebody else's script in a page that handles database credentials
+loader.config({ paths: { vs: '/monaco/vs' } });
+
 const MONACO_LANG: Record<QueryLanguage, string> = {
   sql: 'sql',
   mongo: 'json',
@@ -26,15 +36,20 @@ const MONACO_LANG: Record<QueryLanguage, string> = {
   none: 'plaintext',
 };
 
-const STARTER: Record<QueryLanguage, string> = {
-  sql: '-- Write SQL and press ⌘/Ctrl + Enter to run\nSELECT 1;',
-  mongo:
-    '// JSON command document\n{\n  "collection": "",\n  "find": {},\n  "limit": 20\n}',
-  redis: '# One Redis command per line\nPING\nINFO server',
-  none: '',
+type Translate = ReturnType<typeof useTranslations>;
+
+// the code of a starter is the same everywhere; only the hint in its leading
+// comment is translated
+const STARTER: Record<QueryLanguage, (t: Translate) => string> = {
+  sql: (t) => `-- ${t('starter.sql')}\nSELECT 1;`,
+  mongo: (t) =>
+    `// ${t('starter.mongo')}\n{\n  "collection": "",\n  "find": {},\n  "limit": 20\n}`,
+  redis: (t) => `# ${t('starter.redis')}\nPING\nINFO server`,
+  none: () => '',
 };
 
 export function QueryEditor() {
+  const t = useTranslations('queryEditor');
   const { activeConnectionId, activeDatabase } = useStudio();
   const {
     queryTabs,
@@ -48,6 +63,7 @@ export function QueryEditor() {
   const { data: connections } = useConnections();
   const { data: drivers } = useDrivers();
   const conn = connections?.find((c) => c.id === activeConnectionId);
+  const confirm = useConfirm();
   const driver = drivers?.find((d) => d.engine === conn?.engine);
   const lang = driver?.capabilities.queryLanguage ?? 'sql';
 
@@ -55,9 +71,11 @@ export function QueryEditor() {
   // module-level ref so the (once-only) completion provider always reads the
   // schema of whichever editor instance rendered last
   latestSchemaRef.current = schema;
+  // same for the translator, so completion details follow the UI language
+  latestTranslateRef.current = t;
 
   const activeTab =
-    queryTabs.find((t) => t.id === activeQueryTabId) ?? queryTabs[0]!;
+    queryTabs.find((tab) => tab.id === activeQueryTabId) ?? queryTabs[0]!;
   const value = activeTab.sql;
 
   const [results, setResults] = useState<Record<string, QueryResult | null>>(
@@ -68,7 +86,8 @@ export function QueryEditor() {
 
   // seed a starter snippet only when the active tab is empty
   useEffect(() => {
-    if (!activeTab.sql.trim()) updateQueryTabSql(activeTab.id, STARTER[lang]);
+    if (!activeTab.sql.trim())
+      updateQueryTabSql(activeTab.id, STARTER[lang](t));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lang, activeTab.id]);
 
@@ -83,6 +102,36 @@ export function QueryEditor() {
     const tabId = activeQueryTabId;
     const statement = editorRef.current?.getModel()?.getValue() ?? value;
     if (!statement.trim()) return;
+    if (conn) {
+      const verdict = statementVerdict(conn, statement);
+      if (verdict.action === 'refuse') {
+        toast.error(t('readOnlyRefused', { name: conn.name }), {
+          description: t('readOnlyRefusedWhy', { reasons: verdict.assessment.reasons.join(', ') }),
+        });
+        return;
+      }
+      if (verdict.action === 'confirm') {
+        const ok = await confirm({
+          title:
+            verdict.why === 'destructive'
+              ? t('confirmDestructiveTitle')
+              : t('confirmProductionTitle', { name: conn.name }),
+          description: (
+            <span className="space-y-2">
+              <span className="block">
+                {verdict.why === 'destructive'
+                  ? t('confirmDestructiveBody', { name: conn.name })
+                  : t('confirmProductionBody')}
+              </span>
+              <span className="block font-mono text-xs">{verdict.assessment.reasons.join(' · ')}</span>
+            </span>
+          ),
+          confirmText: t('runAnyway'),
+          destructive: true,
+        });
+        if (!ok) return;
+      }
+    }
     setRunningId(tabId);
     try {
       const res = await api.runQuery(
@@ -93,13 +142,13 @@ export function QueryEditor() {
       );
       setResults((r) => ({ ...r, [tabId]: res }));
     } catch (err) {
-      toast.error('Query failed', {
+      toast.error(t('queryFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
       setRunningId(null);
     }
-  }, [activeConnectionId, activeDatabase, activeQueryTabId, value]);
+  }, [activeConnectionId, activeDatabase, activeQueryTabId, value, t, conn, confirm]);
 
   // Monaco keeps the command callback it was mounted with forever; go through
   // a ref so ⌘/Ctrl+Enter always runs against the current connection/tab
@@ -130,7 +179,7 @@ export function QueryEditor() {
   if (!activeConnectionId) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a connection to run queries.
+        {t('selectConnection')}
       </div>
     );
   }
@@ -141,30 +190,32 @@ export function QueryEditor() {
     <div className="flex h-full flex-col">
       {/* tab bar */}
       <div className="flex items-center gap-0.5 overflow-x-auto border-b px-1 scrollbar-thin">
-        {queryTabs.map((t) => (
+        {queryTabs.map((tab) => (
           <div
-            key={t.id}
+            key={tab.id}
             className={cn(
               'group flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-t border-b-2 px-3 text-xs',
-              t.id === activeQueryTabId
+              tab.id === activeQueryTabId
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
-            onClick={() => setActiveQueryTab(t.id)}
+            onClick={() => setActiveQueryTab(tab.id)}
           >
-            <span className="max-w-[140px] truncate">{t.name}</span>
+            <span className="max-w-[140px] truncate">
+              {tab.name ?? t('untitledTab', { n: tab.number })}
+            </span>
             <button
               className="rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
-              aria-label="Close tab"
+              aria-label={t('closeTab')}
               onClick={(e) => {
                 e.stopPropagation();
                 // prune the closed tab's result so the map doesn't grow forever
                 setResults((r) => {
                   const next = { ...r };
-                  delete next[t.id];
+                  delete next[tab.id];
                   return next;
                 });
-                closeQueryTab(t.id);
+                closeQueryTab(tab.id);
               }}
             >
               <X className="h-3 w-3" />
@@ -175,7 +226,7 @@ export function QueryEditor() {
           variant="ghost"
           size="icon"
           className="h-7 w-7 shrink-0"
-          aria-label="New query tab"
+          aria-label={t('newTab')}
           onClick={() => addQueryTab()}
         >
           <Plus className="h-4 w-4" />
@@ -190,17 +241,19 @@ export function QueryEditor() {
           ) : (
             <Play className="mr-1 h-4 w-4" />
           )}
-          Run
+          {t('run')}
           <span className="ml-2 hidden text-[10px] opacity-60 sm:inline">
             ⌘↵
           </span>
         </Button>
         {lang === 'sql' && (
           <Button size="sm" variant="ghost" onClick={formatSql}>
-            <Sparkles className="mr-1 h-4 w-4" /> Format
+            <Sparkles className="mr-1 h-4 w-4" /> {t('format')}
           </Button>
         )}
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          {/* what is about to be run against: said here, where the Run button is */}
+          <ConnectionBadges connection={conn} />
           {driver?.label} · {lang.toUpperCase()}
         </span>
       </div>
@@ -238,6 +291,10 @@ export function QueryEditor() {
 let sqlCompletionRegistered = false;
 /** updated by every mounted editor so completion reads the live schema */
 const latestSchemaRef: { current: unknown } = { current: undefined };
+/** likewise, so the details shown beside a suggestion are in the UI language */
+const latestTranslateRef: { current: Translate | undefined } = {
+  current: undefined,
+};
 function registerSqlCompletion(monaco: Monaco) {
   if (sqlCompletionRegistered) return;
   sqlCompletionRegistered = true;
@@ -259,6 +316,8 @@ function registerSqlCompletion(monaco: Monaco) {
       };
       const suggestions: import('monaco-editor').languages.CompletionItem[] =
         [];
+      // set on every render, and an editor has rendered before it completes
+      const t = latestTranslateRef.current!;
 
       const schema = latestSchemaRef.current as
         | {
@@ -275,7 +334,7 @@ function registerSqlCompletion(monaco: Monaco) {
               label: table.name,
               kind: monaco.languages.CompletionItemKind.Struct,
               insertText: table.name,
-              detail: 'table',
+              detail: t('completion.table'),
               range,
             });
             for (const col of table.columns) {
@@ -283,7 +342,7 @@ function registerSqlCompletion(monaco: Monaco) {
                 label: col.name,
                 kind: monaco.languages.CompletionItemKind.Field,
                 insertText: col.name,
-                detail: `${table.name} column`,
+                detail: t('completion.column', { table: table.name }),
                 range,
               });
             }

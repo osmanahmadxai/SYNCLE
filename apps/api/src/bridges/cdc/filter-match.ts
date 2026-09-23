@@ -35,6 +35,10 @@ export function rowMatchesFilters(
   if (!filters || filters.length === 0) return true;
   for (const f of filters) {
     if (opts.passMissingColumns && !(f.column in row)) continue;
+    // UNCHANGED: the source left the column out because it did not change. the
+    // orchestrator reads such a value back before filtering; one that is still
+    // a marker here could not be read, and "unknown" must not drop the row
+    if (typeof row[f.column] === 'symbol') continue;
     if (!matchesOne(row[f.column], f)) return false;
   }
   return true;

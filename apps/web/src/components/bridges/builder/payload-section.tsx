@@ -7,10 +7,18 @@
  */
 import { useMemo, type Dispatch } from 'react';
 import { useTranslations } from 'next-intl';
-import { mapRow, renderRow } from '@syncle/core';
+import {
+  applyColumnTransforms,
+  mapRow,
+  renderRow,
+  type ColumnTransform,
+} from '@syncle/core';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { BuilderAction, BuilderDraft } from './draft';
+
+/** 64 hex characters, like the real thing, and plainly not it */
+const HASH_STAND_IN = 'sha256:'.padEnd(64, '·');
 
 function jsType(v: unknown): string {
   if (v === null || v === undefined) return 'null';
@@ -23,11 +31,16 @@ export function PayloadSection({
   dispatch,
   sampleRow,
   includedList,
+  transforms,
 }: {
-  draft: Pick<BuilderDraft, 'wrapKey' | 'table' | 'destKind' | 'dbTargets'>;
+  draft: Pick<
+    BuilderDraft,
+    'wrapKey' | 'table' | 'destKind' | 'dbTargets' | 'template' | 'rename'
+  >;
   dispatch: Dispatch<BuilderAction>;
   sampleRow: Record<string, unknown> | undefined;
   includedList: string[];
+  transforms: ColumnTransform[];
 }) {
   const t = useTranslations('bridgeBuilder');
   const { wrapKey, table, destKind, dbTargets } = draft;
@@ -35,26 +48,39 @@ export function PayloadSection({
   /* live payload: schema (field → type) + a real sample body */
   const preview = useMemo(() => {
     if (!sampleRow || includedList.length === 0) return null;
+    const now = new Date().toISOString();
+    // the same steps the runner applies, on the sample row. the one thing a
+    // browser cannot do in a render is SHA-256, so a hashed value is shown as a
+    // stand-in of the right shape; Dry run shows the real one
+    const shaped = applyColumnTransforms(sampleRow, transforms, {
+      table: table || '(table)',
+      now,
+      hash: () => HASH_STAND_IN,
+    });
+    const row = shaped.row;
     const schemaShape: Record<string, string> = {};
-    for (const c of includedList) schemaShape[c] = jsType(sampleRow[c]);
+    for (const c of includedList) schemaShape[c] = jsType(row[c]);
     let body: unknown = null;
-    let error: string | null = null;
+    let error: string | null = shaped.errors[0] ?? null;
     try {
-      if (destKind === 'database') {
+      if (error) {
+        // a cast set to fail the delivery, on a value that cannot be cast
+      } else if (destKind === 'database') {
         const renames = dbTargets[0]?.renames ?? {};
         body = mapRow(
-          sampleRow,
+          row,
           includedList.map((s) => ({ source: s, target: renames[s]?.trim() || s })),
         );
       } else {
         body = renderRow(
-          sampleRow,
+          row,
           {
-            template: '{{$row}}',
+            template: draft.template || '{{$row}}',
+            rename: draft.rename,
             fields: includedList,
             wrapKey: wrapKey || undefined,
           },
-          { table: table || '(table)', now: new Date().toISOString(), index: 0 },
+          { table: table || '(table)', now, index: 0 },
         ).body;
       }
     } catch (err) {
@@ -64,8 +90,20 @@ export function PayloadSection({
       schema: wrapKey ? { [wrapKey]: schemaShape } : schemaShape,
       body,
       error,
+      warnings: shaped.warnings,
+      hashed: transforms.some((s) => s.kind === 'mask' && s.mode === 'hash'),
     };
-  }, [sampleRow, includedList, wrapKey, table, destKind, dbTargets]);
+  }, [
+    sampleRow,
+    includedList,
+    transforms,
+    wrapKey,
+    table,
+    destKind,
+    dbTargets,
+    draft.template,
+    draft.rename,
+  ]);
 
   return (
     <section>
@@ -102,6 +140,16 @@ export function PayloadSection({
             <pre className="bg-muted max-h-48 overflow-auto rounded-md p-2 font-mono text-[11px] leading-relaxed">
               {JSON.stringify(preview.body, null, 2)}
             </pre>
+            {preview.hashed && (
+              <p className="text-muted-foreground mt-1 text-[11px]">
+                {t('hashStandIn')}
+              </p>
+            )}
+            {preview.warnings.map((w) => (
+              <p key={w} className="mt-1 text-[11px] text-amber-600 dark:text-amber-500">
+                {w}
+              </p>
+            ))}
           </div>
         </div>
       ) : (

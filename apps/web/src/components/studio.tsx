@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { useTranslations } from 'next-intl';
-import { BookOpen, Database } from 'lucide-react';
+import { BookOpen, Database, Search } from 'lucide-react';
 import { useStudio } from '@/lib/store';
+import { useLiveEvents } from '@/lib/live-events';
+import { createUrlSync, type UrlState } from '@/lib/url-state';
 import {
   ResizableHandle,
   ResizablePanel,
@@ -15,11 +17,13 @@ import { Separator } from '@/components/ui/separator';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LangToggle } from '@/components/lang-toggle';
 import { UserMenu } from '@/components/settings/user-menu';
+import { ReadOnlyNotice } from '@/components/settings/read-only-notice';
 import { ConnectionDialog } from '@/components/connections/connection-dialog';
 import { BridgesView } from '@/components/bridges/bridges-view';
 import { BridgeList } from '@/components/bridges/bridge-list';
 import { BridgeBuilder } from '@/components/bridges/bridge-builder';
 import { DataSourcesManager } from '@/components/data-sources-manager';
+import { CommandPalette } from '@/components/command-palette';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 /**
@@ -29,6 +33,8 @@ import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
  */
 export function Studio() {
   const t = useTranslations('nav');
+  // what changes on the server reaches the page as it happens
+  useLiveEvents();
   const {
     selectedBridgeId,
     selectBridge,
@@ -36,33 +42,78 @@ export function Studio() {
     openDataSources,
     bridgeEditor,
     openBridgeEditor,
+    closeBridgeEditor,
+    closeDataSources,
+    setPaletteOpen,
   } = useStudio();
 
-  // restore UI state from the URL on load and keep the URL in sync, so a
-  // refresh keeps you on the same bridge/surface instead of bouncing to root
+  // the UI's place lives in the URL, in both directions. it used to be written
+  // with replaceState and read once: the whole app was ONE history entry, so
+  // Back left Syncle instead of returning to the bridge you were on, and
+  // Forward into the app changed the address bar and nothing else
+  const sync = useRef<ReturnType<typeof createUrlSync> | null>(null);
+
+  // the key the palette really answers to on this machine. decided after
+  // mount: the server cannot know, and guessing would mismatch on hydration
+  const [shortcut, setShortcut] = useState('Ctrl K');
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const bridge = p.get('bridge');
-    if (bridge) selectBridge(bridge);
-    if (p.get('data') === '1') openDataSources();
-    const edit = p.get('edit');
-    if (edit) openBridgeEditor({ editingId: edit });
+    if (/mac|iphone|ipad/i.test(navigator.platform)) setShortcut('⌘K');
+  }, []);
+
+  useEffect(() => {
+    const created = createUrlSync(
+      {
+        search: () => window.location.search,
+        pathname: () => window.location.pathname,
+        push: (url) => window.history.pushState(null, '', url),
+        replace: (url) => window.history.replaceState(null, '', url),
+        onPop: (listener) => {
+          window.addEventListener('popstate', listener);
+          return () => window.removeEventListener('popstate', listener);
+        },
+      },
+      {
+        // the store itself, not this render's snapshot of it
+        get: () => {
+          const now = useStudio.getState();
+          return {
+            bridge: now.selectedBridgeId,
+            data: now.dataSourcesOpen,
+            edit: now.bridgeEditor.open
+              ? (now.bridgeEditor.editingId ?? 'new')
+              : null,
+          };
+        },
+        apply: (state: UrlState) => {
+          const now = useStudio.getState();
+          if (now.selectedBridgeId !== state.bridge) selectBridge(state.bridge);
+          if (state.data && !now.dataSourcesOpen) openDataSources();
+          if (!state.data && now.dataSourcesOpen) closeDataSources();
+          const editing = now.bridgeEditor.open
+            ? (now.bridgeEditor.editingId ?? 'new')
+            : null;
+          if (state.edit === editing) return;
+          if (state.edit === null) closeBridgeEditor();
+          else
+            openBridgeEditor(
+              state.edit === 'new' ? undefined : { editingId: state.edit },
+            );
+        },
+      },
+    );
+    sync.current = created;
+    return created.start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const p = new URLSearchParams();
-    if (selectedBridgeId) p.set('bridge', selectedBridgeId);
-    if (dataSourcesOpen) p.set('data', '1');
-    if (bridgeEditor.open && bridgeEditor.editingId)
-      p.set('edit', bridgeEditor.editingId);
-    const qs = p.toString();
-    window.history.replaceState(
-      null,
-      '',
-      qs ? `?${qs}` : window.location.pathname,
-    );
-  }, [selectedBridgeId, dataSourcesOpen, bridgeEditor.open, bridgeEditor.editingId]);
+    sync.current?.write();
+  }, [
+    selectedBridgeId,
+    dataSourcesOpen,
+    bridgeEditor.open,
+    bridgeEditor.editingId,
+  ]);
 
   return (
     <>
@@ -117,9 +168,26 @@ export function Studio() {
               </div>
             </div>
             <Separator />
+            {/* a viewer can look, not change: said here, not by a refused request */}
+            <ReadOnlyNotice />
             {/* which workspace you're in — scopes the bridges + connections below */}
             <div className="px-2 py-1.5">
               <WorkspaceSwitcher />
+            </div>
+            <Separator />
+            {/* the palette's visible door: nobody finds a shortcut they were never shown */}
+            <div className="px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                className="text-muted-foreground hover:bg-accent/50 flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-xs transition-colors"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span className="truncate">{t('search')}</span>
+                <kbd className="bg-muted ml-auto rounded px-1.5 py-0.5 font-mono text-[10px]">
+                  {shortcut}
+                </kbd>
+              </button>
             </div>
             <Separator />
             <BridgeList />
@@ -137,6 +205,7 @@ export function Studio() {
       <ConnectionDialog />
       <BridgeBuilder />
       <DataSourcesManager />
+      <CommandPalette />
     </>
   );
 }

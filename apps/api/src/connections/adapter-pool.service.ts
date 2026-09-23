@@ -11,6 +11,7 @@ import { runtimeConfig } from '../common/runtime-config';
 import type { ConnectionConfig, DatabaseAdapter } from '@syncle/core';
 import { SettingsStoreService } from '../settings/settings-store.service';
 import { ConnectionStoreService } from './connection-store.service';
+import { asReadOnly } from './read-only-adapter';
 import { SshTunnelService, type SshTunnel } from './ssh-tunnel.service';
 
 interface PoolEntry {
@@ -74,12 +75,13 @@ export class AdapterPoolService implements OnModuleDestroy {
     id: string,
     database?: string,
   ): Promise<DatabaseAdapter> {
-    const config = await this.store.resolve(id);
+    const stored = await this.store.resolve(id);
+    const config = this.withQueryCap(stored);
     const effectiveDb = database || config.database;
     const key = `${id}::${effectiveDb ?? ''}`;
     const existing = this.entries.get(key);
 
-    if (existing && existing.revision === config.updatedAt) {
+    if (existing && existing.revision === this.revisionOf(config)) {
       existing.lastUsedAt = Date.now();
       return existing.adapter;
     }
@@ -94,6 +96,27 @@ export class AdapterPoolService implements OnModuleDestroy {
     );
     this.pending.set(key, open);
     return open;
+  }
+
+  /**
+   * the instance-wide "max query rows" setting, for a connection that does not
+   * set its own. the setting was stored, shown in Settings and reported by the
+   * API, and nothing read it: every adapter used its built-in 5000 regardless.
+   */
+  private withQueryCap(config: ConnectionConfig): ConnectionConfig {
+    const own = Number(config.options?.maxQueryRows);
+    if (Number.isFinite(own) && own > 0) return config;
+    const cap = this.settings.snapshot().maxQueryRows;
+    return { ...config, options: { ...config.options, maxQueryRows: cap } };
+  }
+
+  /**
+   * what a cached adapter was built from. the cap is part of it, so changing
+   * the setting reaches connections that are already open instead of waiting
+   * for them to idle out
+   */
+  private revisionOf(config: ConnectionConfig): string {
+    return `${config.updatedAt}#${String(config.options?.maxQueryRows ?? '')}`;
   }
 
   private async open(
@@ -118,6 +141,13 @@ export class AdapterPoolService implements OnModuleDestroy {
       await tunnel?.close().catch(() => {});
       throw sshErr ?? err;
     }
+    // first successful tunnel for this connection: pin the jump host's key, so
+    // from now on a different key is refused instead of silently accepted
+    if (tunnel?.hostKey && !config.ssh?.hostKey?.trim()) {
+      await this.store
+        .pinSshHostKey(config.id, tunnel.hostKey)
+        .catch(() => undefined);
+    }
     // if the ssh connection drops mid-use, evict so the next use redials
     tunnel?.onClose(() => {
       const entry = this.entries.get(key);
@@ -125,13 +155,17 @@ export class AdapterPoolService implements OnModuleDestroy {
       this.entries.delete(key);
       void entry.adapter.close().catch(() => {});
     });
+    // a read-only connection's adapter refuses to write, whoever asks. (an edit
+    // of the connection changes its revision, so unticking it takes effect on
+    // the next use)
+    const handed = config.readOnly ? asReadOnly(adapter, config.name) : adapter;
     this.entries.set(key, {
-      adapter,
+      adapter: handed,
       tunnel,
-      revision: config.updatedAt,
+      revision: this.revisionOf(config),
       lastUsedAt: Date.now(),
     });
-    return adapter;
+    return handed;
   }
 
   /**
@@ -146,14 +180,19 @@ export class AdapterPoolService implements OnModuleDestroy {
     return fn(await this.acquire(id, database));
   }
 
-  /** build a one-off adapter from a raw config (used by "test connection") */
-  async test(config: ConnectionConfig): Promise<void> {
+  /**
+   * build a one-off adapter from a raw config (used by "test connection").
+   * reports the SSH jump host's key fingerprint when a tunnel was used, so it
+   * can be shown — and pinned — before the connection is ever saved.
+   */
+  async test(config: ConnectionConfig): Promise<{ sshHostKey?: string }> {
     const restricted = withServerRestrictions(config);
     const tunnel = await this.tunnels.openFor(restricted);
     const adapter = createAdapter(this.tunnels.reroute(restricted, tunnel));
     try {
       await adapter.connect();
       await adapter.ping();
+      return tunnel?.hostKey ? { sshHostKey: tunnel.hostKey } : {};
     } catch (err) {
       // surface the ssh-level failure (e.g. refused forward) over the bare
       // socket error the adapter saw

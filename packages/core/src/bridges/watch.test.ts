@@ -230,6 +230,34 @@ describe('timestamp lookback window', () => {
     expect(qn.filters[0]!.value).toBe(5000);
   });
 
+  it('keeps a zone-less cursor in wall-clock terms, whatever zone this runs in', () => {
+    // what MySQL (`dateStrings`) and Postgres hand over for a column with no
+    // time zone. answering in UTC shifted the window by the process's offset
+    const cursor = {
+      strategy: 'timestamp' as const,
+      ts: '2026-01-01 00:00:10.250',
+      boundaryKeys: [],
+    };
+    expect(watchQuery(TSL, cursor, ['id']).filters).toEqual([
+      { column: 'updated_at', operator: 'gte', value: '2026-01-01 00:00:05.250' },
+    ]);
+    // across midnight, and with the `T` separator some drivers use
+    expect(
+      watchQuery(TSL, { ...cursor, ts: '2026-03-01T00:00:02' }, ['id']).filters[0]!.value,
+    ).toBe('2026-02-28 23:59:57.000');
+  });
+
+  it('keeps a cursor that names its zone as an instant', () => {
+    const cursor = { strategy: 'timestamp' as const, ts: '', boundaryKeys: [] };
+    for (const [ts, expected] of [
+      ['2026-01-01T00:00:10.000Z', '2026-01-01T00:00:05.000Z'],
+      ['2026-01-01 04:30:10+04:30', '2026-01-01T00:00:05.000Z'],
+      ['2025-12-31 16:00:10-08', '2026-01-01T00:00:05.000Z'],
+    ]) {
+      expect(watchQuery(TSL, { ...cursor, ts }, ['id']).filters[0]!.value).toBe(expected);
+    }
+  });
+
   it('keys every row inside the window so the overlap re-fetch dedupes', () => {
     const rows = [
       { id: 1, updated_at: '2026-01-01T00:00:06.000Z' },
@@ -356,5 +384,64 @@ describe('watchQuery determinism', () => {
       { column: 'a', direction: 'asc' },
       { column: 'b', direction: 'asc' },
     ]);
+  });
+});
+
+describe('a row that is changed AGAIN (the update that used to be lost)', () => {
+  const TS: TimestampStrategy = { strategy: 'timestamp', column: 'updated_at', lookbackMs: 0 };
+  const TSL: TimestampStrategy = { strategy: 'timestamp', column: 'updated_at', lookbackMs: 5000 };
+  const order = (status: string, at: string) => ({ id: 17, status, updated_at: at });
+
+  it('the most recently changed row, changed again: delivered — it was filtered out as "already emitted" and the cursor moved past it', () => {
+    const first = advanceCursor(TS, emptyCursor(TS), [order('paid', '2026-09-17T10:00:00.000Z')], ['id']);
+    expect(first.newRows.map((r) => r.status)).toEqual(['paid']);
+    // an idle poll in between re-fetches it at the boundary: not delivered twice
+    const idle = advanceCursor(TS, first.cursor, [order('paid', '2026-09-17T10:00:00.000Z')], ['id']);
+    expect(idle.newRows).toEqual([]);
+    const second = advanceCursor(TS, idle.cursor, [order('shipped', '2026-09-17T10:05:00.000Z')], ['id']);
+    expect(second.newRows.map((r) => r.status)).toEqual(['shipped']);
+    // …once
+    const after = advanceCursor(TS, second.cursor, [order('shipped', '2026-09-17T10:05:00.000Z')], ['id']);
+    expect(after.newRows).toEqual([]);
+    // and a third time, and a fourth: a row that is the only one that ever changes
+    const third = advanceCursor(TS, after.cursor, [order('delivered', '2026-09-17T10:09:00.000Z')], ['id']);
+    expect(third.newRows.map((r) => r.status)).toEqual(['delivered']);
+  });
+
+  it('changed twice inside the lookback window: both changes are delivered, neither twice', () => {
+    const first = advanceCursor(TSL, emptyCursor(TSL), [order('paid', '2026-09-17T10:00:00.000Z')], ['id']);
+    const second = advanceCursor(TSL, first.cursor, [order('shipped', '2026-09-17T10:00:02.000Z')], ['id']);
+    expect(second.newRows.map((r) => r.status)).toEqual(['shipped']);
+    // the window is fetched again with the row as it is now
+    const again = advanceCursor(TSL, second.cursor, [order('shipped', '2026-09-17T10:00:02.000Z')], ['id']);
+    expect(again.newRows).toEqual([]);
+  });
+
+  it('two rows sharing a timestamp, one of them changed later: only that one', () => {
+    const at = '2026-09-17T10:00:00.000Z';
+    const first = advanceCursor(TS, emptyCursor(TS), [{ id: 1, updated_at: at }, { id: 2, updated_at: at }], ['id']);
+    expect(first.newRows).toHaveLength(2);
+    const second = advanceCursor(TS, first.cursor, [{ id: 1, updated_at: at }, { id: 2, updated_at: '2026-09-17T10:00:01.000Z' }], ['id']);
+    expect(second.newRows.map((r) => r.id)).toEqual([2]);
+  });
+
+  it('Date values, as some drivers hand them over, are told apart the same way', () => {
+    const first = advanceCursor(TS, emptyCursor(TS), [{ id: 1, updated_at: new Date('2026-09-17T10:00:00Z') }], ['id']);
+    // the cursor went through JSON and came back
+    const stored = JSON.parse(JSON.stringify(first.cursor)) as typeof first.cursor;
+    expect(advanceCursor(TS, stored, [{ id: 1, updated_at: new Date('2026-09-17T10:00:00Z') }], ['id']).newRows).toEqual([]);
+    expect(advanceCursor(TS, stored, [{ id: 1, updated_at: new Date('2026-09-17T10:00:03Z') }], ['id']).newRows).toHaveLength(1);
+  });
+
+  it('a cursor written BEFORE entries carried their timestamp is still read: nothing re-sent, and the next change not lost', () => {
+    const legacy = { strategy: 'timestamp' as const, ts: '2026-09-17T10:00:00.000Z', boundaryKeys: ['[17]'], column: 'updated_at' };
+    expect(advanceCursor(TS, legacy, [order('paid', '2026-09-17T10:00:00.000Z')], ['id']).newRows).toEqual([]);
+    const changed = advanceCursor(TS, legacy, [order('shipped', '2026-09-17T10:05:00.000Z')], ['id']);
+    expect(changed.newRows.map((r) => r.status)).toEqual(['shipped']);
+    // …and what is written from here on carries the timestamp
+    expect((changed.cursor as { boundaryKeys: string[] }).boundaryKeys).toEqual(['[17]@2026-09-17T10:05:00.000Z']);
+    // inside a lookback window, a legacy entry behind the cursor is still "emitted"
+    const window = { ...legacy, boundaryKeys: ['[16]', '[17]'] };
+    expect(advanceCursor(TSL, window, [{ id: 16, updated_at: '2026-09-17T09:59:58.000Z' }, order('paid', '2026-09-17T10:00:00.000Z')], ['id']).newRows).toEqual([]);
   });
 });

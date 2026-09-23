@@ -5,7 +5,7 @@
  * column/row selections, toggling the sync mode adjusts the trigger, …) lives
  * here so a section can never forget one.
  */
-import type { CdcReadiness } from '@syncle/core';
+import type { CdcReadiness, ColumnTransform, FilterSpec } from '@syncle/core';
 
 export const PAGE_SIZE = 100;
 
@@ -34,6 +34,22 @@ export interface DbTarget {
   createMissingTable: boolean;
   /** optional source column → target column renames (default identity) */
   renames: Record<string, string>;
+  /** what a DELETE at the source does here: remove the row, mark it, or leave it */
+  onDelete: 'delete' | 'soft' | 'ignore';
+  /** the target column a soft delete marks the row with, and what with */
+  softDeleteColumn: string;
+  softDeleteValue: 'timestamp' | 'boolean';
+  /**
+   * a target in REDIS: `template` = a key per row, built from its columns (a
+   * hash, a JSON document or one column's value); `columns` = the row's own
+   * `key` and `value` columns, which is all there was before
+   */
+  redisMode: 'columns' | 'template';
+  redisKeyTemplate: string;
+  redisType: 'hash' | 'json' | 'string';
+  redisValueColumn: string;
+  /** seconds after its last write at which the key expires; null = it does not */
+  redisTtlSeconds: number | null;
 }
 
 export interface Delivery {
@@ -42,6 +58,8 @@ export interface Delivery {
   minDelayMs: number;
   timeoutMs: number;
   onError: 'continue' | 'abort';
+  /** what to do when the source table is no longer the one the bridge was built on */
+  onSchemaChange: 'stop' | 'continue' | 'evolve';
 }
 
 export function blankDbTarget(): DbTarget {
@@ -54,6 +72,14 @@ export function blankDbTarget(): DbTarget {
     keyColumns: [],
     createMissingTable: true,
     renames: {},
+    onDelete: 'delete',
+    softDeleteColumn: 'deleted_at',
+    softDeleteValue: 'timestamp',
+    redisMode: 'columns',
+    redisKeyTemplate: '',
+    redisType: 'hash',
+    redisValueColumn: '',
+    redisTtlSeconds: null,
   };
 }
 
@@ -77,13 +103,52 @@ export function blankDelivery(): Delivery {
     minDelayMs: 0,
     timeoutMs: 15000,
     onError: 'continue',
+    onSchemaChange: 'stop',
   };
+}
+
+export interface ScheduleDraft {
+  cron: string;
+  timezone: string;
+  enabled: boolean;
 }
 
 export type SyncMode = 'oneTime' | 'live';
 export type TriggerKind = 'replay' | 'watch' | 'cdc';
 export type WatchStrategy = 'increment' | 'timestamp' | 'snapshot';
-export type CdcOp = 'insert' | 'update' | 'delete';
+export type CdcOp = 'insert' | 'update' | 'delete' | 'truncate';
+
+/** the comparisons the filter editor offers (`in` belongs to the row selection) */
+export type FilterOperator = Exclude<FilterSpec['operator'], 'in'>;
+export const FILTER_OPERATORS: FilterOperator[] = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'startsWith',
+  'endsWith',
+  'isNull',
+  'notNull',
+];
+/** operators that compare against nothing */
+export const VALUELESS: ReadonlySet<FilterOperator> = new Set(['isNull', 'notNull']);
+
+export interface DraftFilter {
+  /** stable across edits, for React */
+  id: string;
+  column: string;
+  operator: FilterOperator;
+  /** as typed; turned into a number or a boolean on save where the column is one */
+  value: string;
+}
+
+export type DraftTransform = ColumnTransform & { id: string };
+
+let nextId = 0;
+export const draftId = (): string => `d${++nextId}`;
 export type RowMode = 'selected' | 'all';
 
 export interface BuilderDraft {
@@ -109,10 +174,49 @@ export interface BuilderDraft {
   watchColumn: string;
   pollSeconds: number;
   watchStartFrom: 'now' | 'beginning';
+  /**
+   * a change-stream bridge: follow changes from now on, or copy what the table
+   * already holds first and then follow it (nothing is lost in between)
+   */
+  cdcStartFrom: 'now' | 'beginning';
+  /**
+   * PostgreSQL only: a replication slot of the bridge's own, or the one every
+   * shared bridge on the same connection and database reads through
+   */
+  cdcSlot: 'own' | 'shared';
+  /**
+   * a one-time bridge that runs by itself: a cron line, the zone it is meant
+   * in, and whether it is on. null = only when somebody presses Run
+   */
+  schedule: ScheduleDraft | null;
+  /**
+   * parts of a watch trigger the builder has no control for. they are carried
+   * through an edit untouched: saving used to write the constants 500 / 50,000
+   * / 3,000 every time, so opening a bridge and pressing Save quietly undid
+   * whatever had been set through the API
+   */
+  maxPerPoll: number;
+  snapshotMaxTracked: number;
+  lookbackMs: number;
   cdcOps: Set<CdcOp>;
   readiness: CdcReadiness | null;
   checkingCdc: boolean;
+  // ----- which rows, and what happens to their values -----
+  /** "only rows where…", ANDed together (and with the row selection, if any) */
+  filters: DraftFilter[];
+  /**
+   * filters this editor has no row for (an `in` list, say) — set through the
+   * API. carried through an edit exactly as they are: the builder used to read
+   * one filter back and write one filter out, so saving a bridge from here
+   * silently deleted every other condition on it
+   */
+  extraFilters: FilterSpec[];
+  /** masking, casts, computed columns — applied in this order */
+  transforms: DraftTransform[];
   // ----- payload / destination / delivery -----
+  /** the HTTP payload template and key renames; no control here, carried through an edit */
+  template: string;
+  rename: Record<string, string> | undefined;
   wrapKey: string;
   destKind: 'http' | 'database';
   dest: Destination;
@@ -122,7 +226,26 @@ export interface BuilderDraft {
   enabled: boolean;
 }
 
-export function initialDraft(): BuilderDraft {
+/**
+ * what a NEW bridge starts from: the instance's saved defaults (Settings ›
+ * Bridges). they were stored and shown for a year while the builder went on
+ * using 5 seconds, 500 rows and all three operations regardless
+ */
+export interface BuilderDefaults {
+  pollIntervalMs: number;
+  maxPerPoll: number;
+  cdcOperations: CdcOp[];
+}
+
+export const BUILT_IN_DEFAULTS: BuilderDefaults = {
+  pollIntervalMs: 5000,
+  maxPerPoll: 500,
+  cdcOperations: ['insert', 'update', 'delete'],
+};
+
+export function initialDraft(
+  defaults: BuilderDefaults = BUILT_IN_DEFAULTS,
+): BuilderDraft {
   return {
     name: '',
     connectionId: '',
@@ -138,11 +261,26 @@ export function initialDraft(): BuilderDraft {
     triggerKind: 'replay',
     watchStrategy: 'increment',
     watchColumn: '',
-    pollSeconds: 5,
+    pollSeconds: Math.max(1, Math.round(defaults.pollIntervalMs / 1000)),
     watchStartFrom: 'now',
-    cdcOps: new Set(['insert', 'update', 'delete']),
+    cdcStartFrom: 'now',
+    cdcSlot: 'own',
+    schedule: null,
+    maxPerPoll: defaults.maxPerPoll,
+    snapshotMaxTracked: 50_000,
+    lookbackMs: 3000,
+    cdcOps: new Set(
+      defaults.cdcOperations.length > 0
+        ? defaults.cdcOperations
+        : BUILT_IN_DEFAULTS.cdcOperations,
+    ),
     readiness: null,
     checkingCdc: false,
+    filters: [],
+    extraFilters: [],
+    transforms: [],
+    template: '{{$row}}',
+    rename: undefined,
     wrapKey: '',
     destKind: 'http',
     dest: blankDestination(),
@@ -154,7 +292,7 @@ export function initialDraft(): BuilderDraft {
 
 export type BuilderAction =
   /** back to a blank draft (opening the editor, or before an edit load) */
-  | { type: 'reset' }
+  | { type: 'reset'; defaults?: BuilderDefaults }
   /** replace the draft with a fully hydrated one (edit-mode load) */
   | { type: 'load'; draft: BuilderDraft }
   /** prefill source fields when opened from the schema tree */
@@ -182,9 +320,18 @@ export type BuilderAction =
   | { type: 'setWatchColumn'; column: string }
   | { type: 'setPollSeconds'; seconds: number }
   | { type: 'setWatchStartFrom'; startFrom: 'now' | 'beginning' }
+  | { type: 'setCdcStartFrom'; startFrom: 'now' | 'beginning' }
+  | { type: 'setCdcSlot'; slot: 'own' | 'shared' }
   | { type: 'toggleCdcOp'; op: CdcOp }
   | { type: 'setReadiness'; readiness: CdcReadiness | null }
   | { type: 'setCheckingCdc'; checking: boolean }
+  | { type: 'addFilter'; column: string }
+  | { type: 'patchFilter'; id: string; patch: Partial<Omit<DraftFilter, 'id'>> }
+  | { type: 'removeFilter'; id: string }
+  | { type: 'addTransform'; transform: ColumnTransform }
+  | { type: 'replaceTransform'; id: string; transform: ColumnTransform }
+  | { type: 'moveTransform'; id: string; by: -1 | 1 }
+  | { type: 'removeTransform'; id: string }
   | { type: 'setWrapKey'; wrapKey: string }
   | { type: 'setDestKind'; destKind: 'http' | 'database'; sourcePk: string | null }
   | { type: 'patchDest'; patch: Partial<Destination> }
@@ -194,13 +341,25 @@ export type BuilderAction =
   | { type: 'patchDbTarget'; index: number; patch: Partial<DbTarget> }
   | { type: 'addDbTarget'; sourcePk: string | null }
   | { type: 'removeDbTarget'; index: number }
-  | { type: 'patchDelivery'; patch: Partial<Delivery> };
+  | { type: 'patchDelivery'; patch: Partial<Delivery> }
+  | { type: 'setSchedule'; schedule: ScheduleDraft | null }
+  | { type: 'patchSchedule'; patch: Partial<ScheduleDraft> };
+
+/**
+ * conditions and steps name columns of ONE table. leaving it — for another
+ * table, database or connection — leaves them behind
+ */
+const noRowRules = (): Pick<BuilderDraft, 'filters' | 'extraFilters' | 'transforms'> => ({
+  filters: [],
+  extraFilters: [],
+  transforms: [],
+});
 
 export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderDraft {
   switch (action.type) {
     case 'reset':
       // an in-flight readiness probe keeps its spinner; its own finally clears it
-      return { ...initialDraft(), checkingCdc: d.checkingCdc };
+      return { ...initialDraft(action.defaults), checkingCdc: d.checkingCdc };
     case 'load':
       return { ...action.draft, checkingCdc: d.checkingCdc };
     case 'applySeed':
@@ -224,6 +383,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         included: new Set(),
         fieldsPref: null,
         selectedKeys: new Map(),
+        ...noRowRules(),
       };
     case 'selectDatabase':
       return {
@@ -232,6 +392,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         table: '',
         included: new Set(),
         fieldsPref: null,
+        ...noRowRules(),
       };
     case 'selectTable':
       return {
@@ -242,6 +403,7 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
         fieldsPref: null,
         selectedKeys: new Map(),
         readiness: null,
+        ...noRowRules(),
       };
     case 'setMode':
       return { ...d, mode: action.mode };
@@ -287,6 +449,15 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, pollSeconds: action.seconds };
     case 'setWatchStartFrom':
       return { ...d, watchStartFrom: action.startFrom };
+    case 'setCdcStartFrom':
+      return { ...d, cdcStartFrom: action.startFrom };
+    case 'setCdcSlot':
+      // what the server was asked about is no longer what will be set up
+      return { ...d, cdcSlot: action.slot, readiness: null };
+    case 'setSchedule':
+      return { ...d, schedule: action.schedule };
+    case 'patchSchedule':
+      return d.schedule ? { ...d, schedule: { ...d.schedule, ...action.patch } } : d;
     case 'toggleCdcOp': {
       const next = new Set(d.cdcOps);
       if (next.has(action.op)) next.delete(action.op);
@@ -297,6 +468,35 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
       return { ...d, readiness: action.readiness };
     case 'setCheckingCdc':
       return { ...d, checkingCdc: action.checking };
+    case 'addFilter':
+      return {
+        ...d,
+        filters: [...d.filters, { id: draftId(), column: action.column, operator: 'eq', value: '' }],
+      };
+    case 'patchFilter':
+      return {
+        ...d,
+        filters: d.filters.map((f) => (f.id === action.id ? { ...f, ...action.patch } : f)),
+      };
+    case 'removeFilter':
+      return { ...d, filters: d.filters.filter((f) => f.id !== action.id) };
+    case 'addTransform':
+      return { ...d, transforms: [...d.transforms, { ...action.transform, id: draftId() }] };
+    case 'replaceTransform':
+      return {
+        ...d,
+        transforms: d.transforms.map((t) => (t.id === action.id ? { ...action.transform, id: t.id } : t)),
+      };
+    case 'moveTransform': {
+      const from = d.transforms.findIndex((t) => t.id === action.id);
+      const to = from + action.by;
+      if (from < 0 || to < 0 || to >= d.transforms.length) return d;
+      const next = [...d.transforms];
+      [next[from], next[to]] = [next[to]!, next[from]!];
+      return { ...d, transforms: next };
+    }
+    case 'removeTransform':
+      return { ...d, transforms: d.transforms.filter((t) => t.id !== action.id) };
     case 'setWrapKey':
       return { ...d, wrapKey: action.wrapKey };
     case 'setDestKind': {
@@ -310,7 +510,16 @@ export function builderReducer(d: BuilderDraft, action: BuilderAction): BuilderD
                 : t,
             )
           : d.dbTargets;
-      return { ...d, destKind: action.destKind, dbTargets };
+      return {
+        ...d,
+        destKind: action.destKind,
+        dbTargets,
+        // `evolve` alters a destination TABLE: there is none behind a webhook
+        delivery:
+          action.destKind === 'http' && d.delivery.onSchemaChange === 'evolve'
+            ? { ...d.delivery, onSchemaChange: 'stop' }
+            : d.delivery,
+      };
     }
     case 'patchDest':
       return { ...d, dest: { ...d.dest, ...action.patch } };

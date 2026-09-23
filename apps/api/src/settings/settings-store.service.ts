@@ -4,12 +4,13 @@
  * and refreshed on write, so hot paths (session TTL, query caps) don't hit the
  * database each time.
  */
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import {
   appSettingsSchema,
   type AppSettings,
   type AppSettingsDTO,
 } from '@syncle/core';
+import { InstanceService } from '../common/instance.service';
 import { PrismaService } from '../common/prisma.service';
 import { runtimeConfig } from '../common/runtime-config';
 
@@ -19,11 +20,56 @@ const SETTINGS_KEY = 'app';
 export class SettingsStoreService implements OnModuleInit {
   private readonly logger = new Logger('Settings');
   private cache: AppSettings | null = null;
+  private readonly listeners = new Set<(settings: AppSettings) => void>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * be told when the settings change (and once, now, with what they are). for
+   * the parts of the engine that are configured at construction and have to be
+   * re-configured to follow a setting — a worker's concurrency, say
+   */
+  onChange(listener: (settings: AppSettings) => void): () => void {
+    this.listeners.add(listener);
+    void this.resolved().then(
+      (s) => {
+        // unsubscribed before the settings were read: it asked not to be told
+        if (this.listeners.has(listener)) this.tell(listener, s);
+      },
+      () => undefined,
+    );
+    return () => this.listeners.delete(listener);
+  }
+
+  private announce(settings: AppSettings): void {
+    for (const listener of this.listeners) this.tell(listener, settings);
+  }
+
+  /**
+   * a listener that throws is its own problem: it must not fail a save, keep the
+   * other listeners from hearing, or — thrown inside a promise nobody awaits —
+   * become an unhandled rejection, which ends a Node process
+   */
+  private tell(listener: (settings: AppSettings) => void, settings: AppSettings): void {
+    try {
+      listener(settings);
+    } catch (err) {
+      this.logger.warn(`A settings listener failed: ${(err as Error).message}`);
+    }
+  }
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly instance?: InstanceService,
+  ) {}
 
   // warm the cache on boot so the sync snapshot() has real values immediately
   async onModuleInit(): Promise<void> {
+    // the cache is this process's own. a setting saved through ANOTHER process
+    // was never seen here — its session length, its row cap, its worker
+    // concurrency stayed what they were until a restart
+    this.instance?.handle('settings.changed', async () => {
+      this.cache = null;
+      this.announce(await this.resolved());
+    });
     await this.resolved().catch(() => undefined);
   }
 
@@ -46,6 +92,9 @@ export class SettingsStoreService implements OnModuleInit {
       poolIdleMs: runtimeConfig.poolIdleMs,
       jobConcurrency: runtimeConfig.jobConcurrency,
       sessionTtlMinutes: 60 * 24 * 7, // one week
+      deliveryRetentionDays: runtimeConfig.deliveryRetentionDays,
+      deliveryMaxPerJob: runtimeConfig.deliveryMaxPerJob,
+      auditRetentionDays: runtimeConfig.auditRetentionDays,
     };
   }
 
@@ -72,6 +121,8 @@ export class SettingsStoreService implements OnModuleInit {
       create: { key: SETTINGS_KEY, valueJson: JSON.stringify(merged) },
     });
     this.cache = { ...this.defaults(), ...merged };
+    this.announce(this.cache);
+    void this.instance?.publish('settings.changed');
     return this.cache;
   }
 

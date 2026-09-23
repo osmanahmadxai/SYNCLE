@@ -1,16 +1,18 @@
 /** PostgreSQL adapter backed by `pg` with a per-connection pool */
 import {
   Pool,
+  types as pgTypes,
   type PoolClient,
   type PoolConfig,
   type QueryResult as PgResult,
 } from 'pg';
+import { withDatabase } from '../connection-string';
+import { nodeTlsOptions } from '../tls-options';
 import type {
   InsertRowsParams,
   UpsertRowsParams,
   AdapterCapabilities,
   ColumnSchema,
-  ConnectionConfig,
   DatabaseSchema,
   ForeignKeySchema,
   IndexSchema,
@@ -25,6 +27,70 @@ import {
   type SqlTransactionConnection,
 } from './base-sql-adapter';
 
+/**
+ * Temporal values are read as the TEXT Postgres sends, not as JavaScript Dates.
+ *
+ * `pg` turns date/timestamp columns into `Date` objects by default, and for a
+ * tool whose job is to move a value unchanged that is wrong three times over:
+ *
+ *  - a `timestamp WITHOUT time zone` is a wall-clock reading. `pg` parses it in
+ *    the PROCESS's zone, so '2026-03-04 05:06:07' became a Date meaning 00:36Z
+ *    on a server running at UTC+4:30 — and any writer that formats Dates as UTC
+ *    (the JSON bulk path, a MySQL or SQLite target) then stored a different
+ *    time than the source holds. Correct only where the process sits in UTC.
+ *  - a Date is millisecond-precise and Postgres is microsecond-precise, so
+ *    every `now()`-stamped column was silently rounded on its way across.
+ *  - a `date` is a calendar day, not an instant; as a Date it could land on the
+ *    previous day once a zone offset was applied.
+ *
+ * An `interval` arrived as a `PostgresInterval` object, which no other driver
+ * can bind. Its text form goes straight back into Postgres and is readable
+ * anywhere else.
+ *
+ * The parsers are process-wide on purpose: the logical-replication client
+ * decodes change events with these same `pg` parsers, so a row reads the same
+ * whether it came from a replay or from the change stream.
+ */
+const RAW_TEXT_TYPES = {
+  date: 1082,
+  timestamp: 1114,
+  timestamptz: 1184,
+  interval: 1186,
+} as const;
+const RAW_TEXT_ARRAY_TYPES = {
+  _date: 1182,
+  _timestamp: 1115,
+  _timestamptz: 1185,
+  _interval: 1187,
+} as const;
+
+/**
+ * split a Postgres array literal into its elements, leaving each as text.
+ * pg-types' typings and its runtime disagree on this API's shape (a function
+ * vs. an object with `create`), so both are accepted.
+ */
+function parseTextArray(value: string): unknown[] {
+  const keep = (element: string): string => element;
+  const api = pgTypes.arrayParser as unknown as
+    | ((source: string, transform: (e: string) => unknown) => unknown[])
+    | { create(source: string, transform: (e: string) => unknown): { parse(): unknown[] } };
+  return typeof api === 'function' ? api(value, keep) : api.create(value, keep).parse();
+}
+
+// the array OIDs are real but absent from pg-types' `TypeId` enum
+const setParser = pgTypes.setTypeParser as unknown as (
+  oid: number,
+  parse: (value: string) => unknown,
+) => void;
+
+for (const oid of Object.values(RAW_TEXT_TYPES)) {
+  setParser(oid, (value) => value);
+}
+for (const oid of Object.values(RAW_TEXT_ARRAY_TYPES)) {
+  // still an array, as every other array type is — just of untouched text
+  setParser(oid, parseTextArray);
+}
+
 export const POSTGRES_CAPABILITIES: AdapterCapabilities = {
   query: true,
   queryLanguage: 'sql',
@@ -34,6 +100,7 @@ export const POSTGRES_CAPABILITIES: AdapterCapabilities = {
   rowEditing: true,
   transactions: true,
   ddl: true,
+  keysetPaging: true,
   manageDatabases: true,
   backupFormats: ['json', 'sql'],
 };
@@ -49,7 +116,9 @@ export class PostgresAdapter extends BaseSqlAdapter {
   private getPool(): Pool {
     if (this.pool) return this.pool;
     const cfg: PoolConfig = this.config.connectionString
-      ? { connectionString: this.config.connectionString }
+      ? // pg lets the string win over a `database` beside it, so the database
+        // that was actually asked for has to go INTO the string
+        { connectionString: withDatabase(this.config.connectionString, this.config.database) }
       : {
           host: this.config.host,
           port: this.config.port ?? 5432,
@@ -60,11 +129,11 @@ export class PostgresAdapter extends BaseSqlAdapter {
     cfg.max = 5;
     cfg.idleTimeoutMillis = 30_000;
     cfg.connectionTimeoutMillis = 10_000;
-    // self-signed certs are the norm for dev databases, so verification is
-    // opt-in: set options.sslVerify to true to enforce a trusted CA chain
-    if (this.config.ssl) {
-      cfg.ssl = { rejectUnauthorized: this.config.options?.sslVerify === true };
-    }
+    // what "TLS" means is decided in one place for every driver (tls-options).
+    // a connection string that names its own sslmode keeps it: pg lets the
+    // string win over this field
+    const ssl = nodeTlsOptions(this.config);
+    if (ssl) cfg.ssl = ssl;
     this.pool = new Pool(cfg);
     // an idle client losing its connection emits 'error' on the pool; with no
     // listener Node treats it as an unhandled 'error' event and crashes the
@@ -113,35 +182,45 @@ export class PostgresAdapter extends BaseSqlAdapter {
    * single value however many rows it carries, and takes its column types from
    * the target table itself, so no introspection is needed.
    *
-   * Only used when it is safe: values must survive JSON. A Buffer would not
-   * (bytea has no JSON representation here), so those fall back to the
-   * parameterised path in the base class, which stays correct if slower.
+   * It is also the ONLY correct path for a structured value. As a bound
+   * parameter `pg` serialises a JavaScript array as a Postgres array literal
+   * — right for an `integer[]` column, wrong for a `jsonb` one, and the driver
+   * cannot know which it is writing to. `[1,2]` bound to jsonb is a syntax
+   * error; `[]` is worse, because `{}` is valid JSON and lands as an empty
+   * OBJECT with no error at all. Here the target table's own column types do
+   * the casting, so a JSON array becomes an array in an array column and stays
+   * JSON in a json column. Any batch holding an array or object therefore takes
+   * this path whatever its size — two paths with different semantics on either
+   * side of a row-count threshold is how the same data synced differently in a
+   * backfill than it did live.
    */
-  private jsonSafe(rows: Array<Record<string, unknown>>): boolean {
+  private needsJsonPath(rows: Array<Record<string, unknown>>): boolean {
+    if (rows.length >= PostgresAdapter.JSON_BULK_MIN) return true;
     for (const row of rows) {
       for (const v of Object.values(row)) {
-        if (v instanceof Uint8Array || typeof v === 'bigint') return false;
+        if (
+          v !== null &&
+          typeof v === 'object' &&
+          !(v instanceof Date) &&
+          !(v instanceof Uint8Array)
+        ) {
+          return true;
+        }
       }
     }
-    return true;
+    return false;
   }
 
   /** rows below this are cheaper as a plain multi-row INSERT */
   private static readonly JSON_BULK_MIN = 250;
 
   override async insertRows(p: InsertRowsParams): Promise<QueryResult> {
-    if (p.rows.length < PostgresAdapter.JSON_BULK_MIN || !this.jsonSafe(p.rows)) {
-      return super.insertRows(p);
-    }
+    if (!this.needsJsonPath(p.rows)) return super.insertRows(p);
     return this.jsonBulk(p.table, p.schema, p.rows, '');
   }
 
   override async upsertRows(p: UpsertRowsParams): Promise<QueryResult> {
-    if (
-      p.rows.length < PostgresAdapter.JSON_BULK_MIN ||
-      p.keyColumns.length === 0 ||
-      !this.jsonSafe(p.rows)
-    ) {
+    if (p.keyColumns.length === 0 || !this.needsJsonPath(p.rows)) {
       return super.upsertRows(p);
     }
     // grouped by column set, because the tail names the columns to update
@@ -191,7 +270,7 @@ export class PostgresAdapter extends BaseSqlAdapter {
       `INSERT INTO ${target} (${colSql}) ` +
       `SELECT ${colSql} FROM json_populate_recordset(null::${target}, $1::json) ` +
       tail;
-    const res = await this.runSql(sql.trim(), [JSON.stringify(rows)]);
+    const res = await this.runSql(sql.trim(), [JSON.stringify(rows.map(toJsonRow))]);
     return {
       affectedRows: res.affectedRows ?? rows.length,
       rowCount: res.affectedRows ?? rows.length,
@@ -219,6 +298,10 @@ export class PostgresAdapter extends BaseSqlAdapter {
 
   protected override booleanLiteral(value: boolean): string {
     return value ? 'TRUE' : 'FALSE';
+  }
+
+  protected override readOnlyBeginSql(): string {
+    return 'BEGIN TRANSACTION READ ONLY';
   }
 
   protected override hexLiteral(buf: Buffer): string {
@@ -311,6 +394,34 @@ export class PostgresAdapter extends BaseSqlAdapter {
       [],
     );
 
+    // the precise spelling of each column's type. information_schema drops
+    // everything a bridge needs to recreate a column faithfully: precision and
+    // scale, varchar length, an array's element type. a domain is resolved to
+    // the base type it wraps, since the domain itself exists in this database
+    // only. best-effort: without it the looser `data_type` is used as before
+    const fullTypes = await this.runSql(
+      `SELECT n.nspname AS table_schema, c.relname AS table_name,
+              a.attname AS column_name,
+              CASE WHEN t.typtype = 'd'
+                   THEN format_type(t.typbasetype, t.typtypmod)
+                   ELSE format_type(a.atttypid, a.atttypmod)
+              END AS full_type
+       FROM pg_attribute a
+       JOIN pg_class c ON c.oid = a.attrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_type t ON t.oid = a.atttypid
+       WHERE a.attnum > 0 AND NOT a.attisdropped
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema')`,
+      [],
+    ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+    const fullTypeOf = new Map<string, string>();
+    for (const r of fullTypes.rows) {
+      fullTypeOf.set(
+        `${r.table_schema}.${r.table_name}.${r.column_name}`,
+        String(r.full_type),
+      );
+    }
+
     const relkind = await this.runSql(
       `SELECT n.nspname AS schema, c.relname AS name, c.relkind
        FROM pg_class c
@@ -358,6 +469,7 @@ export class PostgresAdapter extends BaseSqlAdapter {
       pks: pks.rows,
       fks: fks.rows,
       indexes: indexes.rows,
+      fullTypeOf,
     });
   }
 }
@@ -396,6 +508,8 @@ function buildSchema(
     pks: Row[];
     fks: Row[];
     indexes: Row[];
+    /** `schema.table.column` → the column's precise type, where known */
+    fullTypeOf?: Map<string, string>;
   },
 ): DatabaseSchema {
   const kindMap = new Map<string, string>();
@@ -476,6 +590,7 @@ function buildSchema(
     const column: ColumnSchema = {
       name: String(r.column_name),
       dataType: String(r.data_type),
+      nativeType: data.fullTypeOf?.get(`${key}.${r.column_name}`),
       nullable: r.is_nullable === 'YES',
       isPrimaryKey: isPk,
       isUnique: false,
@@ -502,4 +617,33 @@ function buildSchema(
       a.name.localeCompare(b.name),
     ),
   };
+}
+
+/**
+ * a row as JSON that `json_populate_recordset` can cast back to the column's
+ * type. JSON has no word for bytes or for integers past 2^53, so those travel
+ * as the text form Postgres itself reads: `\x…` hex for bytea, plain digits for
+ * bigint/numeric. a Date is an instant and goes as ISO-8601 with its `Z`.
+ */
+function toJsonRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) out[k] = toJsonValue(v);
+  return out;
+}
+
+function toJsonValue(v: unknown): unknown {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'number') return Number.isFinite(v) ? v : String(v); // NaN, ±Infinity
+  if (typeof v !== 'object') return v;
+  if (v instanceof Date) return v.toISOString();
+  if (v instanceof Uint8Array) return `\\x${Buffer.from(v).toString('hex')}`;
+  if (Array.isArray(v)) return v.map(toJsonValue);
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = toJsonValue(x);
+    return out;
+  }
+  return v; // a wrapper with its own toJSON
 }

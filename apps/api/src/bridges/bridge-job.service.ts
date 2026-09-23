@@ -29,6 +29,7 @@ import type {
 } from '@prisma/client';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { PrismaService } from '../common/prisma.service';
+import { AlertsService } from '../alerts/alerts.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { DeliveryService, sleep } from './delivery.service';
 import { DatabaseSinkService } from './database-sink.service';
@@ -38,6 +39,7 @@ import {
   type DeliveryOutcome,
   type BridgeJobPayload,
   type KeysetCheckpoint,
+  type ResolvedBridge,
 } from './bridges.types';
 import { ensureQueueReady } from './queue.util';
 
@@ -48,6 +50,9 @@ const TERMINAL: BridgeJobStatus[] = [
   'canceled',
   'interrupted',
 ];
+
+/** the sequence of a notice about a run as a whole: before its first delivery */
+export const BEFORE_ANY_ROW = -1;
 
 @Injectable()
 export class BridgeJobService implements OnModuleInit {
@@ -61,6 +66,7 @@ export class BridgeJobService implements OnModuleInit {
     private readonly delivery: DeliveryService,
     private readonly databaseSink: DatabaseSinkService,
     @InjectQueue(BRIDGE_JOBS_QUEUE) private readonly queue: Queue<BridgeJobPayload>,
+    private readonly alerts: AlertsService,
   ) {}
 
   /**
@@ -92,7 +98,7 @@ export class BridgeJobService implements OnModuleInit {
     const failedCount = await this.prisma.bridgeDelivery.count({
       where: { jobId, status: 'failed' },
     });
-    if (failedCount === 0) throw new BadRequestError('No failed deliveries to retry.');
+    if (failedCount === 0) throw new BadRequestError(this.nothingToRetry(job, 'deliveries'));
 
     await ensureQueueReady(this.queue);
     await this.clearSettledJob(jobId);
@@ -113,16 +119,19 @@ export class BridgeJobService implements OnModuleInit {
    * failed; they must be retried from the source instead. a database delivery
    * is NEVER flipped to success unless rows were actually written.
    */
-  async executeResend(jobId: string, signal: AbortSignal): Promise<void> {
+  async executeResend(jobId: string, signal: AbortSignal): Promise<'done' | 'continue'> {
     const job = await this.getJobRow(jobId);
     await this.markRunning(jobId);
     const bridge = await this.store.resolve(job.bridgeId);
+    // deliveries whose rows sit in the dead-letter queue are retried THERE, by
+    // re-reading the source. re-sending their captured payload from here would
+    // write a possibly outdated row over a newer one the stream has delivered
+    // since (and the capture may be cut at the storage cap anyway)
     const failed = await this.prisma.bridgeDelivery.findMany({
-      where: { jobId, status: 'failed' },
+      where: await this.resendableWhere(jobId),
       orderBy: { sequence: 'asc' },
       take: 2000,
     });
-    const dest = bridge.destination;
 
     // cross-process control polling, throttled like the job processor's.
     // 'canceled' = a cancel was requested; 'detached' = something else already
@@ -147,79 +156,10 @@ export class BridgeJobService implements OnModuleInit {
         const stop = await stopRequested();
         if (stop) {
           if (stop === 'canceled') await this.finalize(jobId, 'canceled');
-          return;
+          return 'done';
         }
 
-        // a failed delivery keeps its existing (failed) status and context,
-        // only the error text changes to say why the resend refused it
-        const refuse = (why: string): DeliveryOutcome => ({
-          status: 'failed',
-          httpStatus: d.httpStatus,
-          attempts: d.attempts,
-          error: why,
-          requestBody: d.requestBody,
-          responseBody: d.responseBody,
-          durationMs: d.durationMs ?? 0,
-        });
-
-        let outcome: DeliveryOutcome;
-        if (d.bodyTruncated) {
-          // the capture was cut at the storage cap: re-sending it would push
-          // truncated garbage (HTTP) or write nothing at all (database)
-          outcome = refuse(
-            'The captured payload was truncated at the storage cap, so it cannot be re-sent faithfully. Retry the failed rows from the source instead.',
-          );
-        } else {
-          let body: unknown = null;
-          if (d.requestBody) {
-            try {
-              body = JSON.parse(d.requestBody);
-            } catch {
-              body = d.requestBody;
-            }
-          }
-          if (dest.kind === 'database') {
-            // the captured requestBody is the already-mapped target row(s);
-            // replay it through the sink with identity mapping, preserving the
-            // persisted operation so a CDC delete retries as a keyed delete —
-            // not as an upsert that would resurrect the deleted row
-            const rows = (Array.isArray(body) ? body : [body]).filter(
-              (r): r is Record<string, unknown> => !!r && typeof r === 'object',
-            );
-            if (rows.length === 0 && d.rowCount > 0) {
-              // nothing recoverable to write: succeeding here would flip the
-              // cell green while zero rows actually landed in the target
-              outcome = refuse(
-                'No rows could be recovered from the captured payload, so nothing would be written. Retry the failed rows from the source instead.',
-              );
-            } else {
-              const retryTargets = dest.targets.map((t) => ({ ...t, mapping: [] }));
-              const skip = d.succeededTargetsJson
-                ? new Set(JSON.parse(d.succeededTargetsJson) as string[])
-                : undefined;
-              outcome = await this.databaseSink.deliver(
-                bridge,
-                retryTargets,
-                rows,
-                (d.op ?? undefined) as CdcOperation | undefined,
-                skip,
-              );
-            }
-          } else {
-            const idem = dest.idempotency ? `${jobId}:${d.sequence}` : undefined;
-            outcome = await this.delivery.send(body, dest, bridge.delivery, signal, idem);
-          }
-        }
-        await this.recordDelivery(
-          jobId,
-          {
-            sequence: d.sequence,
-            rowIndex: d.rowIndex,
-            rowCount: d.rowCount,
-            rowKeys: d.rowKeysJson ? (JSON.parse(d.rowKeysJson) as unknown[]) : null,
-          },
-          outcome,
-        );
+        await this.resendDelivery(bridge, jobId, d, signal);
         if (bridge.delivery.minDelayMs) await sleep(bridge.delivery.minDelayMs, signal);
       }
 
@@ -230,7 +170,20 @@ export class BridgeJobService implements OnModuleInit {
       const stop = await stopRequested();
       if (stop) {
         if (stop === 'canceled') await this.finalize(jobId, 'canceled');
-        return;
+        return 'done';
+      }
+      // a replay that STOPPED at a failure (on failure: abort — the default —
+      // or a source that went away) never read what came after it. with the
+      // failure out of the way, "completed" would be a lie about those rows:
+      // the run carries on from where it stopped instead
+      if (remaining === 0 && bridge.trigger.kind === 'replay' && !(await this.streamedToEnd(jobId))) {
+        // with the bridge as it is NOW: what was re-sent went through the
+        // current configuration, and the fix may well have been made there
+        await this.prisma.bridgeJob.update({
+          where: { id: jobId },
+          data: { configSnapshotJson: await this.store.snapshotJson(job.bridgeId) },
+        });
+        return 'continue';
       }
       await this.finalize(
         jobId,
@@ -239,13 +192,228 @@ export class BridgeJobService implements OnModuleInit {
           ? null
           : `${remaining} deliver${remaining === 1 ? 'y is' : 'ies are'} still failing after the retry.`,
       );
+      return 'done';
     } catch (err) {
       if (signal.aborted || (await this.cancelRequested(jobId))) {
         await this.finalize(jobId, 'canceled');
-        return;
+        return 'done';
       }
       await this.finalize(jobId, 'failed', err instanceof Error ? err.message : String(err));
+      return 'done';
     }
+  }
+
+  /**
+   * re-send ONE failed delivery from what was captured of it, and record how
+   * it went. deliveries that cannot be replayed faithfully stay failed, with
+   * the reason (see {@link executeResend}).
+   */
+  private async resendDelivery(
+    bridge: ResolvedBridge,
+    jobId: string,
+    d: DeliveryRow,
+    signal: AbortSignal,
+  ): Promise<DeliveryOutcome> {
+    const dest = bridge.destination;
+    // a failed delivery keeps its existing (failed) status and context,
+    // only the error text changes to say why the resend refused it
+    const refuse = (why: string): DeliveryOutcome => ({
+      status: 'failed',
+      httpStatus: d.httpStatus,
+      attempts: d.attempts,
+      error: why,
+      requestBody: d.requestBody,
+      responseBody: d.responseBody,
+      durationMs: d.durationMs ?? 0,
+    });
+
+    let outcome: DeliveryOutcome;
+    if (d.bodyTruncated) {
+      // the capture was cut at the storage cap: re-sending it would push
+      // truncated garbage (HTTP) or write nothing at all (database)
+      outcome = refuse(
+        'The captured payload was truncated at the storage cap, so it cannot be re-sent faithfully. Retry the failed rows from the source instead.',
+      );
+    } else {
+      let body: unknown = null;
+      if (d.requestBody) {
+        try {
+          body = JSON.parse(d.requestBody);
+        } catch {
+          body = d.requestBody;
+        }
+      }
+      if (dest.kind === 'database') {
+        // the captured requestBody is the already-mapped target row(s);
+        // replay it through the sink with identity mapping, preserving the
+        // persisted operation so a CDC delete retries as a keyed delete —
+        // not as an upsert that would resurrect the deleted row
+        const rows = (Array.isArray(body) ? body : [body]).filter(
+          (r): r is Record<string, unknown> => !!r && typeof r === 'object',
+        );
+        if (rows.length === 0 && d.rowCount > 0) {
+          // nothing recoverable to write: succeeding here would flip the
+          // cell green while zero rows actually landed in the target
+          outcome = refuse(
+            'No rows could be recovered from the captured payload, so nothing would be written. Retry the failed rows from the source instead.',
+          );
+        } else {
+          const retryTargets = dest.targets.map((t) => ({ ...t, mapping: [] }));
+          const skip = d.succeededTargetsJson
+            ? new Set(JSON.parse(d.succeededTargetsJson) as string[])
+            : undefined;
+          outcome = await this.databaseSink.deliver(
+            bridge,
+            retryTargets,
+            rows,
+            (d.op ?? undefined) as CdcOperation | undefined,
+            skip,
+          );
+        }
+      } else {
+        const idem = dest.idempotency ? `${jobId}:${d.sequence}` : undefined;
+        outcome = await this.delivery.send(body, dest, bridge.delivery, signal, idem);
+      }
+    }
+    await this.recordDelivery(
+      jobId,
+      {
+        sequence: d.sequence,
+        rowIndex: d.rowIndex,
+        rowCount: d.rowCount,
+        rowKeys: d.rowKeysJson ? (JSON.parse(d.rowKeysJson) as unknown[]) : null,
+      },
+      outcome,
+    );
+    return outcome;
+  }
+
+  async getDelivery(jobId: string, sequence: number): Promise<BridgeDelivery> {
+    const d = await this.prisma.bridgeDelivery.findUnique({ where: { jobId_sequence: { jobId, sequence } } });
+    if (!d) throw new NotFoundError(`Delivery ${sequence} not found`);
+    return this.toDelivery(d);
+  }
+
+  /**
+   * every failed delivery of a job, oldest first, a page at a time — with the
+   * keys of its rows, which the list endpoint leaves out (a batch can be a
+   * hundred thousand of them)
+   */
+  async *failedDeliveries(jobId: string): AsyncGenerator<BridgeDelivery & { rowKeys: unknown[] | null }> {
+    let after = -1;
+    for (;;) {
+      const page = await this.prisma.bridgeDelivery.findMany({
+        where: { jobId, status: 'failed', sequence: { gt: after } },
+        orderBy: { sequence: 'asc' },
+        take: 500,
+      });
+      for (const row of page) {
+        let rowKeys: unknown[] | null = null;
+        try {
+          rowKeys = row.rowKeysJson ? (JSON.parse(row.rowKeysJson) as unknown[]) : null;
+        } catch {
+          rowKeys = null;
+        }
+        yield { ...this.toDelivery(row), rowKeys };
+      }
+      if (page.length < 500) return;
+      after = page[page.length - 1]!.sequence;
+    }
+  }
+
+  /**
+   * did this replay read its source to the end? a run that stopped early has
+   * rows it never reached, however green its recorded deliveries are. (a job
+   * from before this was recorded reads as "not known to" — resuming one that
+   * had in fact finished re-reads its last page, finds every delivery done,
+   * and completes.)
+   */
+  async streamedToEnd(jobId: string): Promise<boolean> {
+    const row = await this.prisma.bridgeJob.findUnique({ where: { id: jobId }, select: { cursorJson: true } });
+    try {
+      return row?.cursorJson ? (JSON.parse(row.cursorJson) as { streamed?: boolean }).streamed === true : false;
+    } catch {
+      return false;
+    }
+  }
+
+  /** the source has been read to the end (see {@link streamedToEnd}); keeps the keyset checkpoint beside it */
+  async markStreamed(jobId: string): Promise<void> {
+    const row = await this.prisma.bridgeJob.findUnique({ where: { id: jobId }, select: { cursorJson: true } });
+    let state: Record<string, unknown> = {};
+    try {
+      state = row?.cursorJson ? (JSON.parse(row.cursorJson) as Record<string, unknown>) : {};
+    } catch {
+      state = {};
+    }
+    await this.prisma.bridgeJob.update({ where: { id: jobId }, data: { cursorJson: JSON.stringify({ ...state, streamed: true }) } });
+  }
+
+  /**
+   * retry ONE failed delivery, now. a live bridge's failed rows sit in its
+   * dead-letter queue and are retried there, by re-reading the source; anything
+   * else is re-sent from what was captured. if that was the failure a replay
+   * had stopped at, the replay carries on.
+   */
+  async retryDelivery(bridgeId: string, jobId: string, sequence: number): Promise<BridgeDelivery> {
+    const job = await this.getJobRow(jobId);
+    if (job.bridgeId !== bridgeId) throw new NotFoundError(`Job "${jobId}" not found`);
+    const d = await this.prisma.bridgeDelivery.findUnique({ where: { jobId_sequence: { jobId, sequence } } });
+    if (!d) throw new NotFoundError(`Delivery ${sequence} not found`);
+    if (d.status !== 'failed') {
+      throw new BadRequestError(`Only a failed delivery can be retried; this one is ${d.status}.`);
+    }
+    if (ACTIVE.includes(job.status as BridgeJobStatus)) {
+      throw new ConflictError(
+        'This job is still active. Stop it (or wait for it to finish) before retrying a failed delivery.',
+      );
+    }
+    const bridge = await this.store.resolve(bridgeId);
+    await this.resendDelivery(bridge, jobId, d, AbortSignal.timeout(10 * 60_000));
+
+    const remaining = await this.prisma.bridgeDelivery.count({ where: { jobId, status: 'failed' } });
+    if (remaining === 0 && job.status === 'failed') {
+      if (bridge.trigger.kind === 'replay' && !(await this.streamedToEnd(jobId))) {
+        // that was what the replay had stopped at: on with the rest of the table
+        await ensureQueueReady(this.queue);
+        await this.clearSettledJob(jobId);
+        await this.prisma.bridgeJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'queued',
+            error: null,
+            finishedAt: null,
+            configSnapshotJson: await this.store.snapshotJson(bridgeId),
+          },
+        });
+        await this.enqueue(jobId, bridgeId);
+      } else if (bridge.trigger.kind === 'replay') {
+        await this.prisma.bridgeJob.update({ where: { id: jobId }, data: { status: 'completed', error: null } });
+      }
+    }
+    const after = await this.prisma.bridgeDelivery.findUnique({ where: { jobId_sequence: { jobId, sequence } } });
+    return this.toDelivery(after!);
+  }
+
+  /** failed deliveries a captured-payload resend may touch (not owned by the dead-letter queue) */
+  async resendableFailures(jobId: string): Promise<number> {
+    return this.prisma.bridgeDelivery.count({ where: await this.resendableWhere(jobId) });
+  }
+
+  /** a job's failed deliveries, minus the ones whose rows the dead-letter queue holds */
+  private async resendableWhere(
+    jobId: string,
+  ): Promise<{ jobId: string; status: 'failed'; sequence?: { notIn: number[] } }> {
+    const parked = await this.prisma.bridgeDeadLetter.findMany({
+      where: { jobId },
+      select: { sequence: true },
+      distinct: ['sequence'],
+    });
+    return {
+      jobId,
+      status: 'failed',
+      ...(parked.length ? { sequence: { notIn: parked.map((d) => d.sequence) } } : {}),
+    };
   }
 
   /* ----- prepare (queue without sending) ----- */
@@ -268,15 +436,35 @@ export class BridgeJobService implements OnModuleInit {
     });
     if (active) return null;
 
-    const { count } = await this.prisma.bridgeJob.deleteMany({
+    const drafts = await this.prisma.bridgeJob.findMany({
       where: { bridgeId, status: 'draft' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
     });
     // on update we only refresh a draft that already existed, never add a fresh
     // draft to a bridge that has already been run
-    if (opts.onlyExisting && count === 0) return null;
+    if (opts.onlyExisting && drafts.length === 0) return null;
 
     const snapshotJson = await this.store.snapshotJson(bridgeId);
-    const total = await this.computeTotal(snapshotJson).catch(() => null);
+    const total = await this.computeTotal(snapshotJson, bridgeId).catch(() => null);
+    // the draft is refreshed IN PLACE. it used to be deleted and made again
+    // under a new id, and the page that was open on the bridge — which had just
+    // saved it — asked once more for the deliveries of the run that was gone:
+    // a 404 in the browser's console on every save
+    const [keep, ...extra] = drafts;
+    if (extra.length > 0) {
+      await this.prisma.bridgeJob.deleteMany({ where: { id: { in: extra.map((d) => d.id) } } });
+    }
+    if (keep) {
+      // (`updateMany` on the status too: a draft that was STARTED in the
+      // meantime is a run now, and is not turned back into a plan)
+      const { count } = await this.prisma.bridgeJob.updateMany({
+        where: { id: keep.id, status: 'draft' },
+        data: { configSnapshotJson: snapshotJson, totalCount: total, startedAt: new Date() },
+      });
+      if (count === 0) return null;
+      return this.toJob(await this.getJobRow(keep.id));
+    }
     const row = await this.prisma.bridgeJob.create({
       data: {
         id: randomUUID(),
@@ -293,8 +481,20 @@ export class BridgeJobService implements OnModuleInit {
 
   async start(
     bridgeId: string,
-    opts: { resumeJobId?: string; jobId?: string; retryFailedOf?: string } = {},
+    opts: {
+      resumeJobId?: string;
+      jobId?: string;
+      retryFailedOf?: string;
+      /**
+       * a NEW run from the top, whatever became of the last one. pressing Run on
+       * a bridge whose last run stopped half-way picks that run up again; a
+       * schedule's tick must not — "every night" means the whole table every night
+       */
+      fresh?: boolean;
+      startedBy?: 'manual' | 'schedule';
+    } = {},
   ): Promise<BridgeJob> {
+    const startedBy = opts.startedBy ?? 'manual';
     const bridge = await this.store.get(bridgeId); // 404s if the bridge is gone
     // replay-only: watch/CDC bridges are live listeners with their own start
     // endpoint. pushing one through the replay queue would re-stream (and
@@ -318,7 +518,7 @@ export class BridgeJobService implements OnModuleInit {
       await ensureQueueReady(this.queue);
       const row = await this.prisma.bridgeJob.update({
         where: { id: draft.id },
-        data: { status: 'queued', startedAt: new Date() },
+        data: { status: 'queued', startedAt: new Date(), startedBy },
       });
       await this.enqueue(draft.id, bridgeId);
       return this.toJob(row);
@@ -340,12 +540,12 @@ export class BridgeJobService implements OnModuleInit {
       where: { bridgeId, status: { in: ['paused', 'canceled', 'interrupted', 'failed'] } },
       orderBy: { startedAt: 'desc' },
     });
-    if (latest) return this.resume(bridgeId, latest.id);
+    if (latest && !opts.fresh) return this.resume(bridgeId, latest.id);
 
     await ensureQueueReady(this.queue);
     const id = randomUUID();
     const snapshotJson = await this.store.snapshotJson(bridgeId);
-    const total = await this.computeTotal(snapshotJson).catch(() => null);
+    const total = await this.computeTotal(snapshotJson, bridgeId).catch(() => null);
     const row = await this.prisma.bridgeJob.create({
       data: {
         id,
@@ -353,6 +553,7 @@ export class BridgeJobService implements OnModuleInit {
         status: 'queued',
         configSnapshotJson: snapshotJson,
         totalCount: total,
+        startedBy,
       },
     });
     await this.enqueue(id, bridgeId);
@@ -377,8 +578,7 @@ export class BridgeJobService implements OnModuleInit {
     const failedCount = await this.prisma.bridgeDelivery.count({
       where: { jobId, status: 'failed' },
     });
-    if (failedCount === 0)
-      throw new BadRequestError('No failed rows to retry.');
+    if (failedCount === 0) throw new BadRequestError(this.nothingToRetry(job, 'rows'));
 
     await ensureQueueReady(this.queue);
     const updated = await this.prisma.bridgeJob.update({
@@ -399,8 +599,8 @@ export class BridgeJobService implements OnModuleInit {
   }
 
   /** best-effort planned row count for a source, used to render the timeline */
-  private async computeTotal(snapshotJson: string): Promise<number | null> {
-    const bridge = this.store.resolveSnapshot(snapshotJson);
+  private async computeTotal(snapshotJson: string, bridgeId: string): Promise<number | null> {
+    const bridge = this.store.resolveSnapshot(snapshotJson, bridgeId);
     if (bridge.source.kind === 'table') {
       const src = bridge.source;
       const page = await this.pool.withAdapter(
@@ -823,15 +1023,84 @@ export class BridgeJobService implements OnModuleInit {
     ]);
   }
 
+  /**
+   * put a notice on the timeline: a `skipped` cell of zero rows whose text says
+   * what happened. used for things a bridge deliberately did not apply, which
+   * must be visible where deliveries are. idempotent per sequence, so a replay
+   * after a crash rewrites the same cell instead of adding another. a notice
+   * about the run as a whole goes at sequence -1, before any row (see
+   * {@link BEFORE_ANY_ROW}); it has no row of its own
+   */
+  async recordNotice(
+    jobId: string,
+    sequence: number,
+    message: string,
+    rowIndex: number = Math.max(0, sequence),
+  ): Promise<void> {
+    await this.prisma.bridgeDelivery.upsert({
+      where: { jobId_sequence: { jobId, sequence } },
+      create: {
+        id: randomUUID(),
+        jobId,
+        sequence,
+        rowIndex,
+        rowCount: 0,
+        status: 'skipped',
+        attempts: 0,
+        error: message,
+      },
+      update: { status: 'skipped', error: message },
+    });
+  }
+
   async finalize(
     jobId: string,
     status: BridgeJobStatus,
     error?: string | null,
+    /** what KIND of stop this is, when it is not an ordinary failure */
+    alertAs: 'bridge.failed' | 'bridge.position_lost' | 'none' = 'bridge.failed',
   ): Promise<void> {
-    await this.prisma.bridgeJob.update({
+    const job = await this.prisma.bridgeJob.update({
       where: { id: jobId },
       data: { status, error: error ?? null, finishedAt: new Date() },
     });
+    this.raiseAlert(jobId, status, error ?? null, job.failedCount, alertAs);
+  }
+
+  /**
+   * a job that ends badly is said out loud (see AlertsService). every way a job
+   * ends passes through `finalize`, so this is the one place that has to know:
+   *  - failed, or paused BECAUSE of something (onError=abort) — someone has to act
+   *  - completed, but with deliveries that failed along the way (onError=continue)
+   * a stop or a cancel that somebody asked for is not news.
+   */
+  private raiseAlert(
+    jobId: string,
+    status: BridgeJobStatus,
+    error: string | null,
+    failedCount: number,
+    alertAs: 'bridge.failed' | 'bridge.position_lost' | 'none',
+  ): void {
+    // whoever stopped it has already said why, in better words (schema drift)
+    if (alertAs === 'none') return;
+    if (status === 'failed' || (status === 'paused' && error)) {
+      this.alerts.emitForJob(jobId, {
+        type: alertAs,
+        severity: 'critical',
+        title: (name) =>
+          alertAs === 'bridge.position_lost'
+            ? `Bridge "${name}" lost its place in the source's change log`
+            : `Bridge "${name}" stopped`,
+        message: error ?? 'The job failed.',
+      });
+    } else if (status === 'completed' && failedCount > 0) {
+      this.alerts.emitForJob(jobId, {
+        type: 'bridge.failed',
+        severity: 'warning',
+        title: (name) => `A run of "${name}" finished with ${failedCount} failed deliver${failedCount === 1 ? 'y' : 'ies'}`,
+        message: 'The run went on past them (on failure: continue). Open the job to see which rows, and retry them from there.',
+      });
+    }
   }
 
   /* ----- boot reconcile ----- */
@@ -868,6 +1137,21 @@ export class BridgeJobService implements OnModuleInit {
 
   /* ----- mappers ----- */
 
+  /**
+   * "nothing failed" and "what failed has been removed" are different answers:
+   * a job can show 40 failed on its counter and have no failed delivery left,
+   * because delivery details are only kept for the retention period
+   */
+  private nothingToRetry(job: JobRow, what: 'rows' | 'deliveries'): string {
+    if (job.failedCount > 0 && job.prunedDeliveries > 0) {
+      return (
+        `This job's delivery details have been removed (they are kept for a limited time — see Settings → delivery history), ` +
+        `so its ${job.failedCount} failed ${what} can no longer be retried individually. Run the bridge again instead.`
+      );
+    }
+    return `No failed ${what} to retry.`;
+  }
+
   private toJob(row: JobRow): BridgeJob {
     return {
       id: row.id,
@@ -882,6 +1166,9 @@ export class BridgeJobService implements OnModuleInit {
       error: row.error,
       startedAt: row.startedAt.toISOString(),
       finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
+      prunedDeliveries: row.prunedDeliveries,
+      prunedBelowSequence: row.prunedBelowSequence,
+      startedBy: row.startedBy === 'schedule' ? 'schedule' : 'manual',
     };
   }
 
@@ -900,6 +1187,7 @@ export class BridgeJobService implements OnModuleInit {
       responseBody: row.responseBody,
       durationMs: row.durationMs,
       createdAt: row.createdAt.toISOString(),
+      op: (row.op ?? null) as CdcOperation | null,
     };
   }
 }

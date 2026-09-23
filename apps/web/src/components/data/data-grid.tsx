@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import {
   ArrowDown,
   ArrowUp,
@@ -50,20 +51,28 @@ import {
 } from '@/components/ui/select';
 import { RowEditorDialog } from './row-editor-dialog';
 
-const OPERATORS: { value: FilterOperator; label: string; noValue?: boolean }[] =
-  [
-    { value: 'eq', label: '=' },
-    { value: 'neq', label: '≠' },
-    { value: 'lt', label: '<' },
-    { value: 'lte', label: '≤' },
-    { value: 'gt', label: '>' },
-    { value: 'gte', label: '≥' },
-    { value: 'contains', label: 'contains' },
-    { value: 'startsWith', label: 'starts with' },
-    { value: 'endsWith', label: 'ends with' },
-    { value: 'isNull', label: 'is null', noValue: true },
-    { value: 'notNull', label: 'is not null', noValue: true },
-  ];
+interface OperatorOption {
+  value: FilterOperator;
+  /** a symbol, shown as it is in every language */
+  label?: string;
+  /** a `dataGrid` message key, for the operators that are words */
+  labelKey?: string;
+  noValue?: boolean;
+}
+
+const OPERATORS: OperatorOption[] = [
+  { value: 'eq', label: '=' },
+  { value: 'neq', label: '≠' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '≤' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '≥' },
+  { value: 'contains', labelKey: 'operators.contains' },
+  { value: 'startsWith', labelKey: 'operators.startsWith' },
+  { value: 'endsWith', labelKey: 'operators.endsWith' },
+  { value: 'isNull', labelKey: 'operators.isNull', noValue: true },
+  { value: 'notNull', labelKey: 'operators.notNull', noValue: true },
+];
 
 const PAGE_SIZES = [25, 50, 100, 250, 500];
 
@@ -74,6 +83,8 @@ function formatCell(value: unknown): string {
 }
 
 export function DataGrid() {
+  const t = useTranslations('dataGrid');
+  const tc = useTranslations('common');
   const { activeConnectionId, activeDatabase, selected } = useStudio();
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -126,7 +137,7 @@ export function DataGrid() {
   if (!selected) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a table to browse its data.
+        {t('selectTable')}
       </div>
     );
   }
@@ -174,9 +185,9 @@ export function DataGrid() {
       await qc.invalidateQueries({
         queryKey: ['connections', activeConnectionId, 'browse'],
       });
-      toast.success('Row updated');
+      toast.success(t('rowUpdated'));
     } catch (err) {
-      toast.error('Update failed', {
+      toast.error(t('updateFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -186,9 +197,9 @@ export function DataGrid() {
 
   async function deleteRow(row: Record<string, unknown>) {
     const ok = await confirm({
-      title: 'Delete this row?',
-      description: 'This cannot be undone.',
-      confirmText: 'Delete',
+      title: t('deleteRowTitle'),
+      description: t('deleteRowDescription'),
+      confirmText: tc('delete'),
       destructive: true,
     });
     if (!ok) return;
@@ -206,9 +217,9 @@ export function DataGrid() {
       await qc.invalidateQueries({
         queryKey: ['connections', activeConnectionId, 'browse'],
       });
-      toast.success('Row deleted');
+      toast.success(t('rowDeleted'));
     } catch (err) {
-      toast.error('Delete failed', {
+      toast.error(t('deleteFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -225,10 +236,15 @@ export function DataGrid() {
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <span className="font-mono text-sm font-medium">{selected.table}</span>
         <Badge variant="secondary" className="font-normal">
-          {rangeStart}–{rangeEnd}
-          {total != null
-            ? ` of ${data?.estimated ? '~' : ''}${total.toLocaleString()}`
-            : ''}
+          {total == null
+            ? t('range', { start: rangeStart, end: rangeEnd })
+            : data?.estimated
+              ? t('rangeOfEstimatedTotal', {
+                  start: rangeStart,
+                  end: rangeEnd,
+                  total,
+                })
+              : t('rangeOfTotal', { start: rangeStart, end: rangeEnd, total })}
         </Badge>
 
         <FilterPopover
@@ -249,7 +265,7 @@ export function DataGrid() {
             size="icon"
             className="h-8 w-8"
             onClick={() => refetch()}
-            aria-label="Refresh"
+            aria-label={t('refresh')}
           >
             <RefreshCw className="h-4 w-4" />
           </Button>
@@ -260,7 +276,7 @@ export function DataGrid() {
                 size="icon"
                 className="h-8 w-8"
                 disabled={rows.length === 0}
-                aria-label="Export"
+                aria-label={t('export')}
               >
                 <Download className="h-4 w-4" />
               </Button>
@@ -276,7 +292,7 @@ export function DataGrid() {
                   )
                 }
               >
-                Export page as CSV
+                {t('exportCsv')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() =>
@@ -288,13 +304,13 @@ export function DataGrid() {
                   )
                 }
               >
-                Export page as JSON
+                {t('exportJson')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           {canEdit && (
             <Button size="sm" onClick={() => setAddOpen(true)}>
-              <Plus className="mr-1 h-4 w-4" /> Add row
+              <Plus className="mr-1 h-4 w-4" /> {t('addRow')}
             </Button>
           )}
         </div>
@@ -325,9 +341,9 @@ export function DataGrid() {
                         {pk.includes(col.name) && (
                           <span
                             className="text-[10px] text-amber-500"
-                            title="Primary key"
+                            title={t('primaryKey')}
                           >
-                            PK
+                            {t('pk')}
                           </span>
                         )}
                         {active &&
@@ -350,7 +366,7 @@ export function DataGrid() {
                       <button
                         className="opacity-0 group-hover:opacity-100"
                         onClick={() => deleteRow(row)}
-                        aria-label="Delete row"
+                        aria-label={t('deleteRow')}
                       >
                         <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
                       </button>
@@ -409,7 +425,7 @@ export function DataGrid() {
                     colSpan={columns.length + 1}
                     className="px-4 py-10 text-center text-sm text-muted-foreground"
                   >
-                    No rows.
+                    {t('noRows')}
                   </td>
                 </tr>
               )}
@@ -420,7 +436,7 @@ export function DataGrid() {
 
       {/* pagination */}
       <div className="flex items-center gap-3 border-t px-3 py-1.5 text-xs">
-        <span className="text-muted-foreground">Rows per page</span>
+        <span className="text-muted-foreground">{t('rowsPerPage')}</span>
         <Select
           value={String(limit)}
           onValueChange={(v) => {
@@ -493,11 +509,14 @@ function FilterPopover({
   filters: FilterSpec[];
   onChange: (filters: FilterSpec[]) => void;
 }) {
+  const t = useTranslations('dataGrid');
   const [column, setColumn] = useState<string>('');
   const [operator, setOperator] = useState<FilterOperator>('eq');
   const [value, setValue] = useState('');
 
   const opMeta = OPERATORS.find((o) => o.value === operator);
+  const opLabel = (o?: OperatorOption) =>
+    o?.labelKey ? t(o.labelKey) : o?.label;
 
   function add() {
     const col = column || columns[0];
@@ -514,7 +533,7 @@ function FilterPopover({
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1">
           <Filter className="h-4 w-4" />
-          Filter
+          {t('filter')}
           {filters.length > 0 && (
             <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
               {filters.length}
@@ -529,7 +548,8 @@ function FilterPopover({
               {filters.map((f, i) => (
                 <Badge key={i} variant="secondary" className="gap-1 font-normal">
                   <span className="font-mono">
-                    {f.column} {OPERATORS.find((o) => o.value === f.operator)?.label}{' '}
+                    {f.column}{' '}
+                    {opLabel(OPERATORS.find((o) => o.value === f.operator))}{' '}
                     {f.value != null ? String(f.value) : ''}
                   </span>
                   <button
@@ -546,7 +566,7 @@ function FilterPopover({
           <div className="grid gap-2">
             <Select value={column || columns[0]} onValueChange={setColumn}>
               <SelectTrigger className="h-8">
-                <SelectValue placeholder="Column" />
+                <SelectValue placeholder={t('columnPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
                 {columns.map((c) => (
@@ -566,7 +586,7 @@ function FilterPopover({
               <SelectContent>
                 {OPERATORS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
-                    {o.label}
+                    {opLabel(o)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -574,14 +594,14 @@ function FilterPopover({
             {!opMeta?.noValue && (
               <Input
                 className="h-8"
-                placeholder="Value"
+                placeholder={t('valuePlaceholder')}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && add()}
               />
             )}
             <Button size="sm" onClick={add}>
-              Add filter
+              {t('addFilter')}
             </Button>
           </div>
         </div>

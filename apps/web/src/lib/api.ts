@@ -3,8 +3,17 @@
  * throws a structured {@link ApiError} on `{ error }` responses
  */
 import type {
+  AlertChannel,
+  AlertChannelInput,
+  AlertTestResult,
+  ApiKeyCreated,
+  ApiKeyInfo,
+  ApiKeyInputDTO,
   AppSettings,
   AppSettingsDTO,
+  BridgeExportDocument,
+  BridgeImportDTO,
+  BridgeImportResult,
   AuthStatus,
   AuthUser,
   BrowseParams,
@@ -17,6 +26,9 @@ import type {
   DeleteRowParams,
   CdcReadiness,
   CdcReadinessDTO,
+  DeadLetterPage,
+  DeadLetterRetryResult,
+  DeadLetterStatus,
   DriverInfo,
   Bridge,
   BridgeDelivery,
@@ -26,11 +38,23 @@ import type {
   BridgeJob,
   InsertRowParams,
   LoginDTO,
+  PasswordResetDTO,
   QueryResult,
   SetupDTO,
   UpdateRowParams,
   Workspace,
   WorkspaceInputDTO,
+  BridgeSourceHold,
+  BridgeSchemaDrift,
+  BridgeLoopStatus,
+  BridgeScheduleStatus,
+  BridgeVerification,
+  BridgeBulkInput,
+  BridgeBulkResult,
+  AuditPage,
+  UserInfo,
+  UserInputDTO,
+  UserUpdateDTO,
 } from '@syncle/core';
 
 /**
@@ -40,7 +64,40 @@ import type {
  * values are inlined at build time. Set NEXT_PUBLIC_API_URL to an absolute URL
  * to bypass the proxy and call the API directly (then CORS applies).
  */
+/** what `GET /audit` is asked for: a page, newest first, narrowed by what/whom */
+export interface AuditQuery {
+  limit?: number;
+  /** the `next` of the page before */
+  before?: string;
+  action?: string;
+  actor?: string;
+  targetId?: string;
+  targetType?: string;
+}
+
+/** one API process, as `GET /settings/instances` lists them */
+export interface InstanceInfo {
+  id: string;
+  startedAt: string;
+  version: string;
+  /** it runs the live change streams and the periodic sweeps */
+  leader: boolean;
+  /** the process that answered this request */
+  self: boolean;
+}
+
+/** what `GET /settings/encryption` answers (the API's KeyRotationReport) */
+export interface KeyRotationReport {
+  previousKeys: number;
+  reencrypted: number;
+  unreadable: number;
+  checkedAt: string;
+}
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
+
+/** where the API's stream of events is (see `live-events.ts`) */
+export const eventsUrl = (): string => `${BASE_URL}/events`;
 
 export class ApiError extends Error {
   constructor(
@@ -104,6 +161,19 @@ export const api = {
     request<AuthUser>('/auth/setup', { method: 'POST', ...jsonBody(input) }),
   login: (input: LoginDTO) =>
     request<AuthUser>('/auth/login', { method: 'POST', ...jsonBody(input) }),
+  /** a change of master key: how many previous keys are still accepted, and what the last pass found */
+  encryptionStatus: () => request<KeyRotationReport>('/settings/encryption'),
+  instances: () => request<InstanceInfo[]>('/settings/instances'),
+  rotateEncryption: () => request<KeyRotationReport>('/settings/encryption/rotate', { method: 'POST' }),
+  /** "I cannot sign in": a reset code is printed on the SERVER's console. says nothing either way. unnamed = the first admin's */
+  requestPasswordReset: (username?: string) =>
+    request<{ requested: true }>('/auth/reset/request', {
+      method: 'POST',
+      ...jsonBody(username ? { username } : {}),
+    }),
+  /** a new password with that code; signs in */
+  resetPassword: (input: PasswordResetDTO) =>
+    request<AuthUser>('/auth/reset', { method: 'POST', ...jsonBody(input) }),
   logout: () =>
     request<{ success: true }>('/auth/logout', { method: 'POST' }),
   getMe: () => request<AuthUser>('/auth/me'),
@@ -115,8 +185,65 @@ export const api = {
 
   /* ----- app settings ----- */
   getSettings: () => request<AppSettings>('/settings'),
+  /** which release the API is; `source` says whether the image or the package said so */
+  getVersion: () =>
+    request<{ version: string; source: 'build' | 'package'; node: string }>(
+      '/version',
+    ),
   updateSettings: (input: AppSettingsDTO) =>
     request<AppSettings>('/settings', { method: 'PUT', ...jsonBody(input) }),
+
+  /* ----- accounts (an admin's to manage, signed in) ----- */
+  listUsers: () => request<UserInfo[]>('/auth/users'),
+  createUser: (input: UserInputDTO) =>
+    request<UserInfo>('/auth/users', { method: 'POST', ...jsonBody(input) }),
+  updateUser: (id: string, input: UserUpdateDTO) =>
+    request<UserInfo>(`/auth/users/${id}`, { method: 'PUT', ...jsonBody(input) }),
+  deleteUser: (id: string) =>
+    request<{ id: string; username: string }>(`/auth/users/${id}`, { method: 'DELETE' }),
+  endUserSessions: (id: string) =>
+    request<UserInfo>(`/auth/users/${id}/sessions/end`, { method: 'POST' }),
+
+  /* ----- the audit log: who did what (an admin's to read) ----- */
+  audit: (query: AuditQuery) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    const qs = params.toString();
+    return request<AuditPage>(`/audit${qs ? `?${qs}` : ''}`);
+  },
+
+  /* ----- API keys (managed signed in; a key cannot manage keys) ----- */
+  listApiKeys: () => request<ApiKeyInfo[]>('/auth/api-keys'),
+  /** the answer carries the key itself: this once */
+  createApiKey: (input: ApiKeyInputDTO) =>
+    request<ApiKeyCreated>('/auth/api-keys', { method: 'POST', ...jsonBody(input) }),
+  revokeApiKey: (id: string) => request<ApiKeyInfo>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
+
+  /* ----- bridges as a file ----- */
+  exportBridge: (id: string) => request<BridgeExportDocument>(`/bridges/${id}/export`),
+  exportBridges: (workspaceId?: string) =>
+    request<BridgeExportDocument>(
+      workspaceId ? `/bridges/export?workspaceId=${encodeURIComponent(workspaceId)}` : '/bridges/export',
+    ),
+  importBridges: (input: BridgeImportDTO) =>
+    request<BridgeImportResult>('/bridges/import', { method: 'POST', ...jsonBody(input) }),
+  cloneBridge: (id: string) => request<Bridge>(`/bridges/${id}/clone`, { method: 'POST' }),
+  /** one bridge per table, for many tables at once; tables none could be made for come back with the reason */
+  bulkBridges: (input: BridgeBulkInput) =>
+    request<BridgeBulkResult>('/bridges/bulk', { method: 'POST', ...jsonBody(input) }),
+
+  /* ----- alert channels ----- */
+  listAlertChannels: () => request<AlertChannel[]>('/alerts/channels'),
+  createAlertChannel: (input: AlertChannelInput) =>
+    request<AlertChannel>('/alerts/channels', { method: 'POST', ...jsonBody(input) }),
+  updateAlertChannel: (id: string, input: AlertChannelInput) =>
+    request<AlertChannel>(`/alerts/channels/${id}`, { method: 'PUT', ...jsonBody(input) }),
+  deleteAlertChannel: (id: string) =>
+    request<void>(`/alerts/channels/${id}`, { method: 'DELETE' }),
+  /** sends a test message through the channel as it is stored */
+  testAlertChannel: (id: string) =>
+    request<AlertTestResult>(`/alerts/channels/${id}/test`, { method: 'POST' }),
 
   /* ----- workspaces ----- */
   listWorkspaces: () => request<Workspace[]>('/workspaces'),
@@ -145,13 +272,18 @@ export const api = {
     }),
   deleteConnection: (id: string) =>
     request<{ id: string }>(`/connections/${id}`, { method: 'DELETE' }),
-  testConnection: (input: ConnectionInputDTO) =>
-    request<{ success: true }>('/connections/test', {
-      method: 'POST',
-      ...jsonBody(input),
-    }),
+  /**
+   * try a connection that is not (or not yet) saved. when it is an EDIT of a
+   * saved one, pass its id: secrets the form only holds redacted are then taken
+   * from the stored connection, so testing does not require retyping them
+   */
+  testConnection: (input: ConnectionInputDTO, editingId?: string) =>
+    request<{ success: true; sshHostKey?: string }>(
+      `/connections/test${editingId ? `?from=${encodeURIComponent(editingId)}` : ''}`,
+      { method: 'POST', ...jsonBody(input) },
+    ),
   testSavedConnection: (id: string) =>
-    request<{ success: true }>(`/connections/${id}/test`, { method: 'POST' }),
+    request<{ success: true; sshHostKey?: string }>(`/connections/${id}/test`, { method: 'POST' }),
 
   listDatabases: (id: string) =>
     request<string[]>(`/connections/${id}/databases`),
@@ -260,6 +392,12 @@ export const api = {
     request<Bridge>(`/bridges/${id}`, { method: 'PUT', ...jsonBody(input) }),
   deleteBridge: (id: string) =>
     request<{ id: string }>(`/bridges/${id}`, { method: 'DELETE' }),
+  /** a dry run of a bridge that is not saved: nothing is created or delivered */
+  previewDraft: (bridge: BridgeInputDTO, limit = 3) =>
+    request<BridgePreview>('/bridges/preview', {
+      method: 'POST',
+      ...jsonBody({ bridge, limit }),
+    }),
   previewBridge: (id: string, body: BridgePreviewDTO) =>
     request<BridgePreview>(`/bridges/${id}/preview`, {
       method: 'POST',
@@ -305,14 +443,82 @@ export const api = {
       method: 'POST',
       ...jsonBody({ sequences }),
     }),
-  startWatch: (id: string) =>
-    request<BridgeJob>(`/bridges/${id}/watch/start`, { method: 'POST' }),
+  /**
+   * `fromNow`: the bridge's place in the source's change log is gone, and the
+   * caller accepts that what happened in between will not be captured
+   */
+  startWatch: (id: string, opts: { fromNow?: boolean; recopy?: boolean } = {}) =>
+    request<BridgeJob>(`/bridges/${id}/watch/start`, {
+      method: 'POST',
+      ...jsonBody(opts),
+    }),
+  /** what a CDC bridge is holding on its source; null when nothing */
+  sourceHold: (id: string) =>
+    request<BridgeSourceHold | null>(`/bridges/${id}/source-hold`),
+  /**
+   * is the destination the copy of the source? starts in the background (202);
+   * `reconcile` also writes what is missing or different, and with `deleteExtra`
+   * removes what is only in the destination, as the target's delete policy says
+   */
+  startVerification: (id: string, dto: { mode: 'verify' | 'reconcile'; deleteExtra?: boolean }) =>
+    request<BridgeVerification>(`/bridges/${id}/verify`, { method: 'POST', ...jsonBody(dto) }),
+  /** the last ten, newest first */
+  verifications: (id: string) => request<BridgeVerification[]>(`/bridges/${id}/verifications`),
+  cancelVerification: (id: string, verificationId: string) =>
+    request<BridgeVerification>(`/bridges/${id}/verifications/${verificationId}/cancel`, { method: 'POST' }),
+  /** when a cron line fires next, by the library that fires it; 400 with the reason if it cannot be used */
+  schedulePreview: (schedule: { cron: string; timezone: string }) =>
+    request<{ nextRuns: string[] }>('/bridges/schedule-preview', {
+      method: 'POST',
+      ...jsonBody(schedule),
+    }),
+  /** a bridge's schedule: is it firing, when next, what became of the last tick */
+  bridgeSchedule: (id: string) => request<BridgeScheduleStatus>(`/bridges/${id}/schedule`),
+  /** is this bridge tied to others that feed it what it feeds them, and how much was held back */
+  bridgeLoops: (id: string) => request<BridgeLoopStatus>(`/bridges/${id}/loops`),
+  /** has the source table changed since the bridge was set up? reads, changes nothing */
+  schemaDrift: (id: string) => request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift`),
+  /** refused (400, reason `schema-drift`) while the bridge still uses a column that is gone */
+  acceptSchemaDrift: (id: string) =>
+    request<BridgeSchemaDrift>(`/bridges/${id}/schema-drift/accept`, { method: 'POST' }),
   stopWatch: (id: string) =>
     request<BridgeJob | null>(`/bridges/${id}/watch/stop`, { method: 'POST' }),
   cdcReadiness: (body: CdcReadinessDTO) =>
     request<CdcReadiness>('/bridges/cdc/readiness', { method: 'POST', ...jsonBody(body) }),
   retryFailedDeliveries: (id: string, jobId: string) =>
     request<BridgeJob>(`/bridges/${id}/jobs/${jobId}/retry-failed`, { method: 'POST' }),
+  /** retry ONE failed delivery, now */
+  retryDelivery: (id: string, jobId: string, sequence: number) =>
+    request<BridgeDelivery>(`/bridges/${id}/jobs/${jobId}/deliveries/${sequence}/retry`, {
+      method: 'POST',
+    }),
+  /** where a job's failed deliveries download from (the session cookie goes with a same-origin link) */
+  failuresUrl: (id: string, jobId: string, format: 'csv' | 'ndjson') =>
+    `${BASE_URL}/bridges/${id}/jobs/${jobId}/failures?format=${format}`,
+
+  /* ----- dead letters: rows a live bridge set aside instead of losing ----- */
+
+  listDeadLetters: (
+    id: string,
+    opts: { status?: DeadLetterStatus; offset?: number; limit?: number } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set('status', opts.status);
+    if (opts.offset != null) q.set('offset', String(opts.offset));
+    if (opts.limit != null) q.set('limit', String(opts.limit));
+    const qs = q.toString();
+    return request<DeadLetterPage>(`/bridges/${id}/dead-letters${qs ? `?${qs}` : ''}`);
+  },
+  retryDeadLetters: (id: string, body: { ids?: string[]; force?: boolean } = {}) =>
+    request<DeadLetterRetryResult>(`/bridges/${id}/dead-letters/retry`, {
+      method: 'POST',
+      ...jsonBody(body),
+    }),
+  discardDeadLetters: (id: string, body: { ids?: string[] } = {}) =>
+    request<{ discarded: number }>(`/bridges/${id}/dead-letters/discard`, {
+      method: 'POST',
+      ...jsonBody(body),
+    }),
 };
 
 function dbQuery(database?: string): string {

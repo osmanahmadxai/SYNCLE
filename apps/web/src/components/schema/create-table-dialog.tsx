@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ColumnDefinition, DatabaseEngine } from '@syncle/core';
@@ -57,13 +58,16 @@ function defaultPresets(engine: DatabaseEngine): string[] {
   }
 }
 
-function timestampHint(engine: DatabaseEngine): string {
+function timestampHint(
+  engine: DatabaseEngine,
+  t: ReturnType<typeof useTranslations>,
+): string {
   if (engine === 'postgres')
-    return 'Tip: for a created-at column use type "timestamptz" with default now().';
+    return t('timestampHint', { type: 'timestamptz', value: 'now()' });
   if (engine === 'mysql')
-    return 'Tip: for a created-at column use type "datetime" with default CURRENT_TIMESTAMP.';
+    return t('timestampHint', { type: 'datetime', value: 'CURRENT_TIMESTAMP' });
   if (engine === 'sqlite')
-    return 'Tip: for a created-at column use type "TEXT" with default CURRENT_TIMESTAMP.';
+    return t('timestampHint', { type: 'TEXT', value: 'CURRENT_TIMESTAMP' });
   return '';
 }
 
@@ -89,6 +93,8 @@ export function CreateTableDialog({
   open,
   onOpenChange,
 }: Props) {
+  const t = useTranslations('createTable');
+  const tc = useTranslations('common');
   // Mongo (and other schemaless engines) expose no column types, a table is
   // just a named collection
   const schemaless = dataTypes.length === 0;
@@ -116,9 +122,8 @@ export function CreateTableDialog({
   async function handleCreate() {
     const tableName = table.trim();
     if (!IDENT.test(tableName)) {
-      toast.error('Invalid table name', {
-        description:
-          'Start with a letter or _, then letters, digits or underscores — no spaces or dashes.',
+      toast.error(t('invalidTableName'), {
+        description: t('invalidTableNameDescription'),
       });
       return;
     }
@@ -132,18 +137,18 @@ export function CreateTableDialog({
       // ignore fully-blank rows the user never filled in
       const defined = columns.filter((c) => c.name.trim() !== '');
       if (defined.length === 0) {
-        toast.error('Add at least one named column');
+        toast.error(t('needNamedColumn'));
         return;
       }
       for (const c of defined) {
         if (!IDENT.test(c.name.trim())) {
-          toast.error(`Invalid column name “${c.name}”`, {
-            description: 'Use snake_case or camelCase — no spaces or dashes.',
+          toast.error(t('invalidColumnName', { name: c.name }), {
+            description: t('invalidColumnNameDescription'),
           });
           return;
         }
         if (!c.type.trim()) {
-          toast.error(`Column “${c.name}” needs a type`);
+          toast.error(t('columnNeedsType', { name: c.name }));
           return;
         }
       }
@@ -168,10 +173,10 @@ export function CreateTableDialog({
       await qc.invalidateQueries({
         queryKey: ['connections', connectionId, 'schema'],
       });
-      toast.success(`Created ${tableName}`);
+      toast.success(t('created', { name: tableName }));
       onOpenChange(false);
     } catch (err) {
-      toast.error('Create failed', {
+      toast.error(t('createFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -184,19 +189,19 @@ export function CreateTableDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[840px]">
         <DialogHeader>
           <DialogTitle>
-            {schemaless ? 'New collection' : 'New table'}
+            {schemaless ? t('titleCollection') : t('titleTable')}
           </DialogTitle>
           <DialogDescription>
             {schemaless
-              ? 'Create an empty collection in this database.'
-              : 'Define columns, keys, constraints and defaults.'}
+              ? t('descriptionCollection')
+              : t('descriptionTable')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
             <Label htmlFor="tbl-name">
-              {schemaless ? 'Collection name' : 'Table name'}
+              {schemaless ? t('collectionName') : t('tableName')}
             </Label>
             <Input
               id="tbl-name"
@@ -212,21 +217,21 @@ export function CreateTableDialog({
               <div
                 className={`${GRID} px-1 text-[11px] font-medium text-muted-foreground`}
               >
-                <span>Name</span>
-                <span>Type</span>
-                <span className="text-center" title="Nullable">
-                  Null
+                <span>{t('colName')}</span>
+                <span>{t('colType')}</span>
+                <span className="text-center" title={t('nullable')}>
+                  {t('colNull')}
                 </span>
-                <span className="text-center" title="Primary key">
-                  PK
+                <span className="text-center" title={t('primaryKey')}>
+                  {t('colPk')}
                 </span>
-                <span className="text-center" title="Auto-increment">
-                  AI
+                <span className="text-center" title={t('autoIncrement')}>
+                  {t('colAi')}
                 </span>
-                <span className="text-center" title="Unique">
-                  Uniq
+                <span className="text-center" title={t('unique')}>
+                  {t('colUnique')}
                 </span>
-                <span>Default</span>
+                <span>{t('colDefault')}</span>
                 <span />
               </div>
 
@@ -234,7 +239,7 @@ export function CreateTableDialog({
                 <div key={col.id} className={GRID}>
                   <Input
                     value={col.name}
-                    placeholder="column"
+                    placeholder={t('columnPlaceholder')}
                     className="h-8"
                     onChange={(e) => patch(col.id, { name: e.target.value })}
                   />
@@ -246,16 +251,16 @@ export function CreateTableDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {dataTypes.map((t) => (
-                        <SelectItem key={t} value={t} className="font-mono">
-                          {t}
+                      {dataTypes.map((dt) => (
+                        <SelectItem key={dt} value={dt} className="font-mono">
+                          {dt}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <input
                     type="checkbox"
-                    aria-label="Nullable"
+                    aria-label={t('nullable')}
                     checked={col.nullable}
                     disabled={col.primaryKey}
                     onChange={(e) => patch(col.id, { nullable: e.target.checked })}
@@ -263,7 +268,7 @@ export function CreateTableDialog({
                   />
                   <input
                     type="checkbox"
-                    aria-label="Primary key"
+                    aria-label={t('primaryKey')}
                     checked={col.primaryKey}
                     onChange={(e) =>
                       patch(col.id, {
@@ -275,7 +280,7 @@ export function CreateTableDialog({
                   />
                   <input
                     type="checkbox"
-                    aria-label="Auto-increment"
+                    aria-label={t('autoIncrement')}
                     checked={col.autoIncrement}
                     onChange={(e) =>
                       patch(col.id, {
@@ -288,7 +293,7 @@ export function CreateTableDialog({
                   />
                   <input
                     type="checkbox"
-                    aria-label="Unique"
+                    aria-label={t('unique')}
                     checked={col.unique}
                     disabled={col.primaryKey}
                     onChange={(e) => patch(col.id, { unique: e.target.checked })}
@@ -331,12 +336,11 @@ export function CreateTableDialog({
                   setColumns((cols) => [...cols, newColumn(defaultType)])
                 }
               >
-                <Plus className="mr-1 h-4 w-4" /> Add column
+                <Plus className="mr-1 h-4 w-4" /> {t('addColumn')}
               </Button>
 
               <p className="text-xs text-muted-foreground">
-                {timestampHint(engine)} Names must be valid identifiers
-                (letters, digits, underscores — no spaces).
+                {timestampHint(engine, t)} {t('identifierHint')}
               </p>
             </div>
           )}
@@ -344,11 +348,11 @@ export function CreateTableDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc('cancel')}
           </Button>
           <Button onClick={handleCreate} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create
+            {tc('create')}
           </Button>
         </DialogFooter>
       </DialogContent>

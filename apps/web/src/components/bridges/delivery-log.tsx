@@ -10,11 +10,13 @@ import {
   List,
   Loader2,
   MousePointerClick,
+  RotateCcw,
   Search,
   SkipForward,
   Table as TableIcon,
   X,
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import type {
   DeliveryStatus,
@@ -22,7 +24,7 @@ import type {
   BridgeDelivery,
 } from '@syncle/core';
 import { ApiError } from '@/lib/api';
-import { useBridgeDeliveries, useSkipDeliveries } from '@/lib/queries';
+import { useBridgeDeliveries, useRetryDelivery, useSkipDeliveries } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,13 +54,19 @@ const MAX_COLUMNS = 40;
 type ViewMode = 'records' | 'feed' | 'map';
 
 /** visual state of a timeline cell */
-type CellState = DeliveryStatus | 'queued';
+/**
+ * `pruned`: the delivery happened, and its details have since been removed by
+ * the retention setting. without it, a finished job whose history had aged out
+ * drew as one long row of "queued" cells — offering to skip them
+ */
+type CellState = DeliveryStatus | 'queued' | 'pruned';
 
 const CELL_STYLES: Record<CellState, string> = {
   success: 'bg-emerald-500 border-emerald-600/40 text-white',
   failed:  'bg-red-500   border-red-700/40   text-white',
   skipped: 'bg-amber-400 border-amber-500/40 text-amber-950',
   queued:  'bg-muted     border-border        text-muted-foreground/60',
+  pruned:  'bg-transparent border-dashed border-border text-muted-foreground/40',
 };
 
 const DOT_STYLES: Record<CellState, string> = {
@@ -66,20 +74,22 @@ const DOT_STYLES: Record<CellState, string> = {
   failed:  'bg-red-500',
   skipped: 'bg-amber-400',
   queued:  'bg-muted-foreground/30',
+  pruned:  'bg-transparent border border-dashed border-muted-foreground/40',
 };
 
-const LEGEND: { state: CellState; label: string }[] = [
-  { state: 'success', label: 'Delivered' },
-  { state: 'failed',  label: 'Failed'    },
-  { state: 'skipped', label: 'Skipped'  },
-  { state: 'queued',  label: 'Queued'   },
+/** labels are `deliveryLog` message keys, looked up where they are rendered */
+const LEGEND: { state: CellState; labelKey: string }[] = [
+  { state: 'success', labelKey: 'legend.success' },
+  { state: 'failed',  labelKey: 'legend.failed'  },
+  { state: 'skipped', labelKey: 'legend.skipped' },
+  { state: 'queued',  labelKey: 'legend.queued'  },
 ];
 
-const FILTERS: { value: 'all' | DeliveryStatus; label: string }[] = [
-  { value: 'all',     label: 'All'       },
-  { value: 'success', label: 'Delivered' },
-  { value: 'failed',  label: 'Failed'    },
-  { value: 'skipped', label: 'Skipped'   },
+const FILTERS: { value: 'all' | DeliveryStatus; labelKey: string }[] = [
+  { value: 'all',     labelKey: 'filter.all'     },
+  { value: 'success', labelKey: 'filter.success' },
+  { value: 'failed',  labelKey: 'filter.failed'  },
+  { value: 'skipped', labelKey: 'filter.skipped' },
 ];
 
 function pretty(text: string | null): string {
@@ -196,6 +206,7 @@ export function DeliveryMonitor({
   totalRows,
   batchSize,
   endpoint,
+  prunedBelowSequence = null,
 }: {
   bridgeId:    string;
   jobId:     string;
@@ -203,7 +214,10 @@ export function DeliveryMonitor({
   totalRows: number | null;
   batchSize: number;
   endpoint: EndpointInfo;
+  /** deliveries below this sequence that are not listed were removed by retention */
+  prunedBelowSequence?: number | null;
 }) {
+  const t = useTranslations('deliveryLog');
   const cellCount = totalRows != null
     ? Math.ceil(totalRows / Math.max(1, batchSize))
     : null;
@@ -307,7 +321,9 @@ export function DeliveryMonitor({
   const openDelivery = (deliveries ?? []).find((d) => d.id === openId) ?? null;
 
   function cellState(seq: number): CellState {
-    return (bySeq.get(seq)?.status as CellState) ?? 'queued';
+    const status = bySeq.get(seq)?.status as CellState | undefined;
+    if (status) return status;
+    return prunedBelowSequence != null && seq < prunedBelowSequence ? 'pruned' : 'queued';
   }
 
   function navigatePage(p: number) {
@@ -360,26 +376,27 @@ export function DeliveryMonitor({
   function selectQueuedOnPage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const seq of sequences) if (!bySeq.get(seq)) next.add(seq);
+      // queued only: a delivery whose details were removed has been delivered
+      for (const seq of sequences) if (cellState(seq) === 'queued') next.add(seq);
       return next;
     });
   }
 
   async function runSkip(targets: number[]) {
     if (targets.length === 0) {
-      toast.info('Nothing to skip — only queued deliveries can be skipped.');
+      toast.info(t('nothingToSkip'));
       return;
     }
     if (targets.length > 10_000) {
-      toast.error('Too many at once — skip up to 10,000 sequences per action.');
+      toast.error(t('tooManyAtOnce'));
       return;
     }
     try {
       const res = await skip.mutateAsync(targets);
-      toast.success(`Skipped ${res.skipped.toLocaleString()} row${res.skipped === 1 ? '' : 's'}`);
+      toast.success(t('skipped', { count: res.skipped }));
       setSelected(new Set());
     } catch (err) {
-      toast.error('Could not skip', {
+      toast.error(t('couldNotSkip'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -389,23 +406,23 @@ export function DeliveryMonitor({
     const from = Number(rangeFrom);
     const to   = Number(rangeTo);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
-      toast.error('Enter a valid range (from must be less than or equal to to).');
+      toast.error(t('invalidRange'));
       return;
     }
     // bound the range BEFORE building it — a huge `to` would freeze the tab
     const start = Math.max(0, from);
     if (to - start + 1 > 10_000) {
-      toast.error('Too many at once — skip up to 10,000 sequences per action.');
+      toast.error(t('tooManyAtOnce'));
       return;
     }
     const targets: number[] = [];
     for (let s = start; s <= to; s++) {
-      if (!bySeq.get(s)) targets.push(s);
+      if (cellState(s) === 'queued') targets.push(s);
     }
     await runSkip(targets);
   }
 
-  const selectedQueued = [...selected].filter((s) => !bySeq.get(s)).length;
+  const selectedQueued = [...selected].filter((s) => cellState(s) === 'queued').length;
   const isMap = view === 'map';
 
   return (
@@ -418,19 +435,19 @@ export function DeliveryMonitor({
           {/* view switcher */}
           <div className="bg-muted flex items-center rounded-md p-0.5">
             {([
-              { id: 'records', icon: TableIcon, label: 'Records' },
-              { id: 'feed',    icon: List,      label: 'Feed'    },
-              { id: 'map',     icon: Grid2x2,   label: 'Map'     },
+              { id: 'records', icon: TableIcon, label: t('view.records') },
+              { id: 'feed',    icon: List,      label: t('view.feed')    },
+              { id: 'map',     icon: Grid2x2,   label: t('view.map')     },
             ] as const).map(({ id, icon: Icon, label }) => (
               <button
                 key={id}
                 onClick={() => setView(id)}
                 title={
                   id === 'map'
-                    ? 'One cell per delivery — progress at a glance, and where queued rows can be skipped'
+                    ? t('viewHint.map')
                     : id === 'feed'
-                      ? 'Newest first, as a stream'
-                      : 'The synced rows, as a table'
+                      ? t('viewHint.feed')
+                      : t('viewHint.records')
                 }
                 className={cn(
                   'flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium transition-colors',
@@ -453,7 +470,7 @@ export function DeliveryMonitor({
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                 </span>
-                LIVE
+                {t('live')}
               </span>
             )}
             {isFetching && !live && (
@@ -469,7 +486,7 @@ export function DeliveryMonitor({
                 knownTotal ? followGridLatest() : followLiveLatest()
               }
             >
-              Follow latest
+              {t('followLatest')}
             </button>
           )}
 
@@ -479,9 +496,16 @@ export function DeliveryMonitor({
               {LEGEND.map((l) => (
                 <span key={l.state} className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
                   <span className={cn('h-3 w-3 rounded-sm border', CELL_STYLES[l.state])} />
-                  {l.label}
+                  {t(l.labelKey)}
                 </span>
               ))}
+              {/* only once it applies: most jobs never see it */}
+              {prunedBelowSequence != null && (
+                <span className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+                  <span className={cn('h-3 w-3 rounded-sm border', CELL_STYLES.pruned)} />
+                  {t('legend.pruned')}
+                </span>
+              )}
             </div>
           ) : (
             <>
@@ -490,7 +514,7 @@ export function DeliveryMonitor({
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search rows…"
+                  placeholder={t('searchPlaceholder')}
                   className="h-7 w-48 pl-7 text-xs"
                 />
               </div>
@@ -506,13 +530,12 @@ export function DeliveryMonitor({
                         : 'text-muted-foreground hover:text-foreground',
                     )}
                   >
-                    {f.label}
+                    {t(f.labelKey)}
                   </button>
                 ))}
               </div>
               <span className="text-muted-foreground text-[11px] tabular-nums">
-                {visible.length.toLocaleString()}
-                {visible.length === 1 ? ' row' : ' rows'}
+                {t('rowCount', { count: visible.length })}
               </span>
             </>
           )}
@@ -525,29 +548,28 @@ export function DeliveryMonitor({
                 <PopoverTrigger asChild>
                   <Button size="sm" variant="outline" className="h-7">
                     <SkipForward className="mr-1.5 h-3.5 w-3.5" />
-                    Skip sequences…
+                    {t('skipSequences')}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent align="end" className="w-72 space-y-3">
                   <div>
-                    <p className="text-sm font-medium">Skip a sequence range</p>
+                    <p className="text-sm font-medium">{t('skipRangeTitle')}</p>
                     <p className="text-muted-foreground mt-0.5 text-[11px]">
-                      Enter delivery sequence numbers (shown inside each cell).
-                      Already-settled deliveries are left untouched.
+                      {t('skipRangeDescription')}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Input
                       type="number"
-                      placeholder="from"
+                      placeholder={t('rangeFrom')}
                       className="h-8"
                       value={rangeFrom}
                       onChange={(e) => setRangeFrom(e.target.value)}
                     />
-                    <span className="text-muted-foreground text-xs">to</span>
+                    <span className="text-muted-foreground text-xs">{t('rangeSeparator')}</span>
                     <Input
                       type="number"
-                      placeholder="to"
+                      placeholder={t('rangeTo')}
                       className="h-8"
                       value={rangeTo}
                       onChange={(e) => setRangeTo(e.target.value)}
@@ -560,7 +582,7 @@ export function DeliveryMonitor({
                     onClick={skipRange}
                   >
                     {skip.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                    Skip range
+                    {t('skipRange')}
                   </Button>
                 </PopoverContent>
               </Popover>
@@ -572,13 +594,13 @@ export function DeliveryMonitor({
                 onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}
               >
                 <MousePointerClick className="mr-1.5 h-3.5 w-3.5" />
-                {selectMode ? 'Selecting' : 'Select'}
+                {selectMode ? t('selecting') : t('select')}
               </Button>
 
               {selectMode && (
                 <>
                   <Button size="sm" variant="outline" className="h-7" onClick={selectQueuedOnPage}>
-                    Select queued (page)
+                    {t('selectQueuedPage')}
                   </Button>
                   {selected.size > 0 && (
                     <Button
@@ -587,20 +609,20 @@ export function DeliveryMonitor({
                       className="h-7"
                       onClick={() => setSelected(new Set())}
                     >
-                      Clear
+                      {t('clear')}
                     </Button>
                   )}
                   <Button
                     size="sm"
                     className="h-7"
                     disabled={selectedQueued === 0 || skip.isPending}
-                    onClick={() => runSkip([...selected].filter((s) => !bySeq.get(s)))}
+                    onClick={() => runSkip([...selected].filter((s) => cellState(s) === 'queued'))}
                   >
                     {skip.isPending
                       ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                       : <SkipForward className="mr-1.5 h-3.5 w-3.5" />
                     }
-                    Skip {selectedQueued > 0 ? selectedQueued : ''}
+                    {t('skipSelected', { count: selectedQueued })}
                   </Button>
                 </>
               )}
@@ -645,18 +667,22 @@ export function DeliveryMonitor({
                   const d      = bySeq.get(seq);
                   const rowStart = seq * batchSize + 1;
                   const rowEnd   = d ? d.rowIndex + d.rowCount : rowStart + batchSize - 1;
-                  const rowLabel = batchSize > 1 ? `rows ${rowStart}–${rowEnd}` : `row ${rowStart}`;
+                  const rowLabel = batchSize > 1
+                    ? t('cell.rows', { start: rowStart, end: rowEnd })
+                    : t('cell.row', { row: rowStart });
                   const tipAction = selectMode
-                    ? 'click to toggle · shift+click to range-select'
-                    : 'click to inspect';
+                    ? t('cell.tipSelect')
+                    : t('cell.tipInspect');
                   return (
                     <button
                       key={seq}
                       onClick={(e) => onCellClick(seq, e.shiftKey)}
                       title={[
-                        `Sequence #${seq}`,
+                        t('cell.sequence', { seq }),
                         rowLabel,
-                        state.charAt(0).toUpperCase() + state.slice(1),
+                        state === 'pruned'
+                          ? t('cell.pruned')
+                          : t(`status.${state}`),
                         d?.httpStatus ? `HTTP ${d.httpStatus}` : null,
                         tipAction,
                       ].filter(Boolean).join(' · ')}
@@ -683,12 +709,12 @@ export function DeliveryMonitor({
           <div className="text-muted-foreground flex items-center gap-2 border-t px-3 py-1.5 text-xs">
             <span>
               {followingLatest ? (
-                'latest deliveries'
+                t('latestDeliveries')
               ) : (
                 <>
-                  older window
+                  {t('olderWindow')}
                   <span className="mx-1 opacity-40">·</span>
-                  offset {livePage * LIVE_PAGE_SIZE}
+                  {t('offset', { offset: livePage * LIVE_PAGE_SIZE })}
                 </>
               )}
             </span>
@@ -701,7 +727,7 @@ export function DeliveryMonitor({
                 onClick={goNewer}
               >
                 <ChevronLeft className="mr-1 h-4 w-4" />
-                Newer
+                {t('newer')}
               </Button>
               <Button
                 variant="outline"
@@ -710,7 +736,7 @@ export function DeliveryMonitor({
                 disabled={livePageShort}
                 onClick={goOlder}
               >
-                Older
+                {t('older')}
                 <ChevronRight className="ml-1 h-4 w-4" />
               </Button>
             </div>
@@ -721,9 +747,9 @@ export function DeliveryMonitor({
         {cellCount != null && pageCount > 1 && (
           <div className="text-muted-foreground flex items-center gap-2 border-t px-3 py-1.5 text-xs">
             <span>
-              sequences {windowStart}–{windowEnd - 1}
+              {t('sequenceRange', { from: windowStart, to: windowEnd - 1 })}
               <span className="mx-1 opacity-40">/</span>
-              {cellCount.toLocaleString()} total
+              {t('totalCount', { count: cellCount })}
             </span>
             <div className="ml-auto flex items-center gap-1">
               <Button
@@ -756,6 +782,8 @@ export function DeliveryMonitor({
       {openDelivery && (
         <div className="bg-muted/20 w-[44%] min-w-[320px] border-l">
           <DeliveryDetail
+            bridgeId={bridgeId}
+            jobId={jobId}
             delivery={openDelivery}
             endpoint={endpoint}
             onClose={() => setOpenId(null)}
@@ -767,17 +795,18 @@ export function DeliveryMonitor({
 }
 
 function EmptyState({ live, filtered }: { live: boolean; filtered?: boolean }) {
+  const t = useTranslations('deliveryLog');
   return (
     <div className="text-muted-foreground flex flex-col items-center justify-center gap-2 py-12">
       {filtered ? (
-        <p className="text-sm">No rows match this search.</p>
+        <p className="text-sm">{t('empty.filtered')}</p>
       ) : live ? (
         <>
           <Loader2 className="h-5 w-5 animate-spin opacity-50" />
-          <p className="text-sm">Waiting for first delivery…</p>
+          <p className="text-sm">{t('empty.waiting')}</p>
         </>
       ) : (
-        <p className="text-sm">No deliveries recorded.</p>
+        <p className="text-sm">{t('empty.none')}</p>
       )}
     </div>
   );
@@ -799,6 +828,7 @@ function RecordsTable({
   empty: boolean;
   onOpen: (id: string) => void;
 }) {
+  const t = useTranslations('deliveryLog');
   if (entries.length === 0) return <EmptyState live={live} filtered={!empty} />;
 
   return (
@@ -818,14 +848,14 @@ function RecordsTable({
           ))}
           {columns.length === 0 && (
             <th className="text-muted-foreground border-b px-2 py-1.5 text-left font-medium">
-              payload
+              {t('column.payload')}
             </th>
           )}
           <th className="text-muted-foreground border-b px-2 py-1.5 text-right font-medium whitespace-nowrap">
-            time
+            {t('column.time')}
           </th>
           <th className="text-muted-foreground border-b px-2 py-1.5 text-right font-medium whitespace-nowrap">
-            took
+            {t('column.took')}
           </th>
         </tr>
       </thead>
@@ -845,7 +875,7 @@ function RecordsTable({
               <td className="border-b px-2 py-1.5 whitespace-nowrap">
                 <span className="flex items-center gap-1.5">
                   <span
-                    title={d.status}
+                    title={t(`status.${d.status}`)}
                     className={cn('h-2 w-2 shrink-0 rounded-full', DOT_STYLES[d.status as CellState])}
                   />
                   <span className="text-muted-foreground tabular-nums">
@@ -904,6 +934,7 @@ function RecordsFeed({
   empty: boolean;
   onOpen: (id: string) => void;
 }) {
+  const t = useTranslations('deliveryLog');
   if (entries.length === 0) return <EmptyState live={live} filtered={!empty} />;
 
   const newestFirst = [...entries].reverse();
@@ -934,7 +965,7 @@ function RecordsFeed({
               )}
             >
               <span
-                title={d.status}
+                title={t(`status.${d.status}`)}
                 className={cn(
                   'mt-1.5 h-2 w-2 shrink-0 rounded-full',
                   DOT_STYLES[d.status as CellState],
@@ -976,15 +1007,33 @@ function RecordsFeed({
 }
 
 function DeliveryDetail({
+  bridgeId,
+  jobId,
   delivery: d,
   endpoint,
   onClose,
 }: {
+  bridgeId: string;
+  jobId:    string;
   delivery: BridgeDelivery;
   endpoint: EndpointInfo;
   onClose:  () => void;
 }) {
+  const t = useTranslations('deliveryLog');
   const [raw, setRaw] = useState(false);
+  const retry = useRetryDelivery(bridgeId, jobId);
+
+  async function handleRetry() {
+    try {
+      const after = await retry.mutateAsync(d.sequence);
+      if (after.status === 'success') toast.success(t('retriedOk'));
+      else toast.error(t('retriedStillFailing'), { description: after.error ?? undefined });
+    } catch (err) {
+      toast.error(t('couldNotRetry'), {
+        description: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
   const rows = parseRows(d.requestBody);
 
   function copyCurl() {
@@ -995,7 +1044,7 @@ function DeliveryDetail({
     ];
     if (d.requestBody) parts.push(`-d '${d.requestBody.replace(/'/g, "'\\''")}'`);
     void navigator.clipboard.writeText(parts.join(' \\\n  '));
-    toast.success('Copied cURL to clipboard');
+    toast.success(t('copiedCurl'));
   }
 
   const tone =
@@ -1010,26 +1059,43 @@ function DeliveryDetail({
       <div className="space-y-3 p-3 text-xs">
         {/* header row */}
         <div className="flex items-center gap-2">
-          <span className={cn('rounded-full px-2 py-0.5 font-semibold capitalize', tone)}>
-            {d.status}
+          <span className={cn('rounded-full px-2 py-0.5 font-semibold', tone)}>
+            {t(`status.${d.status}`)}
           </span>
           {d.httpStatus != null && (
             <span className="text-muted-foreground font-mono">HTTP {d.httpStatus}</span>
           )}
           {isDb && (
-            <span className="text-muted-foreground font-mono">DB write</span>
+            <span className="text-muted-foreground font-mono">{t('dbWrite')}</span>
           )}
           <div className="ml-auto flex items-center gap-1">
+            {d.status === 'failed' && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2"
+                disabled={retry.isPending}
+                onClick={() => void handleRetry()}
+                title={t('retryThisHint')}
+              >
+                {retry.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                )}
+                {t('retryThis')}
+              </Button>
+            )}
             {rows && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2"
                 onClick={() => setRaw((v) => !v)}
-                title={raw ? 'Show fields' : 'Show raw JSON'}
+                title={raw ? t('showFields') : t('showRawJson')}
               >
                 <Braces className="mr-1 h-3.5 w-3.5" />
-                {raw ? 'Fields' : 'Raw'}
+                {raw ? t('fields') : t('raw')}
               </Button>
             )}
             {!isDb && d.status !== 'skipped' && (
@@ -1046,64 +1112,64 @@ function DeliveryDetail({
         {/* meta row */}
         <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
           <span>
-            seq <span className="text-foreground font-mono">#{d.sequence}</span>
+            {t('meta.seq')} <span className="text-foreground font-mono">#{d.sequence}</span>
           </span>
           <span>
-            row{' '}
+            {t('meta.row')}{' '}
             <span className="text-foreground font-mono">
               {d.rowIndex}
               {d.rowCount > 1 ? `–${d.rowIndex + d.rowCount - 1}` : ''}
             </span>
           </span>
           <span>
-            attempts <span className="text-foreground">{d.attempts}</span>
+            {t('meta.attempts')} <span className="text-foreground">{d.attempts}</span>
           </span>
           {d.durationMs != null && (
             <span>
-              took <span className="text-foreground">{d.durationMs}ms</span>
+              {t('meta.took')} <span className="text-foreground">{d.durationMs}ms</span>
             </span>
           )}
           <span>
-            at <span className="text-foreground">{timeOf(d.createdAt)}</span>
+            {t('meta.at')} <span className="text-foreground">{timeOf(d.createdAt)}</span>
           </span>
         </div>
 
         {d.error && (
-          <Block label="Error" tone="danger">
+          <Block label={t('error')} tone="danger">
             {d.error}
           </Block>
         )}
 
         {d.status === 'skipped' ? (
           <p className="text-muted-foreground">
-            This delivery was skipped and never {isDb ? 'written' : 'sent'}.
+            {isDb ? t('skippedNeverWritten') : t('skippedNeverSent')}
           </p>
         ) : rows && !raw ? (
           <>
             {rows.map((row, i) => (
               <div key={i}>
                 <p className="text-muted-foreground mb-1 font-medium">
-                  {isDb ? 'Row written' : 'Row sent'}
+                  {isDb ? t('rowWritten') : t('rowSent')}
                   {rows.length > 1 && (
                     <span className="ml-1 opacity-60">
-                      {i + 1} of {rows.length}
+                      {t('indexOfTotal', { index: i + 1, total: rows.length })}
                     </span>
                   )}
                 </p>
                 <FieldTable row={row} />
               </div>
             ))}
-            <Block label={isDb ? 'Write result' : 'Response'}>
-              {pretty(d.responseBody) || '(empty)'}
+            <Block label={isDb ? t('writeResult') : t('response')}>
+              {pretty(d.responseBody) || t('emptyBody')}
             </Block>
           </>
         ) : (
           <>
-            <Block label={isDb ? 'Row written' : 'Request body'}>
+            <Block label={isDb ? t('rowWritten') : t('requestBody')}>
               {pretty(d.requestBody) || '—'}
             </Block>
-            <Block label={isDb ? 'Write result' : 'Response'}>
-              {pretty(d.responseBody) || '(empty)'}
+            <Block label={isDb ? t('writeResult') : t('response')}>
+              {pretty(d.responseBody) || t('emptyBody')}
             </Block>
           </>
         )}
@@ -1114,9 +1180,10 @@ function DeliveryDetail({
 
 /** field-by-field view of a synced row — readable where a JSON blob isn't */
 function FieldTable({ row }: { row: Record<string, unknown> }) {
+  const t = useTranslations('deliveryLog');
   const fields = Object.entries(row);
   if (fields.length === 0) {
-    return <p className="text-muted-foreground italic">(empty row)</p>;
+    return <p className="text-muted-foreground italic">{t('emptyRow')}</p>;
   }
   return (
     <div className="overflow-hidden rounded-md border">

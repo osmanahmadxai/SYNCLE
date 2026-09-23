@@ -4,6 +4,7 @@ import {
   MysqlCdcProvider,
   binlogEventStart,
   gtidFromEvent,
+  normalizeBinlogRow,
 } from './mysql-cdc.provider';
 
 // cursorAfter/splitCursor are pure, the pool is only used by readiness()
@@ -154,5 +155,123 @@ describe('gtidFromEvent', () => {
     expect(gtidFromEvent({ serverId: 'nope', transactionRange: 1 })).toBeNull();
     expect(gtidFromEvent({ serverId: Buffer.alloc(4), transactionRange: 1 })).toBeNull();
     expect(gtidFromEvent({})).toBeNull();
+  });
+});
+
+describe('normalizeBinlogRow: a binlog row looks like the same row read with a SELECT', () => {
+  const columns = [
+    { name: 'id', type: 3 },
+    { name: 'doc', type: 245 }, // MYSQL_TYPE_JSON
+    { name: 'note', type: 253 }, // VARCHAR
+  ];
+
+  it('parses a JSON column, which the reader hands over as text', () => {
+    const row = { id: 1, doc: '{"a":{"b":[1,2]}}', note: 'x' };
+    expect(normalizeBinlogRow(row, columns)).toEqual({
+      id: 1,
+      doc: { a: { b: [1, 2] } },
+      note: 'x',
+    });
+    expect(row.doc).toBe('{"a":{"b":[1,2]}}'); // the reader's row is not mutated
+  });
+
+  it('keeps JSON scalars as the values they are', () => {
+    expect(normalizeBinlogRow({ doc: '"123"' }, columns).doc).toBe('123');
+    expect(normalizeBinlogRow({ doc: '[]' }, columns).doc).toEqual([]);
+    expect(normalizeBinlogRow({ doc: 'null' }, columns).doc).toBeNull();
+  });
+
+  it('never touches a text column that merely contains JSON', () => {
+    const row = { id: 1, doc: null, note: '{"looks":"like json"}' };
+    expect(normalizeBinlogRow(row, columns)).toBe(row);
+  });
+
+  it('leaves unparseable text, nulls and missing metadata alone', () => {
+    expect(normalizeBinlogRow({ doc: '{broken' }, columns).doc).toBe('{broken');
+    const row = { id: 1, doc: null };
+    expect(normalizeBinlogRow(row, columns)).toBe(row);
+    expect(normalizeBinlogRow(row, undefined)).toBe(row);
+    // a delete image may carry only some columns
+    expect(normalizeBinlogRow({ id: 5 }, columns)).toEqual({ id: 5 });
+  });
+});
+
+describe('inspect: is the saved place in the binlog still there', () => {
+  /** a provider whose server answers from a script */
+  const providerOn = (server: { uuid: string | null; logs: string[] | Error }) => {
+    const pool = {
+      withAdapter: async (_c: string, _d: string | undefined, fn: (a: unknown) => unknown) =>
+        fn({
+          query: async (sql: string) => {
+            if (sql.includes('server_uuid')) return { rows: server.uuid ? [{ uuid: server.uuid }] : [] };
+            if (sql.includes('SHOW BINARY LOGS')) {
+              if (server.logs instanceof Error) throw server.logs;
+              return { rows: server.logs.map((Log_name) => ({ Log_name, File_size: 1 })) };
+            }
+            return { rows: [] };
+          },
+        }),
+    };
+    return new MysqlCdcProvider(pool as unknown as AdapterPoolService);
+  };
+  const bridge = { source: { kind: 'table', connectionId: 'c', table: 't' } } as never;
+  const conn = {} as never;
+  const cursor = make({ file: 'binlog.000007', pos: 1540, row: 0, isStart: true, serverUuid: 'uuid-A', gtid: null });
+
+  it('holds nothing before it has a position', async () => {
+    expect(await providerOn({ uuid: 'uuid-A', logs: [] }).inspect('b', bridge, conn, null)).toBeNull();
+  });
+
+  it('is fine while the file is still listed — and claims no WAL-like cost', async () => {
+    const hold = await providerOn({ uuid: 'uuid-A', logs: ['binlog.000006', 'binlog.000007'] }).inspect(
+      'b',
+      bridge,
+      conn,
+      cursor,
+    );
+    expect(hold).toEqual({
+      engine: 'mysql',
+      kind: 'log-position',
+      name: 'binlog.000007',
+      exists: true,
+      active: null,
+      retainedBytes: null,
+      limitBytes: null,
+      status: 'ok',
+    });
+  });
+
+  it('is lost once the file has been purged, and names the oldest one left', async () => {
+    const hold = await providerOn({ uuid: 'uuid-A', logs: ['binlog.000009', 'binlog.000010'] }).inspect(
+      'b',
+      bridge,
+      conn,
+      cursor,
+    );
+    expect(hold).toMatchObject({ exists: false, status: 'lost' });
+    expect(hold!.detail).toMatch(/binlog\.000007 has been purged.*binlog\.000009/);
+  });
+
+  it('is lost when the connection now reaches a different server', async () => {
+    const hold = await providerOn({ uuid: 'uuid-B', logs: ['binlog.000007'] }).inspect('b', bridge, conn, cursor);
+    expect(hold).toMatchObject({ exists: false, status: 'lost' });
+    expect(hold!.detail).toMatch(/came from MySQL server uuid-A.*now reaches uuid-B/);
+  });
+
+  it('does not call a position lost on the strength of an empty listing', async () => {
+    // binary logging reported as off, or a proxy that answers with nothing
+    const hold = await providerOn({ uuid: 'uuid-A', logs: [] }).inspect('b', bridge, conn, cursor);
+    expect(hold).toMatchObject({ exists: true, status: 'ok' });
+  });
+
+  it('lets a failure to look surface, rather than guessing', async () => {
+    await expect(
+      providerOn({ uuid: 'uuid-A', logs: new Error('Access denied; you need REPLICATION CLIENT') }).inspect(
+        'b',
+        bridge,
+        conn,
+        cursor,
+      ),
+    ).rejects.toThrow(/REPLICATION CLIENT/);
   });
 });

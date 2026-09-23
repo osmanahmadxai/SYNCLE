@@ -50,7 +50,11 @@ A **bridge** reads rows from a source database and writes each one to its
 
 - **another database** — the headline feature. Sync Postgres → MongoDB,
   MySQL → SQLite, MongoDB → Redis… mix engines freely. One bridge can fan out to
-  **several databases at once**, and bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C).
+  **several databases at once**, bridges can chain (DB&nbsp;A → DB&nbsp;B → DB&nbsp;C),
+  and two bridges can feed each other (DB&nbsp;A ⇄ DB&nbsp;B): Syncle knows its
+  own writes when they come back, so a change crosses once instead of for ever.
+  In Redis a row is a key of its own — `user:{{id}}` as a hash, a JSON document
+  or a string, with an expiry if you want one.
 - **an HTTP endpoint** — POST/PUT/PATCH each row to a URL with a payload you
   design, for the times you're feeding a service instead of a database.
 
@@ -84,9 +88,16 @@ What makes the database-to-database sync trustworthy:
   you choose, so replays, retries, and redeliveries never double-write. Inserts,
   updates, **and deletes** all propagate.
 - **Missing table? Auto-create it.** If the destination table/collection doesn't
-  exist, Syncle creates it from the source's shape (with cross-engine type
-  translation). Or **map and rename columns** yourself — "write this column into
-  that column over there."
+  exist, Syncle creates it from the source's shape. Between two instances of one
+  engine the source's own types are reused word for word; across engines each
+  type is translated to the closest the target has, and **a narrowing is never
+  silent** — the preview lists the exact columns a run would create, and names
+  every one the target can't hold faithfully, before anything runs. Or **map and
+  rename columns** yourself — "write this column into that column over there."
+- **Values arrive as the values they were.** Exact decimals and 64-bit integers
+  stay exact, bytes stay bytes, microseconds survive, and a wall-clock timestamp
+  can't shift by the server's time zone — checked against real engines, by
+  replay and by CDC, under more than one time zone.
 - **Live, polled, or one-shot** — you pick how it fires (see triggers below).
 
 ### How a bridge fires
@@ -99,7 +110,10 @@ What makes the database-to-database sync trustworthy:
 - **CDC** — true change-data-capture straight from the database's change log, in
   **real time, no polling**. Postgres logical replication, MySQL binlog, MongoDB
   change streams, Redis keyspace notifications. Inserts, updates, and deletes all
-  come through, each tagged with its operation.
+  come through, each tagged with its operation. It can **copy what the table
+  already holds first and then follow it, in one bridge** — the place in the
+  change log is taken before the copy starts, so nothing that changes meanwhile
+  is lost and no stale row lands on top of a fresh one.
 
 The rest is the same whichever destination and trigger you pick:
 
@@ -109,14 +123,55 @@ The rest is the same whichever destination and trigger you pick:
   (rename, drop, pick keys). For an HTTP target, use a safe token template —
   `{{column}}`, `{{$row}}`, `{{$table}}`, `{{$op}}`, `{{$now}}`, `{{$index}}`.
   Structured substitution only — no string injection, no code execution.
+- **Filter and transform on the way.** Send only the rows that meet a list of
+  conditions. Mask a column (keep the last four, redact, or a salted SHA-256
+  that still joins and works as a key), convert its type, trim or re-case it,
+  give it a default, or compute a new column from the others. Steps run in the
+  order you put them, a value that cannot be converted fails loudly instead of
+  being guessed at, and a table Syncle creates is typed for what the columns
+  have become. Declarative — no expressions, nothing evaluated.
 - **Sync reliably.** Retries with backoff, rate limiting, optional batching, and
   exactly-once delivery so a change is applied once and only once downstream.
+- **Never lose a row to a failure.** A row that has been read is always in one
+  of three places: the destination, the bridge's dead-letter queue, or still
+  ahead of the cursor. A bridge either stops *at* a failure (`abort`), or sets
+  the rows that failed aside — in full — and carries on (`continue`). One bad
+  row is isolated from the rest of its batch, and a retry re-reads it from the
+  source, so it can never overwrite a newer version that arrived since.
+- **Locked down by default.** Requests that change anything must come from the
+  app itself (the browser's own `Sec-Fetch-Site` / `Origin`, so a forged
+  cross-site request is refused before it reaches a route), every response
+  carries a strict Content-Security-Policy and the usual hardening headers, and
+  nothing is loaded from a CDN — the query editor included, so Syncle works on a
+  network with no internet.
+- **Thirty tables, one replication slot.** On PostgreSQL, bridges can share a
+  slot: one connection and one decoding of the WAL for every table of a source,
+  confirmed only as far as the slowest bridge has got, each bridge still its own
+  — filters, transforms, dead letters, verification. *Bridge many tables* makes
+  one per table in a step.
+- **Prove the copy is the copy.** Verify reads both ends and compares them row
+  by row — by what kind of value each column holds, so `'1.50'` and `1.5` are the
+  same number and `007` and `7` are not the same key — and reports what is
+  missing, different, or only in the destination, with both readings of every
+  column that differs. On a bridge that is delivering, nothing counts until a
+  second look. Reconcile repairs only the rows that are wrong.
+- **Run it on a schedule.** A replay bridge takes a cron line and a named time
+  zone, and replays its source by itself — nightly, hourly, on weekdays. Never
+  two runs at once (a tick that finds one still going is skipped, and said),
+  always from the top, once per tick however many API processes share the
+  Redis, and correct across daylight saving.
+- **Survive a schema change.** Rename or drop a column a bridge maps and the
+  bridge stops *before* it writes `NULL` over what the destination holds, naming
+  the column. A harmless change — a column added, a type changed — is shown on
+  the bridge and sent to your alert channels; with `evolve`, a new column is
+  added to the tables Syncle created, too.
 - **Watch it happen.** A live timeline colours every delivery green (synced) ·
   red (failed) · amber (skipped) · slate (queued). Click any cell for the exact
   row written, the result, timing, and any error.
 - **Stay in control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
-  place — failed cells flip green.
+  place — failed cells flip green. On a live bridge, retrying works without
+  stopping it.
 
 ### See it happen
 
@@ -181,6 +236,22 @@ where it is lost if the volume is removed.
 </details>
 
 ---
+
+### Kubernetes
+
+A Helm chart is in [`deploy/helm/syncle`](deploy/helm/syncle): the API, the
+GUI, and (unless you bring your own) a PostgreSQL and a Redis for Syncle
+itself. The master key is the one value you must set.
+
+```bash
+helm install syncle ./deploy/helm/syncle --namespace syncle --create-namespace \
+  --set masterKey.value="$(openssl rand -base64 32)"
+kubectl -n syncle logs deploy/syncle-api | grep -A2 'setup token'   # first-run token
+kubectl -n syncle port-forward svc/syncle 3002:3002                  # or enable the ingress
+```
+
+See the [self-hosting guide](https://syncle.dev/docs/self-hosting#kubernetes)
+for external databases, ingress/TLS, replicas and tunables.
 
 ### Run from source (for development)
 
@@ -263,7 +334,7 @@ The live preview shows exactly what will be written before anything runs.
 | -------------------------------------- | ---------- | ------------------------------------------------------- |
 | A one-time copy / initial backfill     | **Replay** | Streams all (or selected) rows once, then finishes      |
 | Ongoing sync, zero source config       | **Watch**  | Polls a cursor (id / `updated_at` / PK diff) for change |
-| Real-time sync straight from the log   | **CDC**    | Live change capture — inserts, updates, deletes         |
+| Real-time sync straight from the log   | **CDC**    | Live change capture — inserts, updates, deletes (and, from PostgreSQL, truncates) |
 
 For CDC, the builder runs a **readiness check** against the source and lists
 anything the database still needs (see [CDC prerequisites](#cdc-prerequisites)).
@@ -398,13 +469,35 @@ Env files are created automatically on first run from the committed
 | `DATABASE_URL`                | api   | Postgres datasource for the metadata store   |
 | `REDIS_URL`                   | api   | Redis backing the bridge-job queue           |
 | `SYNCLE_MASTER_KEY`       | api   | base64 32-byte key for secret encryption     |
+| `SYNCLE_MASTER_KEY_PREVIOUS` | api | Changing the key: the old key(s), comma-separated. Still accepted for decrypting; what is under them is re-encrypted at start. Remove once the API says nothing depends on them |
 | `SYNCLE_JOB_CONCURRENCY` | api   | How many bridge jobs may execute in parallel |
 | `SYNCLE_CDC_BATCH_SIZE`  | api   | Rows per CDC delivery to a database destination (default `100000`) |
 | `SYNCLE_CDC_BATCH_BYTES` | api   | Byte ceiling for one batch, so wide rows flush early (default `67108864`) |
 | `SYNCLE_CDC_LINGER_MS`   | api   | How long a partial CDC batch waits before it is sent (default `50`) |
 | `SYNCLE_CDC_SPOOL`       | api   | `on` to spool changes through Redis before writing (default off) |
 | `SYNCLE_CDC_SPOOL_MAX`   | api   | Unwritten changes held in the spool before the reader is throttled (default `50000`) |
-| `WEB_ORIGIN`                  | api   | CORS origin (defaults to any in dev)         |
+| `SYNCLE_DEAD_LETTER_MAX_ROWS` | api | Undelivered rows one bridge may hold in its dead-letter queue before it stops instead (default `10000`) |
+| `SYNCLE_MAX_CONSECUTIVE_FAILURES` | api | Batches in a row that may deliver nothing before a `continue` bridge stops (default `5`) |
+| `SYNCLE_SLOT_CHECK_SECONDS` | api | How often to measure the WAL each CDC bridge's replication slot pins on its source (default `60`; `0` = off) |
+| `SYNCLE_SLOT_WARN_BYTES` | api | WAL pinned by one bridge before it is flagged (default 1 GiB) |
+| `SYNCLE_SLOT_MAX_BYTES` | api | WAL pinned by a *stopped* bridge before its slot is dropped to protect the source (default `0` = never) |
+| `SYNCLE_SNAPSHOT_HOLD_MAX` | api | Keys whose changes a Redis bridge may hold in memory while it copies the existing keys, before it stops instead (default `100000`) |
+| `SYNCLE_LOG_LEVEL` | api | `error` \| `warn` \| `log` \| `debug` \| `verbose` (default `warn`; `log` adds lifecycle lines) |
+| `SYNCLE_METRICS_TOKEN` | api | Enables `GET /api/metrics` (Prometheus) for `Authorization: Bearer <token>`; unset = the endpoint does not exist |
+| `SYNCLE_ALERT_THROTTLE_SECONDS` | api | One alert per channel, kind of event and bridge per this many seconds (default `300`; `0` = every one) |
+| `SYNCLE_VERIFY_RECHECK_MS` | api | Verify, on a bridge that is delivering: how long to wait before looking a second time at a row that looks wrong (default `1500`) |
+| `SYNCLE_SHARED_SLOT_JOIN_WAIT_MS` | api | Joining a shared PostgreSQL replication slot: how long to wait for transactions that were open when the table was published (default `60000`) |
+| `SYNCLE_AUDIT_RETENTION_DAYS` | api | Days the activity log (who did what) is kept — the default for the in-app setting (default `365`; `0` = for ever) |
+| `SYNCLE_LEADER_TTL_SECONDS` | api | More than one API process: how long the leader's lease lasts — the longest a failover takes, and how long a leader cut off from Redis keeps reading live bridges (default `20`) |
+| `SYNCLE_ECHO_TTL_SECONDS` | api | Loop prevention (A → B plus B → A): how long a write to a table another bridge reads is remembered, so it is known when it comes back (default `300`; `0` = off) |
+| `SYNCLE_DELIVERY_RETENTION_DAYS` | api | Days a delivery's details are kept — default for the in-app setting (default `30`; `0` = for ever). Totals are never affected |
+| `SYNCLE_DELIVERY_MAX_PER_JOB` | api | Deliveries a live (watch/CDC) bridge keeps, however recent — default for the in-app setting (default `100000`; `0` = no limit) |
+| `SYNCLE_RETENTION_SWEEP_MINUTES` | api | How often delivery history is pruned (default `60`; `0` = only on demand) |
+| `WEB_ORIGIN`                  | api   | Origins a browser may use Syncle from besides the app's own, comma-separated: allowed by CORS and to make changes (default `http://localhost:3002`) |
+
+On the Docker install these go in `~/.syncle/.env` (one `NAME=value` per line),
+followed by `syncle up` — not `syncle restart`, which keeps the environment the
+container was created with. Anything left out keeps its default.
 
 If `SYNCLE_MASTER_KEY` is unset, a random key is generated under
 `apps/api/.syncle/` on first run — set it explicitly in production
@@ -441,6 +534,30 @@ SSH port needs to be reachable — the database itself stays private. SSH
 credentials are encrypted at rest and returned redacted, exactly like
 connection passwords. Tunnels apply to the network engines (PostgreSQL, MySQL,
 MongoDB, Redis); SQLite is a local file and never tunnels.
+
+The jump host's key is checked the way `ssh` checks it: paste its fingerprint
+(`SHA256:…`) and any other key is refused, or leave it empty and the key seen on
+the first connection is recorded and enforced from then on. A host that later
+presents a different key is refused, loudly.
+
+### TLS to the database
+
+Each connection picks how far TLS is trusted, using the names PostgreSQL's
+`sslmode` made familiar — and they mean the same thing on every engine, for
+**every** connection Syncle opens with it, the CDC change streams included:
+
+| Mode | What it does | Protects against |
+| ---- | ------------ | ---------------- |
+| Off | no TLS | nothing |
+| Encrypt only (`require`) | encrypts, checks nothing | passive eavesdropping only |
+| Verify authority (`verify-ca`) | the certificate must chain to your CA | an impostor without a cert from that CA |
+| Verify authority and host (`verify-full`) | …and be issued for this host | impersonation. **Use this one.** |
+
+Give a CA certificate for a private CA (leave it empty to trust the system's), an
+expected server name if the certificate is for a different name than you dial,
+and a client certificate + key for servers that want mutual TLS. Through an SSH
+tunnel the certificate is still checked against the *database's* host name, not
+the tunnel's `127.0.0.1`.
 
 ## Benchmarks
 
@@ -485,6 +602,35 @@ for you and spells out what's missing.
 > is offline can't be recovered, so prefer a watch bridge there if you need
 > guarantees.
 
+**PostgreSQL specifics.**
+
+- **Updates and deletes need a replica identity** — a primary key, or
+  `ALTER TABLE … REPLICA IDENTITY FULL`. Without one PostgreSQL can only report
+  inserts, and publishing updates for such a table would make `UPDATE`/`DELETE`
+  on it fail in *your* database. Syncle checks first and refuses to start the
+  bridge rather than do that; insert-only capture is always fine.
+- **A delete carries only the source's key**, so a target that should receive
+  deletes has to be keyed on it (or the table set to `REPLICA IDENTITY FULL`).
+  A mismatch is refused at start instead of silently deleting nothing.
+- **A replication slot pins WAL for as long as it exists**, read or not — so a
+  bridge left paused fills the source's disk. Syncle measures it, warns past
+  `SYNCLE_SLOT_WARN_BYTES`, releases the slot when a bridge is deleted or edited
+  away from CDC (and retries if that fails), and the readiness check tells you
+  when the server has no `max_slot_wal_keep_size` — set one; it is the safety
+  net that still works while Syncle is off. Each CDC bridge needs one slot and
+  one WAL sender (`max_replication_slots`, `max_wal_senders`).
+- **A lost position is never papered over.** If the slot was dropped or
+  invalidated (or MySQL purged the binlog, or MongoDB's oplog rolled over), the
+  bridge stops and says so; starting it again asks you to confirm continuing
+  from now, and a replay fills the gap.
+- **`TRUNCATE` is opt-in.** By default the destination keeps its rows and the
+  timeline records that the source was truncated. Add `truncate` to the
+  bridge's operations to empty the destination tables too.
+- **Partitioned tables**: bridge the parent. Needs PostgreSQL 13+.
+- Large (TOASTed) columns an `UPDATE` did not touch, primary-key changes, `COPY`
+  bulk loads and overlapping transactions are all handled — the
+  [CDC docs](https://syncle.dev/docs/cdc#postgres-behaviour) say how.
+
 **MySQL specifics.**
 
 - **`binlog_transaction_compression` is not supported.** MySQL 8.0.20+ can wrap
@@ -521,15 +667,21 @@ React Flow · Zod · Vitest.
 
 ## Security
 
-- Connection passwords and bridge auth secrets are encrypted at rest (AES-256-GCM)
-  and only ever returned to the browser redacted.
+- Connection passwords, SSH credentials, TLS client keys and bridge auth secrets
+  are encrypted at rest (AES-256-GCM) and only ever returned to the browser
+  redacted.
+- TLS to a database can verify both the certificate authority and the host name,
+  on every engine and for every connection a bridge opens (the change streams
+  too). SSH tunnels pin the jump host's key.
 - All user values are passed as bound parameters; identifiers are dialect-quoted.
 - Bridge payloads are built by structured token substitution — no string injection,
   no code execution.
-- Every API route sits behind a single-operator auth layer: the first run
-  creates the admin account, after which a scrypt-hashed password and an
-  httpOnly session cookie guard the app. Changing the password invalidates
-  existing sessions.
+- Every API route sits behind an account. The first run creates an admin, who
+  can add more — admins, operators (the work, not the settings or accounts) and
+  viewers (look, not change). Passwords are scrypt-hashed, the session is an
+  httpOnly cookie, and changing a password invalidates existing sessions.
+- An activity log records who did what: every change made through the API and
+  every sign-in, kept for `SYNCLE_AUDIT_RETENTION_DAYS`.
 - Syncle is still designed for local / trusted-network use. Before exposing it
   further, complete first-run setup before the port is reachable, put it behind
   TLS, and restrict which destinations (database connections / endpoint URLs)

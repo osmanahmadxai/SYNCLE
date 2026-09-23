@@ -28,6 +28,8 @@ export function TriggerSection({
   draft,
   dispatch,
   columns,
+  sourceEngine,
+  bridgeId,
 }: {
   draft: Pick<
     BuilderDraft,
@@ -42,11 +44,20 @@ export function TriggerSection({
     | 'pollSeconds'
     | 'watchStartFrom'
     | 'cdcOps'
+    | 'cdcStartFrom'
+    | 'cdcSlot'
     | 'readiness'
     | 'checkingCdc'
   >;
   dispatch: Dispatch<BuilderAction>;
   columns: QueryColumn[];
+  /** the source connection's engine; only PostgreSQL reports a TRUNCATE */
+  sourceEngine?: string;
+  /**
+   * the bridge being edited, if it exists yet. a server with no replication
+   * slot to spare must not fail the check for a bridge that already has one
+   */
+  bridgeId?: string | null;
 }) {
   const t = useTranslations('bridgeBuilder');
   const {
@@ -57,6 +68,8 @@ export function TriggerSection({
     pollSeconds,
     watchStartFrom,
     cdcOps,
+    cdcStartFrom,
+    cdcSlot,
     readiness,
     checkingCdc,
   } = draft;
@@ -72,6 +85,8 @@ export function TriggerSection({
           database: draft.database || undefined,
           schema: draft.schema || undefined,
           table: draft.table,
+          bridgeId: bridgeId || undefined,
+          slot: sourceEngine === 'postgres' ? cdcSlot : undefined,
         }),
       });
     } catch (err) {
@@ -145,8 +160,18 @@ export function TriggerSection({
           {triggerKind === 'cdc' && (
             <div className="grid gap-2 rounded-md border p-2.5">
             <Label className="text-xs">{t('operationsToDeliver')}</Label>
-            <div className="flex gap-3 text-xs">
-              {(['insert', 'update', 'delete'] as const).map((op) => (
+            <div className="flex flex-wrap gap-3 text-xs">
+              {(
+                [
+                  'insert',
+                  'update',
+                  'delete',
+                  // a bridge saved with it keeps showing it, whatever the engine
+                  ...(sourceEngine === 'postgres' || cdcOps.has('truncate')
+                    ? (['truncate'] as const)
+                    : []),
+                ] as const
+              ).map((op) => (
                 <label key={op} className="flex items-center gap-1.5">
                   <input
                     type="checkbox"
@@ -158,10 +183,65 @@ export function TriggerSection({
                     ? t('opInsert')
                     : op === 'update'
                       ? t('opUpdate')
-                      : t('opDelete')}
+                      : op === 'delete'
+                        ? t('opDelete')
+                        : t('opTruncate')}
                 </label>
               ))}
             </div>
+            {sourceEngine === 'postgres' && (
+              <p className="text-muted-foreground text-[11px]">
+                {t('truncateHint')}
+              </p>
+            )}
+
+            <div className="grid gap-1.5">
+              <Label className="text-xs">{t('startFrom')}</Label>
+              <Select
+                value={cdcStartFrom}
+                onValueChange={(v) =>
+                  dispatch({
+                    type: 'setCdcStartFrom',
+                    startFrom: v as 'now' | 'beginning',
+                  })
+                }
+              >
+                <SelectTrigger className="h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="now">{t('cdcFromNow')}</SelectItem>
+                  <SelectItem value="beginning">{t('cdcFromBeginning')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-[11px]">
+                {cdcStartFrom === 'beginning'
+                  ? t('cdcFromBeginningHint')
+                  : t('cdcFromNowHint')}
+              </p>
+            </div>
+
+            {/* PostgreSQL only: a slot of its own, or the one all shared bridges of this connection read through */}
+            {sourceEngine === 'postgres' && (
+              <div className="grid gap-1.5">
+                <Label className="text-xs">{t('cdcSlot')}</Label>
+                <Select
+                  value={cdcSlot}
+                  onValueChange={(v) => dispatch({ type: 'setCdcSlot', slot: v as 'own' | 'shared' })}
+                >
+                  <SelectTrigger className="h-8" aria-label={t('cdcSlot')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="own">{t('cdcSlotOwn')}</SelectItem>
+                    <SelectItem value="shared">{t('cdcSlotShared')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-[11px]">
+                  {cdcSlot === 'shared' ? t('cdcSlotSharedHint') : t('cdcSlotOwnHint')}
+                </p>
+              </div>
+            )}
 
             {/* readiness / setup */}
             <div className="flex items-center justify-between">
@@ -214,6 +294,16 @@ export function TriggerSection({
                     {readiness.instructions.map((ins, i) => (
                       <p key={i} className="text-muted-foreground pl-1">
                         • {ins}
+                      </p>
+                    ))}
+                    {/* not in the way of starting, but worth knowing first */}
+                    {readiness.advisories?.map((note, i) => (
+                      <p
+                        key={`advisory-${i}`}
+                        className="rounded bg-amber-500/10 px-1.5 py-1 text-amber-700 dark:text-amber-400"
+                      >
+                        <span className="font-medium">{t('goodToKnow')}</span>{' '}
+                        {note}
                       </p>
                     ))}
                   </>

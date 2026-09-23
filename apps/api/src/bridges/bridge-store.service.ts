@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { Bridge as BridgeRow } from '@prisma/client';
 import {
+  BadRequestError,
   type Bridge,
   type BridgeDestination,
   type BridgeInputDTO,
@@ -17,6 +18,7 @@ import {
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
 import type { ResolvedBridge } from './bridges.types';
+import { EchoGuardService } from './echo-guard.service';
 
 const REDACTED = '********';
 
@@ -35,6 +37,7 @@ export class BridgeStoreService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
+    private readonly echo: EchoGuardService,
   ) {}
 
   /* ----- secret split / merge ----- */
@@ -138,7 +141,43 @@ export class BridgeStoreService {
     return bridge;
   }
 
+  /**
+   * a bridge WRITES to its targets. one that points at a read-only connection
+   * would be saved, started, and fail on its first delivery: said now instead
+   */
+  private async assertTargetsWritable(destination: BridgeDestination): Promise<void> {
+    if (destination.kind !== 'database') return;
+    const ids = [...new Set(destination.targets.map((t) => t.connectionId))];
+    const readOnly = await this.prisma.connection.findMany({
+      where: { id: { in: ids }, readOnly: true },
+      select: { name: true },
+    });
+    if (readOnly.length > 0) {
+      const names = readOnly.map((c) => `"${c.name}"`).join(', ');
+      throw new BadRequestError(
+        `${names} ${readOnly.length === 1 ? 'is a read-only connection' : 'are read-only connections'}, and a bridge writes to its destination. ` +
+          'Pick another connection, or untick "Read-only" on it.',
+      );
+    }
+    // "how a row becomes a Redis key" means nothing to a table: said now, not
+    // quietly dropped (the bridge would write columns where a hash was asked for)
+    const asKeys = destination.targets.filter((t) => t.redis);
+    if (asKeys.length > 0) {
+      const engines = await this.prisma.connection.findMany({
+        where: { id: { in: asKeys.map((t) => t.connectionId) } },
+        select: { id: true, name: true, engine: true },
+      });
+      const wrong = engines.filter((c) => c.engine !== 'redis');
+      if (wrong.length > 0) {
+        throw new BadRequestError(
+          `${wrong.map((c) => `"${c.name}"`).join(', ')} is not a Redis connection: a key template, a key type and an expiry only apply to a target in Redis.`,
+        );
+      }
+    }
+  }
+
   async create(input: BridgeInputDTO): Promise<Bridge> {
+    await this.assertTargetsWritable(input.destination);
     const { sanitized, secret } = this.splitSecret(input.destination);
     const row = await this.prisma.bridge.create({
       data: {
@@ -155,10 +194,12 @@ export class BridgeStoreService {
         enabled: input.enabled,
       },
     });
+    this.echo.forget(); // which tables are read and written may have changed
     return this.toBridge(row, false);
   }
 
   async update(id: string, input: BridgeInputDTO): Promise<Bridge> {
+    await this.assertTargetsWritable(input.destination);
     const existing = await this.getRow(id);
     const { sanitized, secret } = this.splitSecret(input.destination);
 
@@ -184,12 +225,14 @@ export class BridgeStoreService {
         enabled: input.enabled,
       },
     });
+    this.echo.forget(); // which tables are read and written may have changed
     return this.toBridge(row, false);
   }
 
   async remove(id: string): Promise<void> {
     await this.getRow(id);
     await this.prisma.bridge.delete({ where: { id } });
+    this.echo.forget();
   }
 
   /* ----- job snapshot (auth kept encrypted) ----- */
@@ -208,11 +251,19 @@ export class BridgeStoreService {
     return JSON.stringify(snapshot);
   }
 
-  /** decrypt a job snapshot into a runnable, fully-resolved bridge config */
-  resolveSnapshot(json: string): ResolvedBridge {
+  /**
+   * decrypt a job snapshot into a runnable, fully-resolved bridge config.
+   *
+   * the snapshot does not store the bridge's id, so the caller supplies it —
+   * and it must: the id is what per-bridge caches are keyed by. while this
+   * returned `id: ''`, every replay job shared ONE cache slot, so the sink
+   * reused the first replayed bridge's source columns for every bridge after
+   * it, and created their destination tables with the wrong bridge's columns.
+   */
+  resolveSnapshot(json: string, id: string): ResolvedBridge {
     const s = JSON.parse(json) as JobSnapshot;
     return {
-      id: '',
+      id,
       name: s.name,
       source: s.source,
       destination: this.withSecret(

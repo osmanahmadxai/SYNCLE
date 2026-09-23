@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { KeyRound, LogOut, Settings, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
 import { useAuthStatus, useLogout } from '@/lib/queries';
+import { useStudio } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -21,15 +21,9 @@ export function UserMenu() {
   const t = useTranslations('userMenu');
   const { data: status } = useAuthStatus();
   const logout = useLogout();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('account');
+  const { settings, openSettings, closeSettings } = useStudio();
 
   const username = status?.user?.username ?? t('account');
-
-  function openSettings(tab: string) {
-    setSettingsTab(tab);
-    setSettingsOpen(true);
-  }
 
   async function handleLogout() {
     try {
@@ -55,7 +49,14 @@ export function UserMenu() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuLabel className="truncate">{username}</DropdownMenuLabel>
+          <DropdownMenuLabel className="truncate">
+            {username}
+            {status?.user?.role && (
+              <span className="text-muted-foreground ml-1.5 text-[10px] font-normal uppercase">
+                {t(`role.${status.user.role}`)}
+              </span>
+            )}
+          </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={() => openSettings('account')}
@@ -81,10 +82,12 @@ export function UserMenu() {
       </DropdownMenu>
 
       <SettingsDialog
-        key={settingsTab}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        initialTab={settingsTab}
+        key={settings.tab}
+        open={settings.open}
+        onOpenChange={(open) =>
+          open ? openSettings(settings.tab) : closeSettings()
+        }
+        initialTab={settings.tab}
       />
     </>
   );

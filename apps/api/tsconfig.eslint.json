@@ -1,0 +1,7 @@
+{
+  // what the linter sees: the package's own config, plus test/ which it leaves out
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["src", "test", "bench"],
+  "exclude": ["node_modules", "dist"]
+}

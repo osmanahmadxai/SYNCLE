@@ -21,6 +21,24 @@ import {
   MongodbAdapter,
   MONGODB_CAPABILITIES,
 } from './nosql/mongodb-adapter';
+export {
+  mergeSampledType,
+  mongoTunnelOptions,
+  normalizeMongoDocument,
+  normalizeMongoValue,
+} from './nosql/mongodb-adapter';
+export { describeConnectionString, withDatabase } from './connection-string';
+export { redisGlobMatch, redisKeyPattern } from './nosql/redis-key-pattern';
+export {
+  describeTls,
+  effectiveTls,
+  mongoTlsOptions,
+  mysqlTlsOptions,
+  nodeTlsOptions,
+  tlsServerName,
+  verifyPeerIdentity,
+  type NodeTlsOptions,
+} from './tls-options';
 import { RedisAdapter, REDIS_CAPABILITIES } from './nosql/redis-adapter';
 
 const hostPortUserPass = (
@@ -39,6 +57,20 @@ const hostPortUserPass = (
   { key: 'password', label: 'Password', type: 'password', required: false },
   { key: 'database', label: 'Database', type: 'text', required: false, hint: dbHint },
 ];
+
+/**
+ * the adapters for these engines have always taken a connection string; only
+ * MongoDB's form offered a place to type one. a hosted database usually hands
+ * you exactly that and nothing else
+ */
+const connectionStringField = (placeholder: string, hint: string): DriverField => ({
+  key: 'connectionString',
+  label: 'Connection string (optional)',
+  type: 'text',
+  required: false,
+  placeholder,
+  hint,
+});
 
 const PG_TYPES = [
   'integer', 'bigint', 'serial', 'text', 'varchar(255)', 'boolean',
@@ -62,7 +94,13 @@ export function bootstrapDrivers(): void {
     description: 'Open-source relational database with rich SQL support.',
     defaultPort: 5432,
     capabilities: POSTGRES_CAPABILITIES,
-    fields: hostPortUserPass(5432),
+    fields: [
+      ...hostPortUserPass(5432),
+      connectionStringField(
+        'postgres://user:password@host:5432/database?sslmode=require',
+        'What a hosted PostgreSQL (Neon, Supabase, RDS…) hands you. If set, it is used instead of the fields above. Not available together with an SSH tunnel.',
+      ),
+    ],
     dataTypes: PG_TYPES,
     create: (config) => new PostgresAdapter(config),
   });
@@ -73,7 +111,13 @@ export function bootstrapDrivers(): void {
     description: 'The world’s most popular open-source relational database.',
     defaultPort: 3306,
     capabilities: MYSQL_CAPABILITIES,
-    fields: hostPortUserPass(3306),
+    fields: [
+      ...hostPortUserPass(3306),
+      connectionStringField(
+        'mysql://user:password@host:3306/database',
+        'If set, it is used instead of the fields above. Not available together with an SSH tunnel.',
+      ),
+    ],
     dataTypes: MYSQL_TYPES,
     create: (config) => new MysqlAdapter(config),
   });
@@ -124,7 +168,13 @@ export function bootstrapDrivers(): void {
     description: 'In-memory key-value data store.',
     defaultPort: 6379,
     capabilities: REDIS_CAPABILITIES,
-    fields: hostPortUserPass(6379, 'Logical DB index (0–15)'),
+    fields: [
+      ...hostPortUserPass(6379, 'Logical DB index (0–15)'),
+      connectionStringField(
+        'rediss://default:password@host:6379/0',
+        'What a hosted Redis (Upstash, Redis Cloud…) hands you; rediss:// asks for TLS by itself. If set, it is used instead of the fields above. Not available together with an SSH tunnel.',
+      ),
+    ],
     dataTypes: [],
     create: (config) => new RedisAdapter(config),
   });

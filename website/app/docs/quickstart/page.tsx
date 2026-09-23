@@ -45,10 +45,12 @@ export default function Page() {
         sidebar — a full-screen overlay for connecting databases, browsing
         tables and managing schema. Add a connection: a display name, an
         engine — PostgreSQL, MySQL/MariaDB, SQLite, MongoDB or Redis — and
-        host, port, user and password. A <strong>Use TLS / SSL</strong>{' '}
-        toggle covers encrypted connections, and an <strong>SSH tunnel</strong>{' '}
-        option reaches a database through a jump host, authenticated by
-        password or PEM private key. The <strong>Test</strong> button tries
+        host, port, user and password. <strong>TLS</strong> sets how far
+        the connection is trusted — pick <em>Verify the authority and the host
+        name</em> unless you have a reason not to (
+        <a href="/docs/workbench#tls">what each mode protects against</a>) —
+        and an <strong>SSH tunnel</strong> option reaches a database through a
+        jump host, authenticated by password or PEM private key. The <strong>Test</strong> button tries
         the connection before you save it; credentials are encrypted at rest
         and come back to the browser redacted.
       </p>
@@ -132,6 +134,19 @@ export default function Page() {
         your machine&apos;s localhost — running from source it can; from the
         Docker install, localhost inside the API container is the container
         itself, not your machine.
+      </p>
+
+      <h2 id="getting-around">Getting around</h2>
+      <p>
+        <kbd>⌘K</kbd> (<kbd>Ctrl</kbd>+<kbd>K</kbd> on Windows and Linux), or
+        the search box at the top of the sidebar, opens the command palette:
+        type a bridge&apos;s or a connection&apos;s name to go to it — or what
+        it <em>is</em>, such as <code>cdc</code> or <code>postgres</code> — or
+        pick an action: new bridge, new connection, data sources, settings,
+        switch workspace or theme. The bridge you have open, the data sources
+        surface and the builder are part of the URL, so a reload lands where
+        you were and the browser&apos;s Back and Forward buttons move between
+        them.
       </p>
 
       <h2 id="where-next">Where next</h2>

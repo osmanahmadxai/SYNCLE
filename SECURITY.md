@@ -2,8 +2,11 @@
 
 ## Supported versions
 
-Syncle is pre-1.0 and moves fast; security fixes land on `main` and the
-latest release only.
+Security fixes land on `main` and in the latest release only; there are no
+maintenance branches for older versions. To see which version you are running,
+open Settings (the version is at the bottom of the dialog) or call
+`GET /api/version`; `syncle update` moves a Docker install to the latest
+release.
 
 | Version | Supported |
 | ------- | --------- |
@@ -33,7 +36,9 @@ protections:
   account (guarded by a one-time setup token printed to the server console),
   after which a scrypt-hashed password and a signed httpOnly session cookie
   protect the whole API. Password changes invalidate all outstanding sessions,
-  and the login/setup endpoints rate-limit repeated failures.
+  sessions expire after a configurable period of inactivity, and sign-in is
+  throttled both per address and per user name — the second because the address
+  comes from `X-Forwarded-For`, which a client controls.
 - **Secrets encrypted at rest.** Connection credentials and bridge auth secrets
   are AES-256-GCM encrypted under `SYNCLE_MASTER_KEY` (session cookies are
   signed with an HKDF-derived sub-key, so encryption and signing stay

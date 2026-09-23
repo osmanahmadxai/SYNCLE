@@ -29,13 +29,14 @@ import type {
   InsertRowsParams,
   QueryResult,
   RestoreResult,
+  SortSpec,
   TableSchema,
   UpdateRowParams,
   UpsertRowParams,
   UpsertRowsParams,
 } from '../types';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { BadRequestError } from '../../errors';
+import { BadRequestError, QueryError } from '../../errors';
 
 /**
  * a single database connection borrowed from the driver pool for the lifetime
@@ -240,6 +241,51 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
   }
 
   /**
+   * the rows strictly after a tuple, in the order the sort gives: for columns
+   * a, b, c that is `a > ? OR (a = ? AND b > ?) OR (a = ? AND b = ? AND c > ?)`,
+   * with `<` where a column is sorted descending. spelled out instead of a
+   * row-value comparison `(a, b, c) > (?, ?, ?)`, which not every engine has and
+   * which cannot mix directions.
+   */
+  private buildAfter(
+    after: NonNullable<BrowseParams['after']>,
+    sort: SortSpec[] | undefined,
+    startIndex: number,
+  ): { clause: string; params: unknown[] } {
+    const order = sort ?? [];
+    const named = after.columns;
+    if (
+      named.length === 0 ||
+      named.length !== after.values.length ||
+      order.length !== named.length ||
+      order.some((s, i) => s.column !== named[i])
+    ) {
+      throw new BadRequestError(
+        'A page after a tuple needs the sort to name exactly the columns of the tuple, in its order.',
+      );
+    }
+    if (after.values.some((v) => v === null || v === undefined)) {
+      throw new BadRequestError(
+        'A page after a tuple cannot start after a NULL: nothing is greater or smaller than one.',
+      );
+    }
+    const params: unknown[] = [];
+    let idx = startIndex;
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return this.placeholder(idx++);
+    };
+    const alternatives = order.map((s, i) => {
+      const same = order
+        .slice(0, i)
+        .map((p, j) => `${this.quoteIdent(p.column)} = ${bind(after.values[j])}`);
+      const beyond = `${this.quoteIdent(s.column)} ${s.direction === 'desc' ? '<' : '>'} ${bind(after.values[i])}`;
+      return `(${[...same, beyond].join(' AND ')})`;
+    });
+    return { clause: `(${alternatives.join(' OR ')})`, params };
+  }
+
+  /**
    * build a parameterized WHERE clause from filters.
    * returns the SQL fragment (without leading WHERE) and the bound params
    */
@@ -315,7 +361,13 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     const target = this.qualify(params.table, params.schema);
 
     const where = this.buildWhere(params.filters, 1);
-    const whereSql = where.clause ? ` WHERE ${where.clause}` : '';
+    // the page after a tuple (keyset paging): a predicate on the sort columns
+    const after = params.after
+      ? this.buildAfter(params.after, params.sort, where.params.length + 1)
+      : null;
+    const clauses = [where.clause, after?.clause].filter(Boolean);
+    const whereSql = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+    const whereParams = [...where.params, ...(after?.params ?? [])];
 
     let orderSql = '';
     if (params.sort && params.sort.length > 0) {
@@ -334,17 +386,19 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
     // fetch one extra row to learn whether a next page exists, way cheaper
     // than a COUNT(*) on every page for large tables
     const probe = limit + 1;
+    // (a keyset page starts right after its tuple: the offset means nothing to it)
     const sql =
       `SELECT * FROM ${target}${whereSql}${orderSql} ` +
-      `LIMIT ${probe} OFFSET ${offset}`;
+      `LIMIT ${probe} OFFSET ${after ? 0 : offset}`;
 
     const hasFilters = !!params.filters && params.filters.length > 0;
     const [data, count, pk] = await Promise.all([
-      this.runSql(sql, where.params),
+      this.runSql(sql, whereParams),
+      // the total is of the READ, not of the page: counted without the tuple
       this.countRows({
         table: params.table,
         schema: params.schema,
-        whereSql,
+        whereSql: where.clause ? ` WHERE ${where.clause}` : '',
         whereParams: where.params,
         hasFilters,
       }).catch(() => ({ total: null, estimated: false })),
@@ -397,6 +451,37 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
       };
     }
     return result;
+  }
+
+  /** how this engine opens a transaction that cannot write; null = it has no such thing */
+  protected readOnlyBeginSql(): string | null {
+    return null;
+  }
+
+  /**
+   * the statement, inside a transaction the ENGINE holds to reading: a write
+   * anywhere in it — a function's, a trigger's, a CTE's — is the engine's own
+   * error, whatever the text looked like. always rolled back.
+   */
+  async queryReadOnly(statement: string, params?: unknown[]): Promise<QueryResult> {
+    const begin = this.readOnlyBeginSql();
+    if (!begin || !this.acquireTransactionConnection) {
+      throw new QueryError('This engine cannot run a statement in a read-only transaction.');
+    }
+    const conn = await this.acquireTransactionConnection();
+    try {
+      await conn.run(begin, []);
+      try {
+        const result = await conn.run(statement, params ?? []);
+        return result.rows.length > this.maxRows
+          ? { ...result, rows: result.rows.slice(0, this.maxRows), rowCount: this.maxRows, truncated: true }
+          : result;
+      } finally {
+        await conn.rollback().catch(() => undefined);
+      }
+    } finally {
+      conn.release();
+    }
   }
 
   async insertRow(p: InsertRowParams): Promise<QueryResult> {
@@ -678,9 +763,16 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
   }
 
   /** validate a raw column type string (it can't be a bound parameter) */
+  /**
+   * a column type is spliced into DDL verbatim (it cannot be a bound
+   * parameter), so it is held to a strict alphabet: names, spaces, and a
+   * `(precision, scale)` modifier. the only other thing allowed is a trailing
+   * run of literal `[]` pairs — a Postgres array such as `integer[]`. quotes,
+   * semicolons, comment markers and anything else are refused.
+   */
   protected validateType(type: string): string {
     const t = type.trim();
-    if (!/^[A-Za-z0-9_ (),]+$/.test(t)) {
+    if (!/^[A-Za-z0-9_ (),]+(\[\])*$/.test(t)) {
       throw new BadRequestError(`Invalid column type: "${type}"`);
     }
     return t;
@@ -716,6 +808,22 @@ export abstract class BaseSqlAdapter implements DatabaseAdapter {
       .map((c) => this.quoteIdent(c.name));
     if (pk.length) parts.push(`PRIMARY KEY (${pk.join(', ')})`);
     await this.runSql(`CREATE TABLE ${target} (${parts.join(', ')})`, []);
+  }
+
+  /**
+   * one ALTER TABLE … ADD COLUMN per column (SQLite takes one at a time, and
+   * the others lose nothing by it). always nullable: the rows already there
+   * have no value for it
+   */
+  async addColumns(spec: CreateTableSpec): Promise<void> {
+    const target = this.qualify(
+      assertSafeIdentifier(spec.table),
+      spec.schema ? assertSafeIdentifier(spec.schema) : undefined,
+    );
+    for (const c of spec.columns) {
+      const column = this.columnSql({ ...c, nullable: true, primaryKey: false, autoIncrement: false, unique: false, defaultValue: undefined });
+      await this.runSql(`ALTER TABLE ${target} ADD COLUMN ${column}`, []);
+    }
   }
 
   async dropTable(table: string, schema?: string): Promise<void> {

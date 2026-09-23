@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { KeyRound, Loader2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
@@ -13,6 +14,7 @@ import {
   useAuthStatus,
   useChangePassword,
   useSettings,
+  useVersion,
   useUpdateSettings,
 } from '@/lib/queries';
 import { Button } from '@/components/ui/button';
@@ -28,6 +30,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { AlertsTab } from './alerts-tab';
+import { AuditLog } from './audit-log';
+import { ApiKeysSection } from './api-keys-section';
+import { EncryptionStatus } from './encryption-status';
+import { InstancesStatus } from './instances-status';
+import { UsersSection } from './users-section';
 
 type CdcOp = 'insert' | 'update' | 'delete';
 const CDC_OPS: CdcOp[] = ['insert', 'update', 'delete'];
@@ -40,6 +48,9 @@ const RANGES = {
   poolIdleMs: { min: 10_000, max: 86_400_000 },
   jobConcurrency: { min: 1, max: 100 },
   sessionTtlMinutes: { min: 15, max: 43_200 },
+  deliveryRetentionDays: { min: 0, max: 3650 },
+  deliveryMaxPerJob: { min: 0, max: 100_000_000 },
+  auditRetentionDays: { min: 0, max: 3650 },
 } as const;
 
 export function SettingsDialog({
@@ -51,32 +62,54 @@ export function SettingsDialog({
   onOpenChange: (open: boolean) => void;
   initialTab?: string;
 }) {
+  const t = useTranslations('settingsDialog');
   const { data: status } = useAuthStatus();
+  const admin = status?.user?.role === 'admin';
   const { data: settings } = useSettings();
+  const { data: version } = useVersion();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            Manage your account and the server-wide defaults.
-          </DialogDescription>
+          <DialogTitle>{t('title')}</DialogTitle>
+          <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue={initialTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="account">Account</TabsTrigger>
-            <TabsTrigger value="bridges">Bridges</TabsTrigger>
-            <TabsTrigger value="engine">Engine</TabsTrigger>
-            <TabsTrigger value="security">Security</TabsTrigger>
+        {/* the settings, the alert channels, the accounts and the activity are an admin's: the others see their account */}
+        <Tabs
+          defaultValue={admin || initialTab === 'account' ? initialTab : 'account'}
+          className="w-full"
+        >
+          <TabsList className={admin ? 'grid w-full grid-cols-6' : 'grid w-full grid-cols-1'}>
+            <TabsTrigger value="account">{t('tabs.account')}</TabsTrigger>
+            {admin && (
+              <>
+                <TabsTrigger value="bridges">{t('tabs.bridges')}</TabsTrigger>
+                <TabsTrigger value="engine">{t('tabs.engine')}</TabsTrigger>
+                <TabsTrigger value="alerts">{t('tabs.alerts')}</TabsTrigger>
+                <TabsTrigger value="security">{t('tabs.security')}</TabsTrigger>
+                <TabsTrigger value="activity">{t('tabs.activity')}</TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="account" className="pt-2">
             <AccountTab user={status?.user ?? null} />
           </TabsContent>
 
-          {settings ? (
+          {admin && (
+            <TabsContent value="alerts" className="pt-2">
+              <AlertsTab />
+            </TabsContent>
+          )}
+          {admin && (
+            <TabsContent value="activity" className="pt-2">
+              <AuditLog />
+            </TabsContent>
+          )}
+
+          {!admin ? null : settings ? (
             <>
               <TabsContent value="bridges" className="pt-2">
                 <BridgesTab settings={settings} />
@@ -94,6 +127,15 @@ export function SettingsDialog({
             </div>
           )}
         </Tabs>
+
+        {/* the first thing a bug report gets asked, and nothing could answer it */}
+        {version && (
+          <p className="text-muted-foreground border-t pt-2 text-[11px]">
+            {t('versionApp', { version: version.version })}
+            <span className="mx-1.5 opacity-40">·</span>
+            {t('versionNode', { version: version.node })}
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -104,6 +146,8 @@ export function SettingsDialog({
 /* -------------------------------------------------------------------------- */
 
 function AccountTab({ user }: { user: AuthUser | null }) {
+  const t = useTranslations('settingsDialog');
+  const tc = useTranslations('common');
   const change = useChangePassword();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -113,41 +157,41 @@ function AccountTab({ user }: { user: AuthUser | null }) {
   async function handleChange() {
     if (change.isPending) return;
     if (!current) {
-      setError('Enter your current password.');
+      setError(t('errorCurrentRequired'));
       return;
     }
     if (next.length < 8) {
-      setError('New password must be at least 8 characters.');
+      setError(t('errorNewTooShort'));
       return;
     }
     if (next !== confirm) {
-      setError('New passwords do not match.');
+      setError(t('errorMismatch'));
       return;
     }
     setError(null);
     try {
       await change.mutateAsync({ currentPassword: current, newPassword: next });
-      toast.success('Password changed');
+      toast.success(t('passwordChanged'));
       setCurrent('');
       setNext('');
       setConfirm('');
     } catch (err) {
       const message =
-        err instanceof ApiError ? err.message : 'Something went wrong';
+        err instanceof ApiError ? err.message : tc('somethingWrong');
       setError(message);
-      toast.error('Could not change password', { description: message });
+      toast.error(t('couldNotChangePassword'), { description: message });
     }
   }
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-2">
-        <Label>Username</Label>
+        <Label>{t('username')}</Label>
         <Input value={user?.username ?? ''} readOnly disabled />
       </div>
 
       <div className="rounded-md border p-3">
-        <p className="mb-3 text-sm font-medium">Change password</p>
+        <p className="mb-3 text-sm font-medium">{t('changePassword')}</p>
         <form
           className="grid gap-3"
           onSubmit={(e) => {
@@ -156,7 +200,7 @@ function AccountTab({ user }: { user: AuthUser | null }) {
           }}
         >
           <div className="grid gap-2">
-            <Label htmlFor="current-pw">Current password</Label>
+            <Label htmlFor="current-pw">{t('currentPassword')}</Label>
             <Input
               id="current-pw"
               type="password"
@@ -166,7 +210,7 @@ function AccountTab({ user }: { user: AuthUser | null }) {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="new-pw">New password</Label>
+            <Label htmlFor="new-pw">{t('newPassword')}</Label>
             <Input
               id="new-pw"
               type="password"
@@ -175,11 +219,11 @@ function AccountTab({ user }: { user: AuthUser | null }) {
               onChange={(e) => setNext(e.target.value)}
             />
             <p className="text-muted-foreground text-xs">
-              At least 8 characters. You stay signed in.
+              {t('newPasswordHint')}
             </p>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="confirm-pw">Confirm new password</Label>
+            <Label htmlFor="confirm-pw">{t('confirmPassword')}</Label>
             <Input
               id="confirm-pw"
               type="password"
@@ -199,7 +243,7 @@ function AccountTab({ user }: { user: AuthUser | null }) {
             ) : (
               <KeyRound className="mr-2 h-4 w-4" />
             )}
-            Change password
+            {t('changePassword')}
           </Button>
         </form>
       </div>
@@ -213,6 +257,7 @@ function AccountTab({ user }: { user: AuthUser | null }) {
 
 /** local, editable copy of the saved settings + a save handler */
 function useSettingsForm(settings: AppSettings) {
+  const t = useTranslations('settingsDialog');
   const update = useUpdateSettings();
   const [form, setForm] = useState<AppSettings>(settings);
 
@@ -227,9 +272,9 @@ function useSettingsForm(settings: AppSettings) {
     if (update.isPending) return;
     try {
       await update.mutateAsync(form as AppSettingsDTO);
-      toast.success('Settings saved');
+      toast.success(t('settingsSaved'));
     } catch (err) {
-      toast.error('Could not save settings', {
+      toast.error(t('couldNotSaveSettings'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -239,6 +284,7 @@ function useSettingsForm(settings: AppSettings) {
 }
 
 function SaveBar({ saving, onSave }: { saving: boolean; onSave: () => void }) {
+  const t = useTranslations('settingsDialog');
   return (
     <DialogFooter className="mt-4">
       <Button onClick={onSave} disabled={saving}>
@@ -247,7 +293,7 @@ function SaveBar({ saving, onSave }: { saving: boolean; onSave: () => void }) {
         ) : (
           <Save className="mr-2 h-4 w-4" />
         )}
-        Save changes
+        {t('saveChanges')}
       </Button>
     </DialogFooter>
   );
@@ -293,6 +339,7 @@ function NumField({
 }
 
 function BridgesTab({ settings }: { settings: AppSettings }) {
+  const t = useTranslations('settingsDialog');
   const { form, set, save, saving } = useSettingsForm(settings);
 
   function toggleOp(op: CdcOp, on: boolean) {
@@ -308,8 +355,8 @@ function BridgesTab({ settings }: { settings: AppSettings }) {
     <div className="grid gap-4">
       <NumField
         id="poll-interval"
-        label="Default poll interval (ms)"
-        hint="How often a new polling bridge checks for changes."
+        label={t('pollInterval')}
+        hint={t('pollIntervalHint')}
         value={form.defaultPollIntervalMs}
         min={RANGES.defaultPollIntervalMs.min}
         max={RANGES.defaultPollIntervalMs.max}
@@ -317,17 +364,17 @@ function BridgesTab({ settings }: { settings: AppSettings }) {
       />
       <NumField
         id="max-per-poll"
-        label="Default rows per poll"
-        hint="Rows a new polling bridge fetches each cycle."
+        label={t('maxPerPoll')}
+        hint={t('maxPerPollHint')}
         value={form.defaultMaxPerPoll}
         min={RANGES.defaultMaxPerPoll.min}
         max={RANGES.defaultMaxPerPoll.max}
         onChange={(v) => set('defaultMaxPerPoll', v)}
       />
       <div className="grid gap-2">
-        <Label>Default CDC operations</Label>
+        <Label>{t('cdcOperations')}</Label>
         <p className="text-muted-foreground text-xs">
-          Which changes a new CDC bridge captures by default.
+          {t('cdcOperationsHint')}
         </p>
         <div className="grid gap-2">
           {CDC_OPS.map((op) => (
@@ -335,7 +382,7 @@ function BridgesTab({ settings }: { settings: AppSettings }) {
               key={op}
               className="flex items-center justify-between rounded-md border p-2.5"
             >
-              <span className="text-sm capitalize">{op}</span>
+              <span className="text-sm capitalize">{t(`ops.${op}`)}</span>
               <Switch
                 checked={form.defaultCdcOperations.includes(op)}
                 onCheckedChange={(on) => toggleOp(op, on)}
@@ -350,13 +397,14 @@ function BridgesTab({ settings }: { settings: AppSettings }) {
 }
 
 function EngineTab({ settings }: { settings: AppSettings }) {
+  const t = useTranslations('settingsDialog');
   const { form, set, save, saving } = useSettingsForm(settings);
   return (
     <div className="grid gap-4">
       <NumField
         id="max-query-rows"
-        label="Max query rows"
-        hint="Hard cap on rows returned by a single ad-hoc query."
+        label={t('maxQueryRows')}
+        hint={t('maxQueryRowsHint')}
         value={form.maxQueryRows}
         min={RANGES.maxQueryRows.min}
         max={RANGES.maxQueryRows.max}
@@ -364,8 +412,8 @@ function EngineTab({ settings }: { settings: AppSettings }) {
       />
       <NumField
         id="pool-idle"
-        label="Pool idle timeout (ms)"
-        hint="Idle time before a pooled database connection is closed."
+        label={t('poolIdle')}
+        hint={t('poolIdleHint')}
         value={form.poolIdleMs}
         min={RANGES.poolIdleMs.min}
         max={RANGES.poolIdleMs.max}
@@ -373,12 +421,30 @@ function EngineTab({ settings }: { settings: AppSettings }) {
       />
       <NumField
         id="job-concurrency"
-        label="Job concurrency"
-        hint="How many jobs may execute at once. Applies after an API restart."
+        label={t('jobConcurrency')}
+        hint={t('jobConcurrencyHint')}
         value={form.jobConcurrency}
         min={RANGES.jobConcurrency.min}
         max={RANGES.jobConcurrency.max}
         onChange={(v) => set('jobConcurrency', v)}
+      />
+      <NumField
+        id="delivery-retention-days"
+        label={t('deliveryRetentionDays')}
+        hint={t('deliveryRetentionDaysHint')}
+        value={form.deliveryRetentionDays}
+        min={RANGES.deliveryRetentionDays.min}
+        max={RANGES.deliveryRetentionDays.max}
+        onChange={(v) => set('deliveryRetentionDays', v)}
+      />
+      <NumField
+        id="delivery-max-per-job"
+        label={t('deliveryMaxPerJob')}
+        hint={t('deliveryMaxPerJobHint')}
+        value={form.deliveryMaxPerJob}
+        min={RANGES.deliveryMaxPerJob.min}
+        max={RANGES.deliveryMaxPerJob.max}
+        onChange={(v) => set('deliveryMaxPerJob', v)}
       />
       <SaveBar saving={saving} onSave={save} />
     </div>
@@ -386,19 +452,34 @@ function EngineTab({ settings }: { settings: AppSettings }) {
 }
 
 function SecurityTab({ settings }: { settings: AppSettings }) {
+  const t = useTranslations('settingsDialog');
   const { form, set, save, saving } = useSettingsForm(settings);
   return (
     <div className="grid gap-4">
       <NumField
         id="session-ttl"
-        label="Session timeout (minutes)"
-        hint="Minutes of inactivity before a login session expires."
+        label={t('sessionTtl')}
+        hint={t('sessionTtlHint')}
         value={form.sessionTtlMinutes}
         min={RANGES.sessionTtlMinutes.min}
         max={RANGES.sessionTtlMinutes.max}
         onChange={(v) => set('sessionTtlMinutes', v)}
       />
+      <NumField
+        id="audit-retention"
+        label={t('auditRetentionDays')}
+        hint={t('auditRetentionDaysHint')}
+        value={form.auditRetentionDays}
+        min={RANGES.auditRetentionDays.min}
+        max={RANGES.auditRetentionDays.max}
+        onChange={(v) => set('auditRetentionDays', v)}
+      />
       <SaveBar saving={saving} onSave={save} />
+      <UsersSection />
+      <ApiKeysSection />
+      {/* only while a change of master key is under way */}
+      <EncryptionStatus />
+      <InstancesStatus />
     </div>
   );
 }

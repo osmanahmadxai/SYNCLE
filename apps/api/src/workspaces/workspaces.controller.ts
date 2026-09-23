@@ -1,3 +1,5 @@
+import { Audited } from '../audit/audited.decorator';
+import { Roles } from '../auth/roles.decorator';
 import {
   Body,
   Controller,
@@ -30,7 +32,9 @@ export class WorkspacesController {
     return this.store.list();
   }
 
+  @Roles('admin')
   @Post()
+  @Audited('workspace.create')
   create(
     @Body(new ZodValidationPipe(workspaceInputSchema)) dto: WorkspaceInputDTO,
   ): Promise<Workspace> {
@@ -42,7 +46,9 @@ export class WorkspacesController {
     return this.store.get(id);
   }
 
+  @Roles('admin')
   @Put(':id')
+  @Audited('workspace.update')
   update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(workspaceInputSchema)) dto: WorkspaceInputDTO,
@@ -50,7 +56,9 @@ export class WorkspacesController {
     return this.store.update(id, dto);
   }
 
+  @Roles('admin')
   @Delete(':id')
+  @Audited('workspace.delete')
   async remove(@Param('id') id: string): Promise<{ id: string }> {
     // full teardown of every bridge before the cascade delete: CDC slots get
     // dropped, watch schedulers stop, and in-flight replay runs are canceled

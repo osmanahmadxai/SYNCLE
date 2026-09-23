@@ -15,6 +15,8 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
+import { BadRequestError } from '@syncle/core';
+import { nodeTlsOptions, redisGlobMatch, redisKeyPattern } from '@syncle/core/adapters';
 import type {
   CdcOperation,
   CdcReadiness,
@@ -22,9 +24,17 @@ import type {
   ConnectionConfig,
   DatabaseEngine,
 } from '@syncle/core';
-import type { ResolvedBridge } from '../../bridges.types';
+import {
+  BRIDGE_JOBS_QUEUE,
+  BRIDGE_SCHEDULE_QUEUE,
+  BRIDGE_VERIFY_QUEUE,
+  BRIDGE_WATCH_QUEUE,
+  type ResolvedBridge,
+} from '../../bridges.types';
+import { SPOOL_KEY_PREFIX } from '../cdc-spool.service';
+import { ECHO_KEY_PREFIX } from '../../echo-keys';
+import { INSTANCE_KEY_PREFIXES } from '../../../common/instance-keys';
 import type {
-  CdcChange,
   CdcProvider,
   CdcStreamContext,
   CdcStreamHandle,
@@ -53,6 +63,62 @@ const READ_BATCH = 512;
 
 const DELETE_EVENTS = new Set(['del', 'unlink', 'expired', 'evicted']);
 
+/**
+ * keys Syncle itself writes — into ITS Redis, which can be the very database a
+ * bridge is reading from (one shared Redis is a common small setup, and it is
+ * what the test suite runs on).
+ *
+ * With the spool on, that was a closed loop: a captured change is appended to
+ * the bridge's spool stream, the XADD fires a keyspace event, the bridge
+ * captures THAT as a change, appends it to the spool… 120,000 events in twenty
+ * seconds, none of them the user's, while the user's own rows never reached
+ * the destination. The job queues do the same more slowly: every watch poll
+ * writes `bull:bridge-watch:*` keys, which a Redis CDC bridge with no key
+ * filter then delivered as if they were data.
+ */
+export function isSyncleOwnKey(key: string): boolean {
+  return OWN_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+/**
+ * which Redis database a connection is: `host:port/db`, lower-cased. two
+ * connections with the same answer read and write the same keys
+ */
+export function redisDatabaseId(conn: ConnectionConfig): string {
+  let host = conn.host ?? 'localhost';
+  let port = conn.port ?? 6379;
+  let db = Number(conn.options?.db ?? conn.database ?? 0);
+  if (conn.connectionString) {
+    try {
+      const url = new URL(conn.connectionString);
+      host = url.hostname || host;
+      port = url.port ? Number(url.port) : port;
+      const path = url.pathname.replace(/^\//, '');
+      if (path && Number.isFinite(Number(path))) db = Number(path);
+    } catch {
+      /* unparseable: the discrete fields stand */
+    }
+  }
+  // the same machine under its usual names
+  const where = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())
+    ? 'localhost'
+    : host.toLowerCase();
+  return `${where}:${port}/${Number.isFinite(db) ? db : 0}`;
+}
+
+const OWN_KEY_PREFIXES = [
+  SPOOL_KEY_PREFIX,
+  // what the echo guard remembers of writes (loop prevention)
+  ECHO_KEY_PREFIX,
+  // who leads, who is alive, who holds which lock (more than one API process)
+  ...INSTANCE_KEY_PREFIXES,
+  // BullMQ's default prefix; Syncle sets none of its own
+  `bull:${BRIDGE_JOBS_QUEUE}:`,
+  `bull:${BRIDGE_WATCH_QUEUE}:`,
+  `bull:${BRIDGE_SCHEDULE_QUEUE}:`,
+  `bull:${BRIDGE_VERIFY_QUEUE}:`,
+];
+
 @Injectable()
 export class RedisCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'redis';
@@ -65,6 +131,33 @@ export class RedisCdcProvider implements CdcProvider {
   // no durable position, every delivered event is "new"
   cursorAfter(): boolean {
     return true;
+  }
+
+  /**
+   * a bridge that writes into the Redis database it listens to hears its own
+   * writes: each delivered row fires a keyspace event, which is captured and
+   * delivered, which fires another. there is no configuration of it that ends,
+   * so it is refused before anything is subscribed.
+   */
+  async provision(
+    _bridgeId: string,
+    bridge: ResolvedBridge,
+    conn: ConnectionConfig,
+    resolveTarget?: (connectionId: string) => Promise<ConnectionConfig>,
+  ): Promise<void> {
+    if (resolveTarget && bridge.destination.kind === 'database') {
+      const source = redisDatabaseId(conn);
+      for (const target of bridge.destination.targets) {
+        const dest = await resolveTarget(target.connectionId).catch(() => null);
+        if (dest?.engine === 'redis' && redisDatabaseId(dest) === source) {
+          throw new BadRequestError(
+            `This bridge listens to Redis database ${source} and also writes into it. Every row it wrote would be picked up as a new change and written again, without end. ` +
+              'Point the destination at another Redis database (a different db number is enough), or use a watch bridge.',
+          );
+        }
+      }
+    }
+    await this.enableNotifications(conn);
   }
 
   private dbIndex(conn: ConnectionConfig): number {
@@ -84,8 +177,13 @@ export class RedisCdcProvider implements CdcProvider {
   }
 
   private newClient(conn: ConnectionConfig): Redis {
+    const tls = nodeTlsOptions(conn);
     if (conn.connectionString) {
-      return new Redis(conn.connectionString, { lazyConnect: true, maxRetriesPerRequest: null });
+      return new Redis(conn.connectionString, {
+        ...(conn.tls && tls ? { tls } : {}),
+        lazyConnect: true,
+        maxRetriesPerRequest: null,
+      });
     }
     return new Redis({
       host: conn.host ?? 'localhost',
@@ -93,7 +191,7 @@ export class RedisCdcProvider implements CdcProvider {
       username: conn.user || undefined,
       password: conn.password || undefined,
       db: this.dbIndex(conn),
-      tls: conn.ssl ? {} : undefined,
+      tls,
       lazyConnect: true,
       maxRetriesPerRequest: null,
       connectTimeout: 8000,
@@ -144,7 +242,7 @@ export class RedisCdcProvider implements CdcProvider {
 
   /* ----- provisioning: best-effort enable of keyspace notifications ----- */
 
-  async provision(_bridgeId: string, _bridge: ResolvedBridge, conn: ConnectionConfig): Promise<void> {
+  private async enableNotifications(conn: ConnectionConfig): Promise<void> {
     const client = this.newClient(conn);
     try {
       await client.connect();
@@ -231,7 +329,8 @@ export class RedisCdcProvider implements CdcProvider {
     sub.on('pmessage', (_pattern: string, channel: string, key: string) => {
       // channel: __keyevent@<db>__:<event>   message: <key>
       const event = channel.slice(channel.indexOf(':') + 1);
-      if (keyGlob && !this.globMatch(keyGlob, key)) return;
+      if (isSyncleOwnKey(key)) return;
+      if (keyGlob && !redisGlobMatch(keyGlob, key)) return;
       const isDelete = DELETE_EVENTS.has(event);
       if (isDelete ? !wantsDelete : !wantsWrite) return;
 
@@ -370,24 +469,14 @@ export class RedisCdcProvider implements CdcProvider {
     }
   }
 
-  /** pull an optional key glob from the bridge source filters, if present */
+  /**
+   * the glob the bridge's source filters ask for, or null for every key. the
+   * same reading of them the adapter's `browse` uses, so that a bridge which
+   * copies its keys and then follows them is looking at one set of keys
+   */
   private keyPattern(bridge: ResolvedBridge): string | null {
     if (bridge.source.kind !== 'table') return null;
-    const filters = (bridge.source as { filters?: { column: string; value: unknown }[] }).filters;
-    const keyFilter = filters?.find((f) => f.column === 'key');
-    return keyFilter && typeof keyFilter.value === 'string' ? keyFilter.value : null;
-  }
-
-  /** minimal Redis-style glob match (`*` and `?`) */
-  private globMatch(glob: string, value: string): boolean {
-    const re = new RegExp(
-      '^' +
-        glob
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*/g, '.*')
-          .replace(/\?/g, '.') +
-        '$',
-    );
-    return re.test(value);
+    const pattern = redisKeyPattern(bridge.source.filters);
+    return pattern === '*' ? null : pattern;
   }
 }

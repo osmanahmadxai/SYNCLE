@@ -16,20 +16,19 @@
  * lines up across attempts.
  */
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
-import {
-  BadRequestError,
-  type BrowseParams,
-  type SortSpec,
-} from '@syncle/core';
+import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
+import { BadRequestError } from '@syncle/core';
 import type { Job } from 'bullmq';
 import { AdapterPoolService } from '../connections/adapter-pool.service';
 import { runtimeConfig } from '../common/runtime-config';
+import { SettingsStoreService } from '../settings/settings-store.service';
 import { sleep } from './delivery.service';
 import { BridgeSinkService } from './bridge-sink.service';
-import { BridgeJobService } from './bridge-job.service';
+import { BEFORE_ANY_ROW, BridgeJobService } from './bridge-job.service';
 import { BridgeStoreService } from './bridge-store.service';
 import { JobRegistryService } from './job-registry.service';
+import { TableReaderService } from './table-reader.service';
+import { SchemaDriftService } from './schema-drift.service';
 import {
   BRIDGE_JOBS_QUEUE,
   type BridgeJobPayload,
@@ -61,9 +60,12 @@ function parseKeysetCheckpoint(cursorJson: string | null): KeysetCheckpoint | nu
   }
 }
 
+// the decorator is evaluated at import, before any saved setting can be read:
+// it carries the environment's value, and `followSettings` takes over at boot
 @Processor(BRIDGE_JOBS_QUEUE, { concurrency: runtimeConfig.jobConcurrency })
-export class BridgeJobProcessor extends WorkerHost {
+export class BridgeJobProcessor extends WorkerHost implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger('BridgeJobProcessor');
+  private unfollow: (() => void) | null = null;
 
   constructor(
     private readonly jobs: BridgeJobService,
@@ -71,8 +73,39 @@ export class BridgeJobProcessor extends WorkerHost {
     private readonly pool: AdapterPoolService,
     private readonly sink: BridgeSinkService,
     private readonly registry: JobRegistryService,
+    private readonly settings: SettingsStoreService,
+    private readonly reader: TableReaderService,
+    private readonly drift: SchemaDriftService,
   ) {
     super();
+  }
+
+  /**
+   * "Job concurrency" in Settings was stored and shown — with a note that it
+   * applied after a restart — and then never read: the worker ran with the
+   * environment's value whatever the dialog said. it now follows the setting,
+   * at boot and whenever it is changed. (a BullMQ worker's concurrency can be
+   * changed while it runs; jobs already in flight finish as they are.)
+   */
+  onApplicationBootstrap(): void {
+    this.unfollow = this.settings.onChange((settings) => this.applyConcurrency(settings.jobConcurrency));
+  }
+
+  onModuleDestroy(): void {
+    this.unfollow?.();
+    this.unfollow = null;
+  }
+
+  private applyConcurrency(wanted: number): void {
+    if (!Number.isInteger(wanted) || wanted < 1) return;
+    try {
+      if (this.worker.concurrency === wanted) return;
+      this.worker.concurrency = wanted;
+      this.logger.log(`Running up to ${wanted} replay job${wanted === 1 ? '' : 's'} at a time`);
+    } catch (err) {
+      // the worker is not up (no Redis yet): the decorator's value stands
+      this.logger.debug(`Could not apply job concurrency: ${(err as Error).message}`);
+    }
   }
 
   async process(job: Job<BridgeJobPayload>): Promise<void> {
@@ -92,13 +125,28 @@ export class BridgeJobProcessor extends WorkerHost {
       // normal job streams rows from the source. both share the registry's
       // abort machinery so cancel works identically for either mode.
       if (job.data.mode === 'resend') {
-        await this.jobs.executeResend(jobId, controller.signal);
+        const next = await this.jobs.executeResend(jobId, controller.signal);
+        if (next === 'continue') {
+          // the failure this replay had stopped at is out of the way: read on
+          // from where it stopped (in this same queue entry — a second one
+          // under the same id would be dropped as a duplicate)
+          const resumed = await this.jobs.getJobRow(jobId);
+          await this.execute(
+            jobId,
+            resumed.cursorOffset,
+            parseKeysetCheckpoint(resumed.cursorJson),
+            resumed.configSnapshotJson,
+            resumed.bridgeId,
+            controller.signal,
+          );
+        }
       } else {
         await this.execute(
           jobId,
           row.cursorOffset,
           parseKeysetCheckpoint(row.cursorJson),
           row.configSnapshotJson,
+          row.bridgeId,
           controller.signal,
         );
       }
@@ -112,10 +160,18 @@ export class BridgeJobProcessor extends WorkerHost {
     startOffset: number,
     resumeKey: KeysetCheckpoint | null,
     snapshotJson: string,
+    bridgeId: string,
     signal: AbortSignal,
   ): Promise<void> {
     await this.jobs.markRunning(jobId);
-    const bridge = this.store.resolveSnapshot(snapshotJson);
+    const bridge = this.store.resolveSnapshot(snapshotJson, bridgeId);
+    // is the table still the one this bridge was built for? asked before the
+    // first row is read: a mapped column that is gone would be written as NULL
+    const verdict = await this.drift.check(bridge);
+    if (verdict.stop) {
+      await this.jobs.finalize(jobId, 'failed', verdict.stop, 'none');
+      return;
+    }
     const { delivery } = bridge;
     const batchSize = delivery.batchSize;
     const table = bridge.source.kind === 'table' ? bridge.source.table : '(query)';
@@ -152,12 +208,30 @@ export class BridgeJobProcessor extends WorkerHost {
     // with the offset so a resume lands on the exact next row even when the
     // table mutated between attempts (an OFFSET re-seek cannot promise that)
     let lastKeyset: KeysetCheckpoint | undefined;
+    // a long replay can have its table changed UNDER it, too: a page that comes
+    // back with other columns than the page before is looked into before any
+    // of it is written
+    const watchesColumns = await this.drift.watches(bridge);
+    let columnSignature: string | null = null;
 
     try {
       for await (const item of this.streamRows(bridge, jobId, startOffset, resumeKey)) {
         if (await stopRequested()) {
           await this.jobs.finalize(jobId, 'canceled');
           return;
+        }
+        if (watchesColumns) {
+          const signature = Object.keys(item.row).sort().join('\u0000');
+          if (columnSignature !== null && columnSignature !== signature) {
+            const changed = await this.drift.check(bridge);
+            if (changed.stop) {
+              // what is in `buffer` was read before the change and not yet
+              // delivered: the cursor is behind it, and a resume reads it again
+              await this.jobs.finalize(jobId, 'failed', changed.stop, 'none');
+              return;
+            }
+          }
+          columnSignature = signature;
         }
         buffer.push(item.row);
         if (item.keyset) lastKeyset = item.keyset;
@@ -186,7 +260,15 @@ export class BridgeJobProcessor extends WorkerHost {
         }
       }
 
-      await this.jobs.finalize(jobId, (await stopRequested()) ? 'canceled' : 'completed');
+      if (await stopRequested()) {
+        await this.jobs.finalize(jobId, 'canceled');
+        return;
+      }
+      // the source was read to its end. recorded, because "every delivery is
+      // green" does not say it: a run that stopped early is green too, up to
+      // where it stopped
+      await this.jobs.markStreamed(jobId);
+      await this.jobs.finalize(jobId, 'completed');
     } catch (err) {
       if (signal.aborted || (await this.jobs.cancelRequested(jobId))) {
         await this.jobs.finalize(jobId, 'canceled');
@@ -260,115 +342,14 @@ export class BridgeJobProcessor extends WorkerHost {
     startOffset: number,
     resumeKey: KeysetCheckpoint | null,
   ): AsyncGenerator<StreamItem> {
-    if (bridge.source.kind !== 'table') return;
-    const src = bridge.source;
-    const { sort, total, keysetColumn } = await this.resolveTableOrder(bridge);
-    await this.jobs.setTotal(jobId, total);
-    const pageSize = bridge.delivery.pageSize;
-    const browse = (params: BrowseParams) =>
-      this.pool.withAdapter(src.connectionId, src.database, (a) => a.browse(params));
-
-    // keyset pagination on a unique key, O(1) per page no matter how deep we
-    // are, so a multi-million-row replay stays fast (no OFFSET re-scan)
-    if (keysetColumn) {
-      let lastKey: unknown = null;
-      let index = startOffset;
-      if (startOffset > 0) {
-        if (resumeKey && resumeKey.column === keysetColumn) {
-          // exact resume from the checkpointed key — immune to rows added or
-          // removed under the job, and no deep-OFFSET seek query
-          lastKey = resumeKey.value;
-        } else {
-          // legacy jobs (no checkpoint) or a changed sort column: fall back to
-          // seeking the key of the last already-delivered row by offset
-          const seek = await browse({
-            schema: src.schema,
-            table: src.table,
-            filters: src.filters,
-            sort,
-            limit: 1,
-            offset: startOffset - 1,
-          });
-          lastKey = seek.rows[0]?.[keysetColumn] ?? null;
-        }
-      }
-      for (;;) {
-        const filters = [
-          ...(src.filters ?? []),
-          ...(lastKey != null
-            ? [{ column: keysetColumn, operator: 'gt' as const, value: lastKey }]
-            : []),
-        ];
-        const page = await browse({
-          schema: src.schema,
-          table: src.table,
-          filters,
-          sort,
-          limit: pageSize,
-          offset: 0,
-        });
-        for (const row of page.rows) {
-          lastKey = row[keysetColumn];
-          yield { row, index, keyset: { column: keysetColumn, value: lastKey } };
-          index++;
-        }
-        if (!page.hasMore || page.rows.length === 0) return;
-      }
-    }
-
-    // fallback: OFFSET pagination (composite key or custom non-unique sort)
-    let offset = startOffset;
-    for (;;) {
-      const page = await browse({
-        schema: src.schema,
-        table: src.table,
-        filters: src.filters,
-        sort,
-        limit: pageSize,
-        offset,
-      });
-      for (let i = 0; i < page.rows.length; i++) {
-        yield { row: page.rows[i]!, index: offset + i };
-      }
-      if (!page.hasMore || page.rows.length === 0) return;
-      offset += page.rows.length;
-    }
-  }
-
-  /**
-   * a stable order is mandatory: `LIMIT/OFFSET` without `ORDER BY` can skip or
-   * repeat rows across pages. use the caller's sort, else the primary key, and
-   * report whether we can keyset-paginate (single, uniquely-ordered key).
-   */
-  private async resolveTableOrder(
-    bridge: ResolvedBridge,
-  ): Promise<{ sort: SortSpec[]; total: number | null; keysetColumn: string | null }> {
-    if (bridge.source.kind !== 'table') return { sort: [], total: null, keysetColumn: null };
-    const src = bridge.source;
-    const probe = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
-      a.browse({ schema: src.schema, table: src.table, filters: src.filters, limit: 1, offset: 0 }),
-    );
-    const singlePk = probe.primaryKey.length === 1 ? probe.primaryKey[0]! : null;
-
-    if (src.sort && src.sort.length > 0) {
-      // keyset only if the caller's order is exactly the (unique) primary key asc
-      const s = src.sort;
-      const keyset =
-        s.length === 1 && s[0]!.column === singlePk && s[0]!.direction === 'asc'
-          ? singlePk
-          : null;
-      return { sort: src.sort, total: probe.total, keysetColumn: keyset };
-    }
-    if (probe.primaryKey.length > 0) {
-      return {
-        sort: probe.primaryKey.map((column) => ({ column, direction: 'asc' as const })),
-        total: probe.total,
-        keysetColumn: singlePk,
-      };
-    }
-    throw new BadRequestError(
-      `Table "${src.table}" has no primary key, so rows cannot be paged in a stable order. Add a sort to the bridge to replay it safely.`,
-    );
+    // the paging itself lives in TableReaderService: a change-stream bridge
+    // that copies its table first reads it the same way
+    const order = await this.reader.resolveOrder(bridge);
+    await this.jobs.setTotal(jobId, order.total);
+    // a read that cannot promise every row once: said where the rows are
+    if (order.warning)
+      await this.jobs.recordNotice(jobId, BEFORE_ANY_ROW, order.warning);
+    yield* this.reader.rows(bridge, { startOffset, resumeKey, order });
   }
 
   private async *streamQuery(
@@ -383,8 +364,8 @@ export class BridgeJobProcessor extends WorkerHost {
     );
     if (result.truncated) {
       throw new BadRequestError(
-        `Query result was capped at ${result.rowCount} rows (limit ${runtimeConfig.maxQueryRows}). ` +
-          `Narrow the query, or use a table source to replay every row.`,
+        `Query result was capped at ${result.rowCount} rows — the "max query rows" limit (Settings › Engine, or the connection's own). ` +
+          `Narrow the query, raise the limit, or use a table source to replay every row.`,
       );
     }
     await this.jobs.setTotal(jobId, result.rows.length);

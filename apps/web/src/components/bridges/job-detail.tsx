@@ -1,9 +1,10 @@
 'use client';
 
-import { Ban, Loader2, Play, RotateCcw } from 'lucide-react';
+import { Ban, Download, Loader2, Play, RotateCcw } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import type { EndpointInfo, BridgeJob, BridgeJobStatus } from '@syncle/core';
-import { ApiError } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import {
   useCancelBridgeJob,
   useRetryFailed,
@@ -11,6 +12,8 @@ import {
 } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { DeadLetterPanel } from './dead-letter-panel';
+import { SourceHoldNotice } from './source-hold-notice';
 import { DeliveryMonitor } from './delivery-log';
 
 const STATUS_STYLES: Record<BridgeJobStatus, string> = {
@@ -26,17 +29,18 @@ const STATUS_STYLES: Record<BridgeJobStatus, string> = {
 };
 
 export function JobStatusBadge({ status }: { status: BridgeJobStatus }) {
+  const t = useTranslations('jobDetail');
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize',
+        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
         STATUS_STYLES[status],
       )}
     >
       {(status === 'running' ||
         status === 'queued' ||
         status === 'canceling') && <Loader2 className="h-3 w-3 animate-spin" />}
-      {status}
+      {t(`status.${status}`)}
     </span>
   );
 }
@@ -90,6 +94,8 @@ export function JobDetail({
   /** live bridges (watch/CDC) are continuous listeners: no Cancel/Resume, no progress */
   isLive: boolean;
 }) {
+  const t = useTranslations('jobDetail');
+  const tc = useTranslations('common');
   const cancel = useCancelBridgeJob(bridgeId);
   const startJob = useStartBridgeJob(bridgeId);
   const retryFailed = useRetryFailed(bridgeId);
@@ -110,7 +116,7 @@ export function JobDetail({
     try {
       await cancel.mutateAsync(job.id);
     } catch (err) {
-      toast.error('Could not cancel', {
+      toast.error(t('couldNotCancel'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -119,9 +125,9 @@ export function JobDetail({
   async function handleResume() {
     try {
       await startJob.mutateAsync({ resumeJobId: job.id });
-      toast.success('Job resumed');
+      toast.success(t('jobResumed'));
     } catch (err) {
-      toast.error('Could not resume', {
+      toast.error(t('couldNotResume'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -130,9 +136,9 @@ export function JobDetail({
   async function handleRetry() {
     try {
       await retryFailed.mutateAsync(job.id);
-      toast.success('Resending failed deliveries with the current config');
+      toast.success(t('retryStarted'));
     } catch (err) {
-      toast.error('Could not retry', {
+      toast.error(t('couldNotRetry'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     }
@@ -149,9 +155,13 @@ export function JobDetail({
         <span className="text-muted-foreground text-xs">
           {isLive
             ? isActive
-              ? `listening since ${new Date(job.startedAt).toLocaleString()}`
-              : `last active ${new Date(job.startedAt).toLocaleString()}`
-            : `started ${new Date(job.startedAt).toLocaleString()}`}
+              ? t('listeningSince', {
+                  date: new Date(job.startedAt).toLocaleString(),
+                })
+              : t('lastActive', {
+                  date: new Date(job.startedAt).toLocaleString(),
+                })
+            : t('started', { date: new Date(job.startedAt).toLocaleString() })}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {/* cancel/resume are job controls. a live bridge is started/stopped from
@@ -168,7 +178,7 @@ export function JobDetail({
               ) : (
                 <Ban className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Cancel
+              {tc('cancel')}
             </Button>
           )}
           {canRetry && (
@@ -183,8 +193,31 @@ export function JobDetail({
               ) : (
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Retry failed ({job.failedCount})
+              {t('retryFailed', { count: job.failedCount })}
             </Button>
+          )}
+          {canRetry && (
+            // plain links: the browser downloads them with the session cookie,
+            // and a big file never passes through the page's memory
+            <span className="text-muted-foreground flex items-center gap-1 text-xs">
+              <Download className="h-3.5 w-3.5" />
+              {t('downloadFailures')}
+              <a
+                className="hover:text-foreground underline"
+                href={api.failuresUrl(bridgeId, job.id, 'csv')}
+                download
+              >
+                CSV
+              </a>
+              <span className="opacity-40">·</span>
+              <a
+                className="hover:text-foreground underline"
+                href={api.failuresUrl(bridgeId, job.id, 'ndjson')}
+                download
+              >
+                NDJSON
+              </a>
+            </span>
           )}
           {!isLive && RESUMABLE.includes(job.status) && (
             <Button
@@ -198,7 +231,7 @@ export function JobDetail({
               ) : (
                 <Play className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Resume
+              {t('resume')}
             </Button>
           )}
         </div>
@@ -209,22 +242,22 @@ export function JobDetail({
       {isLive ? (
         <div className="grid grid-cols-2 gap-2 px-4 py-3 sm:grid-cols-4">
           <Stat
-            label="Delivered"
+            label={t('stats.delivered')}
             value={job.sentCount.toLocaleString()}
             tone="success"
           />
           <Stat
-            label="Failed"
+            label={t('stats.failed')}
             value={job.failedCount.toLocaleString()}
             tone="danger"
           />
           <Stat
-            label="Skipped"
+            label={t('stats.skipped')}
             value={job.skippedCount.toLocaleString()}
             tone="warn"
           />
           <Stat
-            label="Success"
+            label={t('stats.success')}
             value={successRate != null ? `${successRate}%` : '—'}
           />
         </div>
@@ -232,31 +265,31 @@ export function JobDetail({
         <>
           <div className="grid grid-cols-3 gap-2 px-4 py-3 sm:grid-cols-6">
             <Stat
-              label="Total"
+              label={t('stats.total')}
               value={total != null ? total.toLocaleString() : '—'}
             />
             <Stat
-              label="Delivered"
+              label={t('stats.delivered')}
               value={job.sentCount.toLocaleString()}
               tone="success"
             />
             <Stat
-              label="Failed"
+              label={t('stats.failed')}
               value={job.failedCount.toLocaleString()}
               tone="danger"
             />
             <Stat
-              label="Skipped"
+              label={t('stats.skipped')}
               value={job.skippedCount.toLocaleString()}
               tone="warn"
             />
             <Stat
-              label="Queued"
+              label={t('stats.queued')}
               value={pending != null ? pending.toLocaleString() : '—'}
               tone="muted"
             />
             <Stat
-              label="Success"
+              label={t('stats.success')}
               value={successRate != null ? `${successRate}%` : '—'}
             />
           </div>
@@ -281,6 +314,18 @@ export function JobDetail({
         </p>
       )}
 
+      {job.prunedDeliveries > 0 && (
+        <p className="text-muted-foreground border-t px-4 py-1.5 text-[11px]">
+          {t('prunedNote', { count: job.prunedDeliveries })}
+        </p>
+      )}
+
+      {/* rows a live bridge set aside instead of losing; hidden while empty */}
+      {isLive && <DeadLetterPanel bridgeId={bridgeId} live={isActive} />}
+
+      {/* what the bridge is costing its source; silent unless it matters */}
+      <SourceHoldNotice bridgeId={bridgeId} enabled={isLive} />
+
       <div className="min-h-0 flex-1 border-t">
         <DeliveryMonitor
           bridgeId={bridgeId}
@@ -289,6 +334,7 @@ export function JobDetail({
           totalRows={total}
           batchSize={job.batchSize}
           endpoint={endpoint}
+          prunedBelowSequence={job.prunedBelowSequence}
         />
       </div>
     </div>

@@ -1,0 +1,25 @@
+Syncle {{ .Chart.AppVersion }} is being installed as "{{ .Release.Name }}".
+
+1. The first-run setup token is printed by the API when it starts:
+
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "syncle.fullname" . }}-api | grep -A 2 'setup token'
+
+{{- if .Values.ingress.enabled }}
+
+2. Open http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }} and enter it with the
+   name and password of the first account (an admin).
+{{- else }}
+
+2. Reach the GUI (nothing is exposed outside the cluster by default):
+
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "syncle.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+   then open http://localhost:{{ .Values.service.port }} and enter the token with the name and
+   password of the first account (an admin). To expose it, set ingress.enabled
+   (and put TLS in front: Syncle serves plain HTTP).
+{{- end }}
+
+3. Keep the master key. It is what every stored connection password is
+   encrypted with; a lost key means every credential has to be entered again.
+
+Docs: https://syncle.dev/docs/self-hosting

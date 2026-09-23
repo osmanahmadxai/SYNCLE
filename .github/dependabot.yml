@@ -1,0 +1,51 @@
+# Dependency updates, batched so that they are reviewed rather than ignored.
+#
+# Minor and patch bumps arrive as ONE pull request per ecosystem per week; a
+# major version gets a pull request of its own, because that is the one that
+# needs reading.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # patched in place (see patches/ and "pnpm.patchedDependencies"): a patch
+      # is written against one exact version, and pnpm refuses to install when
+      # the version moves out from under it. these are bumped by hand, together
+      # with their patch — and only after checking whether upstream has fixed
+      # what the patch is for.
+      - dependency-name: '@powersync/mysql-zongji'
+      - dependency-name: '@vlasky/mysql'
+
+  # the docs site is its own npm project, outside the pnpm workspace
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+
+  # the base image of the published container
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

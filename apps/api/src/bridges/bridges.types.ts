@@ -61,7 +61,9 @@ export interface DeliveryOutcome {
  * row. `column` guards against resuming a value against a changed sort.
  */
 export interface KeysetCheckpoint {
+  /** the key column — or, for a key of several columns, their names joined with commas */
   column: string;
+  /** its value in the last delivered row — an array of values for a key of several columns */
   value: unknown;
 }
 
@@ -82,5 +84,17 @@ export interface BridgeWatchPayload {
   bridgeId: string;
 }
 
+/** the BullMQ job payload for a `bridge-schedule` tick: time for this bridge's scheduled replay */
+export interface BridgeSchedulePayload {
+  bridgeId: string;
+}
+
+/** the BullMQ job payload for a `bridge-verify` run */
+export interface BridgeVerifyPayload {
+  verificationId: string;
+}
+
 export const BRIDGE_JOBS_QUEUE = 'bridge-jobs';
 export const BRIDGE_WATCH_QUEUE = 'bridge-watch';
+export const BRIDGE_SCHEDULE_QUEUE = 'bridge-schedule';
+export const BRIDGE_VERIFY_QUEUE = 'bridge-verify';

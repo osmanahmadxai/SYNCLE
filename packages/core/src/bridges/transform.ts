@@ -57,6 +57,19 @@ type Row = Record<string, unknown>;
 const WHOLE_TOKEN = /^\{\{\s*([\w$]+)\s*\}\}$/;
 const ANY_TOKEN = /\{\{\s*([\w$]+)\s*\}\}/g;
 
+/**
+ * the source columns a template names (`{{email}}`), without the `$` built-ins.
+ * a column that is gone renders as null — or as nothing, inside a string — and
+ * the receiver is never told
+ */
+export function templateColumns(template: string | undefined): string[] {
+  const names = new Set<string>();
+  for (const m of (template ?? '').matchAll(ANY_TOKEN)) {
+    if (!m[1]!.startsWith('$')) names.add(m[1]!);
+  }
+  return [...names];
+}
+
 /** apply the `fields` whitelist and `rename` map to produce `{{$row}}` */
 function projectRow(row: Row, cfg: TransformConfig): Row {
   let entries = Object.entries(row);

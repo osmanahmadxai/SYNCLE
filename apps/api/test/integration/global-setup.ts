@@ -102,6 +102,57 @@ async function prepareMetadataDatabase(): Promise<void> {
     env: { ...process.env, DATABASE_URL: META_DB_URL },
     stdio: 'pipe',
   });
+  await resetLeftovers();
+}
+
+/**
+ * Start every run from an empty metadata store and a source with no leftover
+ * replication slots.
+ *
+ * Tests create bridges and connections and do not delete them, so the store
+ * grew without bound across runs — over a thousand bridges, a few of them
+ * still marked `running`, which every app a test boots then tries to resume.
+ * And a run that is killed halfway leaves its replication slots behind: they
+ * pin WAL on the test server and use up its (deliberately small) slot limit.
+ */
+async function resetLeftovers(): Promise<void> {
+  const meta = new Client({ connectionString: META_DB_URL.split('?')[0] });
+  await meta.connect();
+  try {
+    await meta.query(
+      `TRUNCATE bridge_deliveries, bridge_dead_letters, bridge_jobs, bridge_verifications, cdc_shared_members, bridges, connections, source_cleanups, alert_channels, api_keys, audit_entries`,
+    );
+  } finally {
+    await meta.end().catch(() => undefined);
+  }
+
+  const source = new Client({
+    host: '127.0.0.1',
+    port: 55432,
+    user: 'syncle',
+    password: 'syncle',
+    database: 'syncle_test',
+  });
+  await source.connect();
+  try {
+    await source.query(
+      `select pg_terminate_backend(active_pid) from pg_replication_slots
+       where active and (slot_name like 'syncle_slot_%' or slot_name like 'syncle_shared_%' or slot_name like 'it_fill_%')`,
+    );
+    const slots = await source.query(
+      `select slot_name from pg_replication_slots
+       where slot_name like 'syncle_slot_%' or slot_name like 'syncle_shared_%' or slot_name like 'it_fill_%'`,
+    );
+    for (const row of slots.rows as Array<{ slot_name: string }>) {
+      await source.query('select pg_drop_replication_slot($1)', [row.slot_name]).catch(() => undefined);
+    }
+    const pubs = await source.query(`select pubname from pg_publication where pubname like 'syncle_pub_%' or pubname like 'syncle_sp_%'`);
+    for (const row of pubs.rows as Array<{ pubname: string }>) {
+      await source.query(`drop publication if exists "${row.pubname}"`).catch(() => undefined);
+    }
+  } finally {
+    await source.end().catch(() => undefined);
+  }
 }
 
 /** MySQL destinations get their own schema too, for symmetry with Postgres */

@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { Download } from 'lucide-react';
 import type { QueryResult } from '@syncle/core';
 import { Badge } from '@/components/ui/badge';
@@ -20,10 +21,12 @@ function formatCell(value: unknown): string {
 }
 
 export function ResultTable({ result }: { result: QueryResult | null }) {
+  const t = useTranslations('resultTable');
+
   if (!result) {
     return (
       <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-        Run a query to see results.
+        {t('empty')}
       </div>
     );
   }
@@ -37,14 +40,18 @@ export function ResultTable({ result }: { result: QueryResult | null }) {
           {result.command ?? 'OK'}
         </Badge>
         {isWrite ? (
-          <span>{result.affectedRows ?? result.rowCount} row(s) affected</span>
+          <span>
+            {t('rowsAffected', {
+              count: result.affectedRows ?? result.rowCount,
+            })}
+          </span>
         ) : (
-          <span>{result.rowCount} row(s)</span>
+          <span>{t('rowCount', { count: result.rowCount })}</span>
         )}
-        <span>· {result.executionMs} ms</span>
+        <span>· {t('executionTime', { ms: result.executionMs })}</span>
         {result.truncated && (
           <Badge variant="outline" className="text-amber-500">
-            truncated
+            {t('truncated')}
           </Badge>
         )}
         {result.notice && <span className="italic">{result.notice}</span>}
@@ -56,7 +63,7 @@ export function ResultTable({ result }: { result: QueryResult | null }) {
                 variant="ghost"
                 size="icon"
                 className="ml-auto h-6 w-6"
-                aria-label="Export results"
+                aria-label={t('exportResults')}
               >
                 <Download className="h-3.5 w-3.5" />
               </Button>
@@ -72,7 +79,7 @@ export function ResultTable({ result }: { result: QueryResult | null }) {
                   )
                 }
               >
-                Export as CSV
+                {t('exportCsv')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() =>
@@ -84,7 +91,7 @@ export function ResultTable({ result }: { result: QueryResult | null }) {
                   )
                 }
               >
-                Export as JSON
+                {t('exportJson')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -94,7 +101,7 @@ export function ResultTable({ result }: { result: QueryResult | null }) {
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto">
         {isWrite ? (
           <div className="text-muted-foreground p-4 text-sm">
-            Statement executed successfully.
+            {t('statementExecuted')}
           </div>
         ) : (
           <table className="w-full border-collapse text-sm">

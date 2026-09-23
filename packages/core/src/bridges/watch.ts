@@ -58,8 +58,11 @@ export interface TimestampCursor {
   strategy: 'timestamp';
   ts: unknown;
   /**
-   * row keys already emitted at `ts` — and, when a lookback window is
-   * configured, within the window behind it (dedupe on the `>=` re-fetch)
+   * rows already emitted at `ts` — and, when a lookback window is configured,
+   * within the window behind it (dedupe on the `>=` re-fetch). each entry is
+   * the row's key AND the timestamp it carried when it was emitted (see
+   * {@link emittedKey}): the same row with a LATER timestamp is a new change.
+   * cursors written before that hold the bare key, and are still read
    */
   boundaryKeys: string[];
   /** the column this cursor value belongs to (guards against editing the strategy) */
@@ -84,6 +87,21 @@ export interface AdvanceResult {
 export function rowKey(row: Row, pk: string[]): string {
   const cols = pk.length > 0 ? pk : Object.keys(row).sort();
   return JSON.stringify(cols.map((c) => row[c] ?? null));
+}
+
+/**
+ * a row as it was emitted: its key, and the value of the tracked column at the
+ * time. keyed by the key alone, "already emitted" meant "this row, ever": when
+ * the row at the cursor's boundary — the most recently changed row of the table
+ * — was changed AGAIN, the poll that fetched it filtered it out as a duplicate
+ * and then moved the cursor past it. the update was never delivered, and
+ * nothing could bring it back. (with the default 3-second lookback the same
+ * happened to any row changed twice within the window.)
+ */
+export function emittedKey(row: Row, pk: string[], column: string): string {
+  const v = row[column];
+  const stamp = v instanceof Date ? v.toISOString() : String(v ?? '');
+  return `${rowKey(row, pk)}@${stamp}`;
 }
 
 /** normalize a timestamp-ish value (Date | ISO string | epoch number) */
@@ -124,7 +142,29 @@ function tsMinus(ts: unknown, ms: number): unknown {
   const n = tsNorm(ts);
   if (typeof n !== 'number') return ts;
   if (typeof ts === 'number') return n - ms;
-  return new Date(n - ms).toISOString();
+  const shifted = new Date(n - ms);
+  // a wall-clock string ('2026-03-04 05:06:07', as MySQL and Postgres hand
+  // over a zone-less column) was parsed in THIS process's zone, so it has to be
+  // written back in it too. answering in UTC instead moved the window by the
+  // process's UTC offset: on a server at UTC+4:30 a 3-second lookback became
+  // 4½ hours, and at UTC-8 it pointed 8 hours into the FUTURE and skipped rows
+  return typeof ts === 'string' && !hasZone(ts)
+    ? wallClock(shifted)
+    : shifted.toISOString();
+}
+
+/** does a timestamp string say which zone it is in (`Z`, `+04:30`, `-08`)? */
+function hasZone(text: string): boolean {
+  return /(Z|[+-]\d\d(:?\d\d)?)$/i.test(text.trim());
+}
+
+/** a Date as the zone-less text a database column of that kind compares to */
+function wallClock(d: Date): string {
+  const p = (n: number, width = 2): string => String(n).padStart(width, '0');
+  return (
+    `${p(d.getFullYear(), 4)}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -220,7 +260,15 @@ export function advanceCursor(
 
   if (strategy.strategy === 'timestamp' && cursor.strategy === 'timestamp') {
     const alreadyEmitted = new Set(cursor.boundaryKeys);
-    const newRows = rows.filter((r) => !alreadyEmitted.has(rowKey(r, pk)));
+    const newRows = rows.filter((r) => {
+      if (alreadyEmitted.has(emittedKey(r, pk, strategy.column))) return false;
+      // a cursor written before entries carried their timestamp: the bare key
+      // stands for "emitted, at or before the cursor". a row that has moved
+      // PAST the cursor since is a change, which is what used to be lost
+      if (!alreadyEmitted.has(rowKey(r, pk))) return true;
+      const v = r[strategy.column];
+      return v != null && cursor.ts != null && tsGreater(v, cursor.ts);
+    });
     if (rows.length === 0) {
       return { newRows, cursor };
     }
@@ -256,7 +304,7 @@ export function advanceCursor(
     };
     const boundaryKeys = rows
       .filter((r) => inWindow(r[strategy.column]))
-      .map((r) => rowKey(r, pk));
+      .map((r) => emittedKey(r, pk, strategy.column));
     // keys remembered by earlier polls stay live for as long as their rows can
     // still be re-fetched, i.e. until the cursor moves a full window past them.
     // this poll may only have seen a subset of those rows (same-ts paging, a

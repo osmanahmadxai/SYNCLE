@@ -10,6 +10,8 @@ import type { BridgeJob } from '@syncle/core';
 import { DatabaseSinkService } from './database-sink.service';
 import { BridgeCdcService } from './bridge-cdc.service';
 import { BridgeJobService } from './bridge-job.service';
+import { BridgeScheduleService } from './bridge-schedule.service';
+import { BridgeVerifyService } from './bridge-verify.service';
 import { BridgeWatchService } from './bridge-watch.service';
 
 @Injectable()
@@ -19,6 +21,8 @@ export class BridgeLifecycleService {
     private readonly watch: BridgeWatchService,
     private readonly jobs: BridgeJobService,
     private readonly databaseSink: DatabaseSinkService,
+    private readonly schedule: BridgeScheduleService,
+    private readonly verify: BridgeVerifyService,
   ) {}
 
   /**
@@ -36,11 +40,16 @@ export class BridgeLifecycleService {
   /**
    * full pre-delete teardown. tears down BOTH listener kinds (a bridge edited
    * across trigger kinds may have remnants of either; each is a no-op when
-   * idle), drops the CDC slot/publication on the source, cancels queued and
+   * idle), removes its replay schedule, drops the CDC slot/publication on the
+   * source, cancels queued and
    * running replay jobs so no worker keeps delivering for a bridge that is
    * about to vanish, and clears the sink's ensured-table cache.
    */
   async teardown(bridgeId: string): Promise<void> {
+    // first: nothing may start a new run of it while the rest is being taken down
+    await this.schedule.remove(bridgeId);
+    // a reconcile WRITES to the targets: it winds down with everything else
+    await this.verify.cancelAll(bridgeId).catch(() => undefined);
     await this.cdc.cleanup(bridgeId).catch(() => undefined);
     await this.watch.stop(bridgeId).catch(() => undefined);
     const jobs = await this.jobs.listJobs(bridgeId).catch(() => [] as BridgeJob[]);

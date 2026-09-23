@@ -1,14 +1,15 @@
 {
   "name": "@syncle/web",
-  "version": "0.1.0",
+  "version": "1.3.0",
   "private": true,
   "scripts": {
-    "dev": "node scripts/next-with-port.mjs dev",
-    "build": "next build",
+    "dev": "node scripts/copy-monaco.mjs && node scripts/next-with-port.mjs dev",
+    "build": "node scripts/copy-monaco.mjs && next build",
     "start": "node scripts/next-with-port.mjs start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -33,7 +34,7 @@
     "cmdk": "^1.1.1",
     "lucide-react": "^0.460.0",
     "monaco-editor": "^0.52.2",
-    "next": "^15.1.0",
+    "next": "^15.5.25",
     "next-intl": "^4.13.4",
     "next-themes": "^0.4.3",
     "react": "^19.0.0",
@@ -51,7 +52,7 @@
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.14.0",
-    "eslint-config-next": "^15.1.0",
+    "eslint-config-next": "^15.5.25",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",

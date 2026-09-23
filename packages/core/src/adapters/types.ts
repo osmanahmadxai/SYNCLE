@@ -15,8 +15,7 @@ export type DatabaseEngine =
   | 'mysql'
   | 'sqlite'
   | 'mongodb'
-  | 'redis'
-  | 'mssql';
+  | 'redis';
 
 /** the query dialect an engine exposes to the editor surface */
 export type QueryLanguage = 'sql' | 'mongo' | 'redis' | 'none';
@@ -43,10 +42,24 @@ export interface AdapterCapabilities {
   transactions: boolean;
   /** supports creating / dropping / truncating tables (or collections) */
   ddl: boolean;
+  /**
+   * `browse` takes {@link BrowseParams.after}: the page of rows strictly after
+   * a tuple in the page's own sort order. what lets a table be read from one
+   * end to the other at the same cost per page however deep the read is —
+   * over a composite key, or a sort of the caller's with the key behind it
+   */
+  keysetPaging?: boolean;
   /** supports creating / dropping databases on this connection */
   manageDatabases: boolean;
   /** backup/restore formats this engine can produce/consume */
   backupFormats: BackupFormat[];
+  /**
+   * `browse` can page by an opaque cursor ({@link BrowseParams.cursor}), and a
+   * reader that means to see EVERY row must use it: the engine has no order to
+   * page by (Redis — its keys come out of SCAN in hash-table order, so neither
+   * `key > last` nor an OFFSET into a fresh scan is a stable place)
+   */
+  cursorPaging?: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -76,6 +89,14 @@ export interface SshTunnelConfig {
   privateKey?: string;
   /** passphrase protecting the private key, if any */
   passphrase?: string;
+  /**
+   * the jump host's public-key fingerprint, as OpenSSH prints it
+   * (`SHA256:…`, from `ssh-keygen -lf` or the first-connect prompt). when set,
+   * a host presenting any other key is refused. when empty, the key seen on the
+   * first successful connection is recorded here and enforced from then on —
+   * the same trust-on-first-use rule `ssh` itself follows with known_hosts.
+   */
+  hostKey?: string;
 }
 
 /**
@@ -83,6 +104,36 @@ export interface SshTunnelConfig {
  * shared shape keeps the store and UI uniform. `password` is only ever present
  * in decrypted form inside the server process, it's encrypted at rest
  */
+/**
+ * how far a TLS connection is trusted. the names and meanings are libpq's
+ * `sslmode`, because that is the vocabulary people already have:
+ *
+ *  - `disable`     no TLS
+ *  - `require`     encrypted, but the server's certificate is NOT checked — it
+ *                  stops a passive eavesdropper and nothing else: anyone who
+ *                  can sit in the path can present any certificate
+ *  - `verify-ca`   the certificate must chain to a trusted CA (the one given,
+ *                  or the system's), whatever name it was issued for
+ *  - `verify-full` …and it must have been issued for the host being dialled.
+ *                  the only mode that actually authenticates the server
+ */
+export type TlsMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
+
+export interface TlsConfig {
+  mode: TlsMode;
+  /** PEM CA certificate(s) to trust instead of the system store */
+  ca?: string;
+  /** PEM client certificate, for servers that require mutual TLS */
+  cert?: string;
+  /** PEM private key for `cert` (secret: encrypted at rest, returned redacted) */
+  key?: string;
+  /**
+   * the name the server's certificate must carry, when it is not the host
+   * being dialled — an IP address in `host`, say, or a load balancer's name
+   */
+  servername?: string;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -91,14 +142,24 @@ export interface ConnectionConfig {
   engine: DatabaseEngine;
   /** optional accent color for the UI (hex) */
   color?: string;
+  /** nothing is written through this connection (see `connectionInputSchema.readOnly`) */
+  readOnly?: boolean;
+  /** what this database is: shown wherever the connection is */
+  environment?: 'production' | 'staging' | 'development';
   host?: string;
   port?: number;
   user?: string;
   password?: string;
   /** database name, or file path for SQLite */
   database?: string;
-  /** use TLS. engine adapters interpret the specifics */
+  /**
+   * legacy on/off switch, kept in step with `tls` (true = any mode but
+   * `disable`). connections saved before `tls` existed carry only this; see
+   * `effectiveTls` for what it meant on each engine.
+   */
   ssl?: boolean;
+  /** TLS settings; takes precedence over `ssl` */
+  tls?: TlsConfig;
   /** full connection URI; when present, takes precedence over discrete fields */
   connectionString?: string;
   /** free-form engine-specific options (e.g. Mongo authSource, Redis db index) */
@@ -108,6 +169,12 @@ export interface ConnectionConfig {
    * engines (SQLite) may only open paths under this directory
    */
   fileBaseDir?: string;
+  /**
+   * server-set (never user input): the database's real host when `host` has
+   * been rewritten to an SSH tunnel's loopback end. TLS has to verify the
+   * certificate against THIS name — the tunnel's 127.0.0.1 is on no certificate.
+   */
+  tlsHostOverride?: string;
   /** reach the database through an SSH tunnel (network engines only) */
   ssh?: SshTunnelConfig;
   createdAt: string;
@@ -130,6 +197,16 @@ export type ConnectionInput = Omit<
 export interface ColumnSchema {
   name: string;
   dataType: string;
+  /**
+   * the column's type exactly as the engine would need it spelled to recreate
+   * it — with length, precision/scale, array element and time-zone wording —
+   * where `dataType` is the engine's looser catalog label. Postgres is the case
+   * that matters: its catalog says `numeric`, `character varying` and `ARRAY`
+   * where the column is really `numeric(38,10)`, `character varying(255)` and
+   * `integer[]`. bridges read this when they create a destination table;
+   * absent means `dataType` already is the full spelling.
+   */
+  nativeType?: string;
   nullable: boolean;
   isPrimaryKey: boolean;
   isUnique: boolean;
@@ -247,6 +324,23 @@ export interface BrowseParams {
   offset: number;
   sort?: SortSpec[];
   filters?: FilterSpec[];
+  /**
+   * for an engine with {@link AdapterCapabilities.cursorPaging}: read the page
+   * that starts at this cursor ('' or '0' = the beginning) instead of at
+   * `offset`. values are read IN FULL in this mode — it is what copies data,
+   * where the offset mode is what a grid shows a preview with. a page may hold
+   * somewhat more than `limit` rows, or none while more are still to come:
+   * {@link BrowseResult.nextCursor} alone says when the read is over
+   */
+  cursor?: string;
+  /**
+   * for an engine with {@link AdapterCapabilities.keysetPaging}: only the rows
+   * strictly AFTER this tuple in the order `sort` gives — `sort` has to name
+   * exactly these columns, in this order (a direction per column), and none of
+   * them may hold NULL, which no `>` or `<` can place. with it, `offset` is
+   * ignored: the page starts right after the tuple
+   */
+  after?: { columns: string[]; values: unknown[] };
 }
 
 export interface BrowseResult extends QueryResult {
@@ -257,6 +351,11 @@ export interface BrowseResult extends QueryResult {
   /** true when more rows exist beyond this page (from a `limit + 1` probe) */
   hasMore: boolean;
   primaryKey: string[];
+  /**
+   * answer to {@link BrowseParams.cursor}: where the next page starts, or null
+   * when this was the last one
+   */
+  nextCursor?: string | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -429,6 +528,22 @@ export interface DatabaseAdapter {
   browse(params: BrowseParams): Promise<BrowseResult>;
   /** run a user-authored statement in the engine's query language */
   query(statement: string, params?: unknown[]): Promise<QueryResult>;
+  /**
+   * add columns to a table that exists — nullable, never a key, never with a
+   * default: the one alteration Syncle makes to a destination, and only when a
+   * bridge opted into `onSchemaChange: evolve`. absent on engines with no
+   * columns to add (a MongoDB collection, Redis)
+   */
+  addColumns?(spec: CreateTableSpec): Promise<void>;
+  /**
+   * run a statement the ENGINE will refuse if it writes: inside a READ ONLY
+   * transaction (PostgreSQL, MySQL), or after asking the prepared statement
+   * whether it writes (SQLite). what a read-only connection's editor uses, on
+   * top of reading the statement's text — the text can be wrong about a
+   * function's side effects; the engine is not. absent where the query dialect
+   * has no writes to begin with (MongoDB's, Redis's are filtered by command)
+   */
+  queryReadOnly?(statement: string, params?: unknown[]): Promise<QueryResult>;
 
   insertRow(params: InsertRowParams): Promise<QueryResult>;
   updateRow(params: UpdateRowParams): Promise<QueryResult>;

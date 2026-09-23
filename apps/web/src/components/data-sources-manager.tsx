@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import {
   Database,
   LayoutGrid,
@@ -25,11 +26,12 @@ import { QueryEditor } from '@/components/query/query-editor';
 import { StructureView } from '@/components/structure/structure-view';
 import { ERDiagram } from '@/components/diagram/er-diagram';
 
-const TABS: { id: StudioTab; label: string; icon: typeof Table2 }[] = [
-  { id: 'data', label: 'Data', icon: LayoutGrid },
-  { id: 'structure', label: 'Structure', icon: Table2 },
-  { id: 'query', label: 'Query', icon: TerminalSquare },
-  { id: 'diagram', label: 'Diagram', icon: Network },
+// `labelKey` is a `dataSources` message key, translated where it is rendered
+const TABS: { id: StudioTab; labelKey: string; icon: typeof Table2 }[] = [
+  { id: 'data', labelKey: 'tabs.data', icon: LayoutGrid },
+  { id: 'structure', labelKey: 'tabs.structure', icon: Table2 },
+  { id: 'query', labelKey: 'tabs.query', icon: TerminalSquare },
+  { id: 'diagram', labelKey: 'tabs.diagram', icon: Network },
 ];
 
 /**
@@ -38,6 +40,7 @@ const TABS: { id: StudioTab; label: string; icon: typeof Table2 }[] = [
  * rather than in the main chrome.
  */
 export function DataSourcesManager() {
+  const t = useTranslations('dataSources');
   const { dataSourcesOpen, closeDataSources, activeConnectionId, activeDatabase, selected, tab, setTab } =
     useStudio();
   const { data: connections } = useConnections();
@@ -49,9 +52,9 @@ export function DataSourcesManager() {
     <div className="bg-background fixed inset-0 z-40 flex flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-2.5">
         <Database className="text-primary h-5 w-5" />
-        <span className="font-semibold tracking-tight">Data sources</span>
+        <span className="font-semibold tracking-tight">{t('title')}</span>
         <span className="text-muted-foreground text-xs">
-          Connect databases, browse tables &amp; manage schema — then build bridges from them.
+          {t('subtitle')}
         </span>
         <Button
           variant="ghost"
@@ -60,7 +63,7 @@ export function DataSourcesManager() {
           onClick={closeDataSources}
         >
           <X className="mr-1.5 h-4 w-4" />
-          Done
+          {t('done')}
         </Button>
       </div>
 
@@ -96,23 +99,23 @@ export function DataSourcesManager() {
                     )}
                   </>
                 ) : (
-                  <span>Select a connection</span>
+                  <span>{t('selectConnection')}</span>
                 )}
               </div>
               <div className="ml-auto flex items-center">
-                {TABS.map((t) => (
+                {TABS.map((item) => (
                   <button
-                    key={t.id}
-                    onClick={() => setTab(t.id)}
+                    key={item.id}
+                    onClick={() => setTab(item.id)}
                     className={cn(
                       'flex h-11 items-center gap-1.5 border-b-2 px-3 text-sm transition-colors',
-                      tab === t.id
+                      tab === item.id
                         ? 'border-primary text-foreground'
                         : 'text-muted-foreground hover:text-foreground border-transparent',
                     )}
                   >
-                    <t.icon className="h-4 w-4" />
-                    {t.label}
+                    <item.icon className="h-4 w-4" />
+                    {t(item.labelKey)}
                   </button>
                 ))}
               </div>

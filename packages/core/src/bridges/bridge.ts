@@ -14,6 +14,7 @@ import type {
   DatabaseEngine,
 } from '../adapters/types';
 import type { ColumnMapping, BridgeDestination } from './bridge-config';
+import { translateColumnType } from './type-map';
 
 /* -------------------------------------------------------------------------- */
 /* display helpers (shared by web list / map / panel)                         */
@@ -66,18 +67,58 @@ export function destinationNodeKeys(dest: BridgeDestination): string[] {
 type Row = Record<string, unknown>;
 
 /**
+ * a column the change did NOT carry, as opposed to one it set to NULL.
+ *
+ * PostgreSQL leaves a large (TOASTed) value out of an UPDATE's row image when
+ * the UPDATE did not touch it. that is "unchanged", and the only correct thing
+ * to do with it is nothing: writing NULL — what an absent value used to decay
+ * to — erased the destination's copy of every large column on every update of
+ * its row. a registered symbol, so it is one value across bundles and can never
+ * be mistaken for data.
+ */
+export const UNCHANGED = Symbol.for('syncle.unchanged');
+
+/**
+ * where a row has ALREADY been, when it is one that a bridge wrote and another
+ * bridge is now reading back (see the API's EchoGuardService): the tables the
+ * change has passed through. carried on the row under a symbol, so that it goes
+ * wherever the row goes — a copy of the row (`{ ...row }`) keeps it — and is
+ * never data: `Object.keys`, `Object.entries`, `JSON.stringify`, every mapping
+ * and every driver ignore it, so it cannot reach a destination or a payload.
+ * what builds a NEW row column by column (a mapping, a codec) drops it, and
+ * carries it over by hand where it matters.
+ */
+export const ORIGINS = Symbol.for('syncle.origins');
+
+/** the tables this row has been through already; empty for a change somebody made */
+export function originsOf(row: Row): string[] {
+  const value = (row as Record<symbol, unknown>)[ORIGINS];
+  return Array.isArray(value) ? (value as string[]) : [];
+}
+
+/** the same row, remembering where it has been */
+export function withOrigins<T extends Row>(row: T, origins: readonly string[]): T {
+  if (origins.length === 0) return row;
+  return Object.assign({}, row, { [ORIGINS]: [...origins] }) as T;
+}
+
+/**
  * project a source row onto the target's column names. an empty mapping means
  * "identity" (keep every column with its original name). `undefined` values are
- * normalized to `null` so drivers bind them as SQL NULL rather than erroring.
+ * normalized to `null` so drivers bind them as SQL NULL rather than erroring;
+ * a column marked {@link UNCHANGED} is left out of the write altogether.
  */
 export function mapRow(row: Row, mapping: ColumnMapping[]): Row {
   const out: Row = {};
   if (!mapping || mapping.length === 0) {
-    for (const [k, v] of Object.entries(row)) out[k] = v === undefined ? null : v;
+    for (const [k, v] of Object.entries(row)) {
+      if (v !== UNCHANGED) out[k] = v === undefined ? null : v;
+    }
     return out;
   }
   for (const m of mapping) {
-    out[m.target] = row[m.source] === undefined ? null : row[m.source];
+    const v = row[m.source];
+    if (v !== UNCHANGED) out[m.target] = v === undefined ? null : v;
   }
   return out;
 }
@@ -89,115 +130,93 @@ export function sourceColumnFor(target: string, mapping: ColumnMapping[]): strin
 }
 
 /* -------------------------------------------------------------------------- */
-/* portable type translation (source dataType string → target engine type)    */
+/* auto-created destination tables                                            */
 /* -------------------------------------------------------------------------- */
-
-export type PortableType =
-  | 'integer'
-  | 'bigint'
-  | 'number'
-  | 'boolean'
-  | 'timestamp'
-  | 'json'
-  | 'uuid'
-  | 'text';
-
-/**
- * collapse an engine-specific column type string into a portable category. errs
- * toward `text`, the universally-safe fallback, when nothing matches.
- */
-export function normalizeType(dataType: string): PortableType {
-  const t = (dataType || '').toLowerCase();
-  if (/(^| )(uuid)/.test(t)) return 'uuid';
-  if (/(bool)/.test(t)) return 'boolean';
-  if (/(timestamp|datetime|^date$| date|time with|time without)/.test(t))
-    return 'timestamp';
-  if (/(json|jsonb|object|array|bson)/.test(t)) return 'json';
-  if (/(bigint|int8|long)/.test(t)) return 'bigint';
-  if (/(serial|^int|integer|int4|int2|smallint|tinyint|mediumint)/.test(t))
-    return 'integer';
-  if (/(numeric|decimal|real|double|float|money|number)/.test(t)) return 'number';
-  return 'text';
-}
-
-/**
- * render a portable type as a concrete column type for the target engine. key
- * columns get an indexable type (e.g. MySQL `VARCHAR(255)` instead of `TEXT`,
- * which can't carry a primary key without a prefix length).
- */
-export function engineColumnType(
-  engine: DatabaseEngine,
-  type: PortableType,
-  isKey: boolean,
-): string {
-  switch (engine) {
-    case 'postgres':
-      return {
-        integer: 'INTEGER',
-        bigint: 'BIGINT',
-        number: 'DOUBLE PRECISION',
-        boolean: 'BOOLEAN',
-        timestamp: 'TIMESTAMP',
-        json: 'JSONB',
-        uuid: 'UUID',
-        text: 'TEXT',
-      }[type];
-    case 'mysql':
-      return {
-        integer: 'INT',
-        bigint: 'BIGINT',
-        number: 'DOUBLE',
-        boolean: 'TINYINT(1)',
-        timestamp: 'DATETIME',
-        json: 'JSON',
-        uuid: isKey ? 'VARCHAR(255)' : 'CHAR(36)',
-        text: isKey ? 'VARCHAR(255)' : 'TEXT',
-      }[type];
-    case 'sqlite':
-    default:
-      return {
-        integer: 'INTEGER',
-        bigint: 'INTEGER',
-        number: 'REAL',
-        boolean: 'INTEGER',
-        timestamp: 'TEXT',
-        json: 'TEXT',
-        uuid: 'TEXT',
-        text: 'TEXT',
-      }[type];
-  }
-}
 
 /** a target column to (re)create: its name, the source type, and nullability */
 export interface TargetColumnShape {
   name: string;
+  /** the source column's native type, as precisely as the source reports it */
   sourceType: string;
   nullable: boolean;
+  /**
+   * `sourceType` is not the source engine's spelling: a column transform changed
+   * what the column holds (a hashed integer is text), and the type is given in
+   * PostgreSQL's spelling for the type map to read with no source engine
+   */
+  generic?: boolean;
+}
+
+/** a column whose target type cannot hold everything the source type can */
+export interface ColumnTypeWarning {
+  column: string;
+  sourceType: string;
+  targetType: string;
+  message: string;
+}
+
+export interface TargetTablePlan {
+  spec: CreateTableSpec;
+  /** empty when every column translates faithfully */
+  warnings: ColumnTypeWarning[];
 }
 
 /**
- * build a `CREATE TABLE` spec for `engine` from the projected target columns.
- * `keyColumns` become the primary key (so upserts have something to conflict
- * on); values are inserted verbatim, so nothing is marked auto-increment.
+ * plan the `CREATE TABLE` for `engine` from the projected target columns, and
+ * report every column the target cannot represent faithfully. `keyColumns`
+ * become the primary key (so upserts have something to conflict on); values are
+ * inserted verbatim, so nothing is marked auto-increment.
+ *
+ * `sourceEngine` matters: `timestamp`, `float` and `int` do not mean the same
+ * thing in every engine. leave it undefined when the columns did not come from
+ * schema introspection (a query source, or types inferred from a sample row).
  */
-export function buildCreateTableSpec(
+export function planTargetTable(
   table: string,
   schema: string | undefined,
   columns: TargetColumnShape[],
   keyColumns: string[],
   engine: DatabaseEngine,
-): CreateTableSpec {
+  sourceEngine?: DatabaseEngine,
+): TargetTablePlan {
   const keys = new Set(keyColumns);
+  const warnings: ColumnTypeWarning[] = [];
   const defs: ColumnDefinition[] = columns.map((c) => {
     const isKey = keys.has(c.name);
+    const plan = translateColumnType(c.sourceType, {
+      // a transformed column's type is not the source engine's to read
+      source: c.generic ? undefined : sourceEngine,
+      target: engine,
+      isKey,
+    });
+    for (const message of plan.warnings) {
+      warnings.push({
+        column: c.name,
+        sourceType: c.sourceType,
+        targetType: plan.type,
+        message,
+      });
+    }
     return {
       name: c.name,
-      type: engineColumnType(engine, normalizeType(c.sourceType), isKey),
+      type: plan.type,
       // key columns must be NOT NULL to serve as a primary key
       nullable: isKey ? false : c.nullable,
       primaryKey: isKey,
       autoIncrement: false,
     };
   });
-  return { table, schema, columns: defs };
+  return { spec: { table, schema, columns: defs }, warnings };
+}
+
+/** {@link planTargetTable} for callers that only need the spec */
+export function buildCreateTableSpec(
+  table: string,
+  schema: string | undefined,
+  columns: TargetColumnShape[],
+  keyColumns: string[],
+  engine: DatabaseEngine,
+  sourceEngine?: DatabaseEngine,
+): CreateTableSpec {
+  return planTargetTable(table, schema, columns, keyColumns, engine, sourceEngine).spec;
 }

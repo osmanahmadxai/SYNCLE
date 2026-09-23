@@ -31,10 +31,50 @@ model AppUser {
   username       String   @unique
   passwordHash   String   @map("password_hash") // scrypt: "salt:derivedKey", hex
   sessionVersion Int      @default(0) @map("session_version")
+  // a password reset that has been asked for: the SHA-256 of its code (the code
+  // itself is only ever on the server's console and in a 0600 file), when it
+  // was made, when it stops working, and how many wrong guesses it has taken
+  resetCodeHash      String?   @map("reset_code_hash")
+  resetCodeMintedAt  DateTime? @map("reset_code_minted_at")
+  resetCodeExpiresAt DateTime? @map("reset_code_expires_at")
+  resetCodeFailures  Int       @default(0) @map("reset_code_failures")
+  // 'admin' | 'operator' | 'viewer' (see core's userRoleSchema). the account
+  // made at first run is an admin; every account there was before roles existed too
+  role        String    @default("admin")
+  // an account that may not sign in, and whose sessions are over: kept, so that
+  // what it did stays attributed to it
+  disabledAt  DateTime? @map("disabled_at")
+  lastLoginAt DateTime? @map("last_login_at")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("app_users")
+}
+
+// who did what: every change made through the API, and every sign-in. kept for
+// `auditRetentionDays`. the actor is recorded by NAME as well as by id, so an
+// entry outlives the account (or key) that made it
+model AuditEntry {
+  id         String   @id
+  at         DateTime @default(now())
+  // 'user' | 'apiKey' | 'system'
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  actorName  String   @map("actor_name")
+  // 'bridge.create', 'auth.login', ... (see core's AUDIT_ACTIONS)
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  targetName String?  @map("target_name")
+  // what changed, in short (JSON); never a secret
+  detailsJson String? @map("details_json")
+  ip         String?
+
+  @@index([at])
+  @@index([action, at])
+  @@index([targetId, at])
+  @@index([actorId, at])
+  @@map("audit_entries")
 }
 
 // Global application settings as a key/value store (single-operator install, so
@@ -79,6 +119,16 @@ model Connection {
   // the same split Bridge uses for destinationJson / authEnc
   sshJson             String?  @map("ssh_json")
   sshSecretsEnc       String?  @map("ssh_secrets_enc")
+  // TLS settings, split the same way: mode / CA / client certificate / server
+  // name as JSON, the client certificate's private key encrypted on its own.
+  // null = a connection saved before this existed; `ssl` alone then says what
+  // it always said (see effectiveTls in @syncle/core)
+  tlsJson             String?  @map("tls_json")
+  tlsSecretsEnc       String?  @map("tls_secrets_enc")
+  // nothing is written through a read-only connection; `environment` is what
+  // the database IS (production | staging | development), shown wherever it is
+  readOnly            Boolean  @default(false) @map("read_only")
+  environment         String?
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
@@ -111,15 +161,71 @@ model Bridge {
   deliveryJson    String   @map("delivery_json")
   triggerJson     String?  @map("trigger_json") // null = { kind: 'replay' }
   enabled         Boolean  @default(true)
+  // the source table's columns as the bridge last saw them accepted: what a
+  // later look at the table is compared with (schema drift). null = not yet seen
+  sourceColumnsJson String?   @map("source_columns_json")
+  sourceColumnsAt   DateTime? @map("source_columns_at")
+  // what became of the schedule's last tick ({ at, outcome, error }); null = never ticked
+  scheduleStateJson String?   @map("schedule_state_json")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  jobs      BridgeJob[]
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs          BridgeJob[]
+  deadLetters   BridgeDeadLetter[]
+  verifications BridgeVerification[]
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([connectionId])
   @@index([workspaceId])
   @@map("bridges")
+}
+
+// the bridges that read a PostgreSQL source through ONE shared replication slot
+// (trigger.slot = 'shared'). the slot may only be confirmed up to the slowest
+// member — including members that are not running right now — so each member's
+// own confirmed position has to outlive the process
+model CdcSharedMember {
+  bridgeId     String   @id @map("bridge_id")
+  // which slot: a digest of the source connection and database
+  slotKey      String   @map("slot_key")
+  schemaName   String   @map("schema_name")
+  tableName    String   @map("table_name")
+  // the operations this member publishes, as the publication's suffix ("iud", "i", …)
+  ops          String
+  // the WAL position (H/L) up to which this member has everything durably
+  confirmedLsn String   @map("confirmed_lsn")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([slotKey])
+  @@map("cdc_shared_members")
+}
+
+// one look at whether a bridge's destination IS the copy of its source — and,
+// in reconcile mode, the repair of what was not. counts and a few examples are
+// kept; the rows themselves are not (a verification of a large table is large)
+model BridgeVerification {
+  id          String  @id
+  bridgeId    String  @map("bridge_id")
+  mode        String // 'verify' | 'reconcile'
+  deleteExtra Boolean @default(false) @map("delete_extra")
+  // 'queued' | 'running' | 'canceling' | 'completed' | 'failed' | 'canceled'
+  status      String
+  sourceRows  Int     @default(0) @map("source_rows")
+  sourceTotal Int?    @map("source_total")
+  resultJson  String? @map("result_json") // VerificationTargetResult[]
+  error       String?
+
+  startedAt   DateTime  @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  // touched while it runs: one that says `running` and has not been touched for
+  // minutes was cut off by a restart, and is said to have been
+  heartbeatAt DateTime  @default(now()) @map("heartbeat_at")
+
+  bridge Bridge @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+
+  @@index([bridgeId, startedAt])
+  @@map("bridge_verifications")
 }
 
 model BridgeJob {
@@ -143,6 +249,15 @@ model BridgeJob {
 
   startedAt  DateTime  @default(now()) @map("started_at")
   finishedAt DateTime? @map("finished_at")
+
+  // delivery DETAILS are removed after the retention period (the counters above
+  // are not): how many rows have gone, and the sequence below which a missing
+  // row means "delivered, details removed" rather than "not delivered yet"
+  prunedDeliveries    Int  @default(0) @map("pruned_deliveries")
+  prunedBelowSequence Int? @map("pruned_below_sequence")
+
+  // 'manual' | 'schedule': somebody pressed Run, or the bridge's cron line did
+  startedBy String @default("manual") @map("started_by")
 
   bridge     Bridge           @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
   deliveries BridgeDelivery[]
@@ -176,4 +291,119 @@ model BridgeDelivery {
   @@unique([jobId, sequence]) // idempotency guard for resume / stalled-job recovery
   @@index([jobId])
   @@map("bridge_deliveries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Dead letters — rows a LIVE bridge (CDC / watch) could not deliver while set
+//  to `onError: continue`.
+//
+//  A change stream cannot be re-read once the source has been acknowledged past
+//  a position, so a failed row has to be kept somewhere durable BEFORE the
+//  cursor moves on, or it is simply gone. `bridge_deliveries.request_body` is
+//  not that place: it is capped for display and refuses to replay once cut.
+//  `rows_json` here is the complete source row(s), never truncated.
+//
+//  Hangs off the Bridge rather than the job, so the queue survives a job being
+//  replaced and disappears with the bridge.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model BridgeDeadLetter {
+  id                   String    @id
+  bridgeId             String    @map("bridge_id")
+  jobId                String    @map("job_id")
+  sequence             Int // the failed delivery these rows belong to
+  op                   String? // 'insert' | 'update' | 'delete'; null for a polling (watch) bridge
+  rowsJson             String    @map("rows_json") // full source rows, tagged so bytes/dates/bigints round-trip
+  rowCount             Int       @map("row_count")
+  cursor               String? // source position of the last change covered, for the record
+  error                String?
+  attempts             Int       @default(0) // retry attempts so far
+  status               String    @default("pending") // 'pending' | 'resolved' | 'discarded'
+  succeededTargetsJson String?   @map("succeeded_targets_json") // database fan-out: targets that already hold these rows
+  createdAt            DateTime  @default(now()) @map("created_at")
+  resolvedAt           DateTime? @map("resolved_at")
+
+  bridge Bridge @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+
+  @@index([bridgeId, status])
+  @@index([jobId])
+  @@map("bridge_dead_letters")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Source cleanups — things a bridge created on a SOURCE database that could
+//  not be removed when they should have been (the server was unreachable, the
+//  slot was still held by a dying connection).
+//
+//  A PostgreSQL replication slot that nothing reads makes the server keep WAL
+//  until its disk is full. When the bridge that owned it is deleted, this row
+//  is the only record left that the slot exists; it is retried until it goes.
+//  Deliberately NOT tied to the Bridge by a foreign key: it has to outlive it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SourceCleanup {
+  id           String   @id
+  bridgeId     String   @map("bridge_id") // the bridge it belonged to (may no longer exist)
+  bridgeName   String?  @map("bridge_name")
+  connectionId String   @map("connection_id")
+  database     String?
+  engine       String
+  resource     String // what is left behind, for whoever has to remove it by hand
+  attempts     Int      @default(0)
+  lastError    String?  @map("last_error")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([bridgeId, connectionId])
+  @@index([connectionId])
+  @@map("source_cleanups")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Alert channels: where Syncle says out loud that a bridge needs someone — a
+//  webhook, a Slack channel, an e-mail address.
+//
+//  The whole configuration is encrypted, not only the obvious secrets: a Slack
+//  webhook URL IS its credential, and so is most of what a webhook's headers
+//  hold. `events_json` stays readable so that finding the channels for an event
+//  does not mean decrypting every one of them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AlertChannel {
+  id         String    @id
+  name       String
+  kind       String // webhook | slack | email
+  enabled    Boolean   @default(true)
+  eventsJson String    @map("events_json")
+  configEnc  String    @map("config_enc")
+  lastStatus String?   @map("last_status") // ok | failed
+  lastError  String?   @map("last_error")
+  lastSentAt DateTime? @map("last_sent_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("alert_channels")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  API keys: a credential for a script, a CI job, a Terraform run — something
+//  that cannot type a password into a login form and should not be given one.
+//
+//  Only a SHA-256 of the key is kept. The key is 32 random bytes, so there is
+//  nothing to brute-force and a fast hash is the right one: it is looked up on
+//  every request. The key itself is shown once, when it is created.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id         String    @id
+  name       String
+  prefix     String // the first characters of the key, to tell keys apart in a list
+  hash       String    @unique
+  scope      String // read | full
+  expiresAt  DateTime? @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("api_keys")
 }

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
@@ -28,6 +29,8 @@ export function CreateDatabaseDialog({
   open,
   onOpenChange,
 }: Props) {
+  const t = useTranslations('createDatabase');
+  const tc = useTranslations('common');
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
@@ -42,11 +45,11 @@ export function CreateDatabaseDialog({
       await qc.invalidateQueries({
         queryKey: ['connections', connectionId, 'databases'],
       });
-      toast.success(`Created database ${name.trim()}`);
+      toast.success(t('created', { name: name.trim() }));
       setName('');
       onOpenChange(false);
     } catch (err) {
-      toast.error('Create failed', {
+      toast.error(t('createFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
     } finally {
@@ -58,13 +61,11 @@ export function CreateDatabaseDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>New database</DialogTitle>
-          <DialogDescription>
-            Create a new database on this server.
-          </DialogDescription>
+          <DialogTitle>{t('title')}</DialogTitle>
+          <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-1.5 py-2">
-          <Label htmlFor="db-name">Name</Label>
+          <Label htmlFor="db-name">{t('name')}</Label>
           <Input
             id="db-name"
             value={name}
@@ -76,11 +77,11 @@ export function CreateDatabaseDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc('cancel')}
           </Button>
           <Button onClick={handleCreate} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create
+            {tc('create')}
           </Button>
         </DialogFooter>
       </DialogContent>

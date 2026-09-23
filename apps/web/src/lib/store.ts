@@ -21,7 +21,10 @@ export interface BridgeEditorSeed {
 
 export interface QueryTab {
   id: string;
-  name: string;
+  /** a name of its own (a statement opened from elsewhere); without one, "Query {number}" in the user's language */
+  name?: string;
+  /** its number among the tabs opened so far — kept when a tab before it closes */
+  number: number;
   sql: string;
 }
 
@@ -30,8 +33,12 @@ const nextTabId = () => `qt_${++tabSeq}`;
 
 function freshTabs(): { tabs: QueryTab[]; activeId: string } {
   const id = nextTabId();
-  return { tabs: [{ id, name: 'Query 1', sql: '' }], activeId: id };
+  return { tabs: [{ id, number: 1, sql: '' }], activeId: id };
 }
+
+/** the number for a new tab: one past the highest so far, so closing a tab renumbers nothing */
+const nextNumber = (tabs: QueryTab[]): number =>
+  tabs.reduce((n, t) => Math.max(n, t.number), 0) + 1;
 
 interface StudioState {
   /** the workspace currently in view; everything is scoped to it */
@@ -86,6 +93,15 @@ interface StudioState {
 
   openConnectionDialog: (editingId?: string | null) => void;
   closeConnectionDialog: () => void;
+
+  /** the command palette (⌘K), so a button can open it as well as the keys */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
+
+  /** the Settings dialog; in the store so anything can open it (the palette) */
+  settings: { open: boolean; tab: string };
+  openSettings: (tab?: string) => void;
+  closeSettings: () => void;
 }
 
 const initial = freshTabs();
@@ -133,6 +149,14 @@ export const useStudio = create<StudioState>((set) => ({
   openDataSources: () => set({ dataSourcesOpen: true }),
   closeDataSources: () => set({ dataSourcesOpen: false }),
 
+  paletteOpen: false,
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
+
+  settings: { open: false, tab: 'account' },
+  openSettings: (tab = 'account') => set({ settings: { open: true, tab } }),
+  closeSettings: () =>
+    set((s) => ({ settings: { ...s.settings, open: false } })),
+
   // actually switching workspace drops the selected bridge, table and
   // connection (they live in another one); re-setting the same id is a no-op
   // so a URL/localStorage restore isn't wiped
@@ -169,9 +193,16 @@ export const useStudio = create<StudioState>((set) => ({
   addQueryTab: (opts) =>
     set((s) => {
       const id = nextTabId();
-      const name = opts?.name ?? `Query ${s.queryTabs.length + 1}`;
       return {
-        queryTabs: [...s.queryTabs, { id, name, sql: opts?.sql ?? '' }],
+        queryTabs: [
+          ...s.queryTabs,
+          {
+            id,
+            ...(opts?.name ? { name: opts.name } : {}),
+            number: nextNumber(s.queryTabs),
+            sql: opts?.sql ?? '',
+          },
+        ],
         activeQueryTabId: id,
       };
     }),
@@ -202,7 +233,8 @@ export const useStudio = create<StudioState>((set) => ({
           ...s.queryTabs,
           {
             id,
-            name: name ?? `Query ${s.queryTabs.length + 1}`,
+            ...(name ? { name } : {}),
+            number: nextNumber(s.queryTabs),
             sql: statement,
           },
         ],

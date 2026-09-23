@@ -13,6 +13,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { ZongJi, type BinLogEvent } from '@powersync/mysql-zongji';
+import { effectiveTls, mysqlTlsOptions, tlsServerName } from '@syncle/core/adapters';
 import type {
   CdcOperation,
   CdcReadiness,
@@ -25,15 +26,57 @@ import type { ResolvedBridge } from '../../bridges.types';
 import {
   backoffMs,
   type CdcProvider,
+  type CdcSourceHold,
   type CdcStreamContext,
   type CdcStreamHandle,
 } from '../cdc-provider';
+
+/** a column as the binlog's table-map event describes it */
+export interface BinlogColumn {
+  name: string;
+  /** MySQL's wire type code */
+  type: number;
+}
+
+/** `MYSQL_TYPE_JSON` */
+const BINLOG_TYPE_JSON = 245;
+
+/**
+ * make a row decoded from the binlog look like the same row read with a SELECT.
+ * a bridge's type handling is written against what the adapter returns; every
+ * place the two differ is a value that syncs one way in a backfill and another
+ * way live. the binlog reader hands a JSON column over as its serialised TEXT,
+ * where `mysql2` returns the parsed value — so downstream a JSON document
+ * looked like a plain string, and landed in a json column as a JSON *string*.
+ * (DECIMAL was the other difference, fixed at the source: see
+ * patches/@powersync__mysql-zongji.)
+ */
+export function normalizeBinlogRow(
+  row: Record<string, unknown>,
+  columns: BinlogColumn[] | undefined,
+): Record<string, unknown> {
+  if (!columns) return row;
+  let out: Record<string, unknown> | null = null;
+  for (const c of columns) {
+    if (c.type !== BINLOG_TYPE_JSON) continue;
+    const v = row[c.name];
+    if (typeof v !== 'string') continue;
+    try {
+      (out ??= { ...row })[c.name] = JSON.parse(v) as unknown;
+    } catch {
+      /* not valid JSON text: leave what the reader gave us */
+    }
+  }
+  return out ?? row;
+}
 
 interface ZongjiConn {
   host: string;
   port: number;
   user: string;
   password: string;
+  /** TLS options for the binlog connection; absent = plaintext */
+  ssl?: Record<string, unknown>;
 }
 
 /** row events we care about. `rotate`/`tablemap` are needed for bookkeeping */
@@ -196,12 +239,30 @@ export class MysqlCdcProvider implements CdcProvider {
   /* ----- connection details, zongji needs discrete fields ----- */
 
   private zongjiConn(conn: ConnectionConfig): ZongjiConn {
+    // the binlog stream is the connection every change travels over, and it
+    // was opened without any TLS options: with TLS switched on for the
+    // connection, the workbench was encrypted and the replication stream was
+    // not. it now gets the same trust decision. `verifyServerName` is read by
+    // our patch to the client (patches/@vlasky__mysql), which otherwise checks
+    // the certificate's chain but never the name it was issued for
+    const tls = mysqlTlsOptions(conn);
+    const ssl = tls
+      ? {
+          ssl: {
+            ...tls,
+            ...(effectiveTls(conn).mode === 'verify-full'
+              ? { verifyServerName: tlsServerName(conn) }
+              : {}),
+          },
+        }
+      : {};
     if (conn.host) {
       return {
         host: conn.host,
         port: conn.port ?? 3306,
         user: conn.user ?? 'root',
         password: conn.password ?? '',
+        ...ssl,
       };
     }
     if (conn.connectionString) {
@@ -211,6 +272,7 @@ export class MysqlCdcProvider implements CdcProvider {
         port: u.port ? Number(u.port) : 3306,
         user: decodeURIComponent(u.username),
         password: decodeURIComponent(u.password),
+        ...(conn.tls ? ssl : {}),
       };
     }
     throw new Error('MySQL connection is missing host/credentials.');
@@ -311,11 +373,102 @@ export class MysqlCdcProvider implements CdcProvider {
 
   /* ----- provisioning: nothing to do, the binlog already exists ----- */
 
+  /**
+   * MySQL keeps nothing FOR a reader: the binlog is purged on the server's own
+   * schedule (binlog_expire_logs_seconds) whoever still needs it. so the
+   * question here is not what the bridge costs the source, but whether the
+   * bridge's place in the log is still there.
+   */
+  async inspect(
+    _bridgeId: string,
+    bridge: ResolvedBridge,
+    _conn: ConnectionConfig,
+    cursor: string | null,
+  ): Promise<CdcSourceHold | null> {
+    if (bridge.source.kind !== 'table' || !cursor) return null;
+    const src = bridge.source;
+    const [file] = this.splitCursor(cursor);
+    if (!file) return null;
+    const hold: CdcSourceHold = {
+      engine: 'mysql',
+      kind: 'log-position',
+      name: file,
+      exists: true,
+      active: null,
+      retainedBytes: null,
+      limitBytes: null,
+      status: 'ok',
+    };
+    const issuedBy = this.cursorServer(cursor);
+    const now = await this.serverUuid(src.connectionId, src.database);
+    if (issuedBy && now && issuedBy !== now) {
+      return {
+        ...hold,
+        exists: false,
+        status: 'lost',
+        detail:
+          `the saved binlog position came from MySQL server ${issuedBy}, but the connection now reaches ${now} ` +
+          '(a failover, or the connection was repointed). Binlog positions only mean something on the server that issued them',
+      };
+    }
+    const logs = await this.pool.withAdapter(src.connectionId, src.database, (a) =>
+      a.query('SHOW BINARY LOGS'),
+    );
+    const names = logs.rows.map((r) => String((r as Record<string, unknown>).Log_name ?? ''));
+    if (names.length > 0 && !names.includes(file)) {
+      return {
+        ...hold,
+        exists: false,
+        status: 'lost',
+        detail: `binlog file ${file} has been purged from the server (the oldest it still has is ${names[0]})`,
+      };
+    }
+    return hold;
+  }
+
   async provision(): Promise<void> {
     /* no-op */
   }
   async deprovision(): Promise<void> {
     /* no-op */
+  }
+
+  /**
+   * the end of the binlog as it is now. a transaction still open at this moment
+   * is written to the log when it commits — after this position — so nothing
+   * that a later read of the table could miss is ahead of it
+   */
+  async capturePosition(_bridgeId: string, bridge: ResolvedBridge): Promise<string | null> {
+    if (bridge.source.kind !== 'table') return null;
+    const src = bridge.source;
+    const status = async (statement: string) =>
+      (await this.pool.withAdapter(src.connectionId, src.database, (a) => a.query(statement))).rows[0] as
+        | Record<string, unknown>
+        | undefined;
+    let row: Record<string, unknown> | undefined;
+    try {
+      // MySQL 8.4 renamed it, and removed the old spelling
+      row = await status('SHOW BINARY LOG STATUS');
+    } catch {
+      row = await status('SHOW MASTER STATUS');
+    }
+    const file = String(row?.File ?? '');
+    const pos = Number(row?.Position ?? 0);
+    if (!file || !Number.isFinite(pos) || pos <= 0) {
+      throw new Error(
+        'MySQL did not report a binlog position (is binary logging on, and may this user run SHOW BINARY LOG STATUS / SHOW MASTER STATUS — the REPLICATION CLIENT privilege?)',
+      );
+    }
+    return this.makeCursor({
+      file,
+      pos,
+      // no row of any statement has been seen: row 0 of a statement that starts
+      // exactly here is still "after" this
+      row: -1,
+      isStart: true,
+      serverUuid: await this.serverUuid(src.connectionId, src.database),
+      gtid: null,
+    });
   }
 
   /* ----- the stream ----- */
@@ -408,7 +561,10 @@ export class MysqlCdcProvider implements CdcProvider {
       const rowEvt = evt as unknown as {
         tableId: number;
         nextPosition: number;
-        tableMap: Record<number, { parentSchema: string; tableName: string }>;
+        tableMap: Record<
+          number,
+          { parentSchema: string; tableName: string; columns?: BinlogColumn[] }
+        >;
         rows: Record<string, unknown>[] | { before: Record<string, unknown>; after: Record<string, unknown> }[];
       };
       const meta = rowEvt.tableMap[rowEvt.tableId];
@@ -433,10 +589,12 @@ export class MysqlCdcProvider implements CdcProvider {
         const startKnown = groupStart > 0;
         for (let i = 0; i < rowEvt.rows.length; i++) {
           const r = rowEvt.rows[i]!;
-          const row =
+          const row = normalizeBinlogRow(
             op === 'update'
               ? (r as { after: Record<string, unknown> }).after
-              : (r as Record<string, unknown>);
+              : (r as Record<string, unknown>),
+            meta.columns,
+          );
           const idx = groupRow++;
           // defensive fallback: a row event with no seen tablemap (shouldn't
           // happen) keeps the legacy end-position cursor format
@@ -479,6 +637,27 @@ export class MysqlCdcProvider implements CdcProvider {
         void onEvent(evt).catch((err) => handlers.onError(err as Error));
       });
       instance.on('error', (err: Error) => {
+        // 1236: the server cannot serve the requested position — the file was
+        // purged. retrying asks for the same file for ever; starting from "now"
+        // instead would be a hole nobody was told about
+        const e = err as Error & { errno?: number; code?: string };
+        if (
+          !stopped &&
+          handlers.onPositionLost &&
+          (e.errno === 1236 || e.code === 'ER_MASTER_FATAL_ERROR_READING_BINLOG')
+        ) {
+          stopped = true;
+          try {
+            instance.stop();
+          } catch {
+            /* ignore */
+          }
+          void handlers.onPositionLost(
+            `MySQL can no longer serve this bridge's place in the binlog (${err.message}). ` +
+              'The log was purged while the bridge was not reading it.',
+          );
+          return;
+        }
         handlers.onError(err);
         if (stopped) return;
         try {

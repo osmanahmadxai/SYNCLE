@@ -102,7 +102,11 @@ describe('SqliteAdapter', () => {
     expect(result.rows).toHaveLength(0);
 
     // proof the table still exists and is intact
-    const after = await adapter.browse({ table: 'users', limit: 10, offset: 0 });
+    const after = await adapter.browse({
+      table: 'users',
+      limit: 10,
+      offset: 0,
+    });
     expect(after.total).toBe(2);
   });
 
@@ -159,14 +163,45 @@ describe('SqliteAdapter', () => {
     await adapter.createTable({
       table: 'safe_defaults',
       columns: [
-        { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true, autoIncrement: true },
-        { name: 'n', type: 'INTEGER', nullable: true, primaryKey: false, autoIncrement: false, defaultValue: '42' },
-        { name: 'label', type: 'TEXT', nullable: true, primaryKey: false, autoIncrement: false, defaultValue: "'it''s ok'" },
-        { name: 'at', type: 'TEXT', nullable: true, primaryKey: false, autoIncrement: false, defaultValue: 'CURRENT_TIMESTAMP' },
+        {
+          name: 'id',
+          type: 'INTEGER',
+          nullable: false,
+          primaryKey: true,
+          autoIncrement: true,
+        },
+        {
+          name: 'n',
+          type: 'INTEGER',
+          nullable: true,
+          primaryKey: false,
+          autoIncrement: false,
+          defaultValue: '42',
+        },
+        {
+          name: 'label',
+          type: 'TEXT',
+          nullable: true,
+          primaryKey: false,
+          autoIncrement: false,
+          defaultValue: "'it''s ok'",
+        },
+        {
+          name: 'at',
+          type: 'TEXT',
+          nullable: true,
+          primaryKey: false,
+          autoIncrement: false,
+          defaultValue: 'CURRENT_TIMESTAMP',
+        },
       ],
     });
     await adapter.insertRow({ table: 'safe_defaults', values: { n: 1 } });
-    const res = await adapter.browse({ table: 'safe_defaults', limit: 10, offset: 0 });
+    const res = await adapter.browse({
+      table: 'safe_defaults',
+      limit: 10,
+      offset: 0,
+    });
     expect(res.rows[0]?.label).toBe("it's ok");
 
     await expect(
@@ -185,7 +220,11 @@ describe('SqliteAdapter', () => {
       }),
     ).rejects.toThrow(BadRequestError);
     // the injection never ran
-    const after = await adapter.browse({ table: 'users', limit: 10, offset: 0 });
+    const after = await adapter.browse({
+      table: 'users',
+      limit: 10,
+      offset: 0,
+    });
     expect(after.total).toBe(2);
   });
 
@@ -194,15 +233,29 @@ describe('SqliteAdapter', () => {
       adapter.createTable({
         table: 'bad_pk',
         columns: [
-          { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true, autoIncrement: true },
-          { name: 'other', type: 'TEXT', nullable: false, primaryKey: true, autoIncrement: false },
+          {
+            name: 'id',
+            type: 'INTEGER',
+            nullable: false,
+            primaryKey: true,
+            autoIncrement: true,
+          },
+          {
+            name: 'other',
+            type: 'TEXT',
+            nullable: false,
+            primaryKey: true,
+            autoIncrement: false,
+          },
         ],
       }),
     ).rejects.toThrow(BadRequestError);
   });
 
   it('round-trips Buffers through a JSON backup as tagged $bytes', async () => {
-    await adapter.query('CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)');
+    await adapter.query(
+      'CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)',
+    );
     const bytes = Buffer.from([0, 1, 2, 250, 255]);
     await adapter.insertRow({ table: 'blobs', values: { id: 1, data: bytes } });
 
@@ -219,7 +272,9 @@ describe('SqliteAdapter', () => {
   });
 
   it('dumps Buffers as hex literals in SQL backups', async () => {
-    await adapter.query('CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)');
+    await adapter.query(
+      'CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)',
+    );
     await adapter.insertRow({
       table: 'blobs',
       values: { id: 1, data: Buffer.from('hi') },
@@ -234,7 +289,10 @@ describe('SqliteAdapter', () => {
     await adapter.query('CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT)');
     const total = 2050;
     for (let i = 1; i <= total; i++) {
-      await adapter.insertRow({ table: 'big', values: { id: i, v: `row-${i}` } });
+      await adapter.insertRow({
+        table: 'big',
+        values: { id: i, v: `row-${i}` },
+      });
     }
 
     const json = await adapter.backup({ format: 'json', tables: ['big'] });
@@ -273,8 +331,9 @@ describe('SqliteAdapter', () => {
   });
 
   it('rolls back a withTransaction batch when a row fails', async () => {
-    const before = (await adapter.browse({ table: 'users', limit: 50, offset: 0 }))
-      .total;
+    const before = (
+      await adapter.browse({ table: 'users', limit: 50, offset: 0 })
+    ).total;
     await expect(
       adapter.withTransaction!(async () => {
         await adapter.insertRow({
@@ -299,7 +358,20 @@ describe('SqliteAdapter', () => {
 
 describe('assertSafeDefaultValue', () => {
   it('accepts numbers, quoted strings and allowlisted expressions', () => {
-    for (const ok of ['0', '-12', '3.25', "''", "'plain'", "'it''s'", 'NULL', 'true', 'CURRENT_TIMESTAMP', 'now()', 'gen_random_uuid()', 'uuid()']) {
+    for (const ok of [
+      '0',
+      '-12',
+      '3.25',
+      "''",
+      "'plain'",
+      "'it''s'",
+      'NULL',
+      'true',
+      'CURRENT_TIMESTAMP',
+      'now()',
+      'gen_random_uuid()',
+      'uuid()',
+    ]) {
       expect(assertSafeDefaultValue(ok)).toBe(ok);
     }
   });
@@ -307,7 +379,7 @@ describe('assertSafeDefaultValue', () => {
   it('rejects everything else', () => {
     for (const bad of [
       "'a'); DROP TABLE users;--",
-      "1; DROP TABLE users",
+      '1; DROP TABLE users',
       '(SELECT secret FROM vault)',
       "'unterminated",
       "'back\\slash'",
@@ -358,9 +430,9 @@ describe('SqliteAdapter fileBaseDir jail', () => {
   });
 
   it('rejects absolute paths outside the base directory', async () => {
-    await expect(jailed(join(tmpdir(), 'outside.db')).connect()).rejects.toThrow(
-      /restricted/,
-    );
+    await expect(
+      jailed(join(tmpdir(), 'outside.db')).connect(),
+    ).rejects.toThrow(/restricted/);
     await expect(jailed('/etc/passwd').connect()).rejects.toThrow(/restricted/);
   });
 
@@ -369,5 +441,242 @@ describe('SqliteAdapter fileBaseDir jail', () => {
     await expect(jailed(`${base}-evil${sep}f.db`).connect()).rejects.toThrow(
       /restricted/,
     );
+  });
+});
+
+describe('SqliteAdapter: values come back as the values they are', () => {
+  let adapter: SqliteAdapter;
+  let file: string;
+
+  beforeEach(async () => {
+    file = join(tmpdir(), `syncle-exact-${Date.now()}-${Math.random()}.db`);
+    adapter = new SqliteAdapter(makeConfig(file));
+    await adapter.connect();
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+    for (const suffix of ['', '-wal', '-shm'])
+      rmSync(file + suffix, { force: true });
+  });
+
+  it('a 64-bit integer is not rounded to the nearest double', async () => {
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, big INTEGER)');
+    await adapter.query(
+      'INSERT INTO n VALUES (1, 9223372036854775807), (2, -9223372036854775808), (3, 9007199254740993)',
+    );
+    const { rows } = await adapter.browse({ table: 'n', limit: 10, offset: 0 });
+    // as a plain number this read back as 9223372036854776000
+    expect(rows.map((r) => r.big)).toEqual([
+      '9223372036854775807',
+      '-9223372036854775808',
+      '9007199254740993',
+    ]);
+  });
+
+  it('an integer a number CAN hold exactly is still a number', async () => {
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, v INTEGER)');
+    await adapter.query(
+      'INSERT INTO n VALUES (1, 0), (2, -5), (3, 9007199254740991)',
+    );
+    const { rows, total } = await adapter.browse({
+      table: 'n',
+      limit: 10,
+      offset: 0,
+    });
+    expect(rows).toEqual([
+      { id: 1, v: 0 },
+      { id: 2, v: -5 },
+      { id: 3, v: 9007199254740991 },
+    ]);
+    expect(total).toBe(3); // counts are ordinary numbers too
+  });
+
+  it('a digit string written to an INTEGER column is stored exactly', async () => {
+    // how a bigint arrives from Postgres or MySQL across a bridge
+    await adapter.query('CREATE TABLE n (id INTEGER PRIMARY KEY, big INTEGER)');
+    await adapter.upsertRows!({
+      table: 'n',
+      rows: [{ id: 1, big: '9223372036854775807' }],
+      keyColumns: ['id'],
+    });
+    const check = await adapter.query(
+      'SELECT CAST(big AS TEXT) AS t, typeof(big) AS k FROM n',
+    );
+    expect(check.rows[0]).toEqual({ t: '9223372036854775807', k: 'integer' });
+  });
+
+  it('reports an undeclared column truthfully, not as a declared BLOB', async () => {
+    await adapter.query(
+      'CREATE TABLE loose (id INTEGER PRIMARY KEY, anything, data BLOB)',
+    );
+    const schema = await adapter.getSchema();
+    const cols = schema.namespaces[0]!.tables.find(
+      (t) => t.name === 'loose',
+    )!.columns;
+    const by = Object.fromEntries(cols.map((c) => [c.name, c.nativeType]));
+    expect(by.anything).toBe('');
+    expect(by.data).toBe('BLOB');
+  });
+});
+
+describe('a page after a tuple (keyset paging)', () => {
+  let adapter: SqliteAdapter;
+  let file: string;
+
+  beforeEach(async () => {
+    file = join(tmpdir(), `syncle-keyset-${Date.now()}-${Math.random()}.db`);
+    adapter = new SqliteAdapter(makeConfig(file));
+    await adapter.connect();
+    await adapter.query(
+      `CREATE TABLE lines (tenant TEXT NOT NULL, seq INTEGER NOT NULL, note TEXT, PRIMARY KEY (tenant, seq))`,
+    );
+    for (const tenant of ['a', 'b', 'c'])
+      for (let seq = 1; seq <= 4; seq++)
+        await adapter.insertRow({
+          table: 'lines',
+          values: { tenant, seq, note: `${tenant}${seq}` },
+        });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+    try {
+      rmSync(file);
+    } catch {
+      /* already gone */
+    }
+  });
+
+  const sort = (dirs: Array<'asc' | 'desc'>) =>
+    [
+      { column: 'tenant', direction: dirs[0]! },
+      { column: 'seq', direction: dirs[1]! },
+    ] as const;
+
+  /** every row, a page at a time, by tuple */
+  async function readAll(
+    dirs: Array<'asc' | 'desc'>,
+    limit: number,
+  ): Promise<string[]> {
+    const out: string[] = [];
+    let after: { columns: string[]; values: unknown[] } | undefined;
+    for (let pages = 0; pages < 20; pages++) {
+      const page = await adapter.browse({
+        table: 'lines',
+        limit,
+        // ignored once there is a tuple to page after
+        offset: after ? 999 : 0,
+        sort: [...sort(dirs)],
+        after,
+      });
+      out.push(...page.rows.map((r) => String(r.note)));
+      if (!page.hasMore) return out;
+      const last = page.rows[page.rows.length - 1]!;
+      after = { columns: ['tenant', 'seq'], values: [last.tenant, last.seq] };
+    }
+    throw new Error('never ended');
+  }
+
+  it('says that it is a capability', () => {
+    expect(adapter.capabilities.keysetPaging).toBe(true);
+  });
+
+  it('reads a composite key from one end to the other, in pages that do not care how deep they are — the offset is ignored', async () => {
+    expect(await readAll(['asc', 'asc'], 5)).toEqual([
+      'a1',
+      'a2',
+      'a3',
+      'a4',
+      'b1',
+      'b2',
+      'b3',
+      'b4',
+      'c1',
+      'c2',
+      'c3',
+      'c4',
+    ]);
+  });
+
+  it('follows the direction of each column, mixed', async () => {
+    expect(await readAll(['desc', 'asc'], 5)).toEqual([
+      'c1',
+      'c2',
+      'c3',
+      'c4',
+      'b1',
+      'b2',
+      'b3',
+      'b4',
+      'a1',
+      'a2',
+      'a3',
+      'a4',
+    ]);
+    expect(await readAll(['asc', 'desc'], 5)).toEqual([
+      'a4',
+      'a3',
+      'a2',
+      'a1',
+      'b4',
+      'b3',
+      'b2',
+      'b1',
+      'c4',
+      'c3',
+      'c2',
+      'c1',
+    ]);
+  });
+
+  it('a page after the last tuple is empty, and the filters still apply', async () => {
+    const page = await adapter.browse({
+      table: 'lines',
+      limit: 5,
+      offset: 0,
+      sort: [...sort(['asc', 'asc'])],
+      after: { columns: ['tenant', 'seq'], values: ['c', 4] },
+    });
+    expect(page.rows).toEqual([]);
+    expect(page.hasMore).toBe(false);
+    const filtered = await adapter.browse({
+      table: 'lines',
+      limit: 5,
+      offset: 0,
+      sort: [...sort(['asc', 'asc'])],
+      filters: [{ column: 'seq', operator: 'gte', value: 3 }],
+      after: { columns: ['tenant', 'seq'], values: ['a', 3] },
+    });
+    expect(filtered.rows.map((r) => r.note)).toEqual([
+      'a4',
+      'b3',
+      'b4',
+      'c3',
+      'c4',
+    ]);
+    // the total is of the read, not of the page
+    expect(filtered.total).toBe(6);
+  });
+
+  it('refuses a tuple the sort does not name, or one with a NULL in it', async () => {
+    await expect(
+      adapter.browse({
+        table: 'lines',
+        limit: 5,
+        offset: 0,
+        sort: [{ column: 'tenant', direction: 'asc' }],
+        after: { columns: ['tenant', 'seq'], values: ['a', 1] },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+    await expect(
+      adapter.browse({
+        table: 'lines',
+        limit: 5,
+        offset: 0,
+        sort: [...sort(['asc', 'asc'])],
+        after: { columns: ['tenant', 'seq'], values: ['a', null] },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
   });
 });

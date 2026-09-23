@@ -11,9 +11,12 @@ import {
   type ConnectionConfig,
   type ConnectionInput,
   type SshTunnelConfig,
+  type TlsConfig,
   DEFAULT_WORKSPACE_ID,
   NotFoundError,
+  BadRequestError,
 } from '@syncle/core';
+import { getDriver } from '@syncle/core/adapters';
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
 
@@ -102,6 +105,38 @@ export class ConnectionStoreService {
     return ssh;
   }
 
+  /* ----- tls: the client key is the one secret; everything else is public ----- */
+
+  /** the key is blanked to "" in the stored JSON so its presence survives */
+  private splitTls(tls: TlsConfig | undefined): { sanitized: TlsConfig | null; key: string } {
+    if (!tls) return { sanitized: null, key: '' };
+    const { key, ...rest } = tls;
+    const trimmed = Object.fromEntries(
+      Object.entries(rest).filter(([, v]) => typeof v !== 'string' || v.trim() !== ''),
+    ) as unknown as TlsConfig;
+    return { sanitized: key ? { ...trimmed, key: '' } : trimmed, key: key ?? '' };
+  }
+
+  private tlsFromRow(row: ConnectionRow, includeSecrets: boolean): TlsConfig | undefined {
+    if (!row.tlsJson) return undefined;
+    let tls: TlsConfig;
+    try {
+      tls = JSON.parse(row.tlsJson) as TlsConfig;
+    } catch {
+      this.logger.warn(`Connection ${row.id} has unparseable tlsJson — ignoring it`);
+      return undefined;
+    }
+    if (tls.key === undefined) return tls;
+    return {
+      ...tls,
+      key: includeSecrets
+        ? row.tlsSecretsEnc
+          ? this.crypto.decrypt(row.tlsSecretsEnc)
+          : ''
+        : REDACTED,
+    };
+  }
+
   private toConfig(row: ConnectionRow, includeSecrets: boolean): ConnectionConfig {
     return {
       id: row.id,
@@ -109,6 +144,8 @@ export class ConnectionStoreService {
       workspaceId: row.workspaceId,
       engine: row.engine as ConnectionConfig['engine'],
       color: row.color ?? undefined,
+      readOnly: row.readOnly || undefined,
+      environment: (row.environment ?? undefined) as ConnectionConfig['environment'],
       host: row.host ?? undefined,
       port: row.port ?? undefined,
       user: row.user ?? undefined,
@@ -130,6 +167,7 @@ export class ConnectionStoreService {
         ? this.parseOptions(row.id, row.optionsJson)
         : undefined,
       ssh: this.sshFromRow(row, includeSecrets),
+      tls: this.tlsFromRow(row, includeSecrets),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -158,8 +196,21 @@ export class ConnectionStoreService {
     return this.toConfig(await this.getRow(id), true);
   }
 
+  /**
+   * the schema lists the engines, the registry holds the drivers, and nothing
+   * used to check one against the other at the door — so a connection to an
+   * engine with no driver was saved, and every later use of it answered 501
+   */
+  private assertDriver(engine: string): void {
+    if (!getDriver(engine as ConnectionConfig['engine'])) {
+      throw new BadRequestError(`This build of Syncle has no driver for "${engine}".`);
+    }
+  }
+
   async create(input: ConnectionInput): Promise<ConnectionConfig> {
+    this.assertDriver(input.engine);
     const { sanitized: ssh, secrets: sshSecrets } = this.splitSsh(input.ssh);
+    const { sanitized: tls, key: tlsKey } = this.splitTls(input.tls);
     const row = await this.prisma.connection.create({
       data: {
         id: randomUUID(),
@@ -167,24 +218,30 @@ export class ConnectionStoreService {
         workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
         engine: input.engine,
         color: input.color ?? null,
+        readOnly: input.readOnly === true,
+        environment: input.environment ?? null,
         host: input.host ?? null,
         port: input.port ?? null,
         user: input.user ?? null,
         passwordEnc: input.password ? this.crypto.encrypt(input.password) : null,
         database: input.database ?? null,
-        ssl: input.ssl ?? false,
+        // the old switch stays truthful for anything that still reads it
+        ssl: tls ? tls.mode !== 'disable' : (input.ssl ?? false),
         connectionStringEnc: input.connectionString
           ? this.crypto.encrypt(input.connectionString)
           : null,
         optionsJson: input.options ? JSON.stringify(input.options) : null,
         sshJson: ssh ? JSON.stringify(ssh) : null,
         sshSecretsEnc: this.encryptSshSecrets(sshSecrets),
+        tlsJson: tls ? JSON.stringify(tls) : null,
+        tlsSecretsEnc: tlsKey ? this.crypto.encrypt(tlsKey) : null,
       },
     });
     return this.toConfig(row, false);
   }
 
   async update(id: string, input: ConnectionInput): Promise<ConnectionConfig> {
+    this.assertDriver(input.engine);
     const existing = await this.getRow(id);
 
     // keep stored secrets when the client sends the redaction sentinel
@@ -215,6 +272,16 @@ export class ConnectionStoreService {
       else if (ssh && ssh[key] !== undefined) delete ssh[key];
     }
 
+    // the client key follows the same sentinel rule as every other secret
+    const { sanitized: tls, key: tlsKeyInput } = this.splitTls(input.tls);
+    const tlsSecretsEnc =
+      tlsKeyInput === REDACTED
+        ? existing.tlsSecretsEnc
+        : tlsKeyInput
+          ? this.crypto.encrypt(tlsKeyInput)
+          : null;
+    if (tls && tls.key !== undefined && !tlsSecretsEnc) delete tls.key;
+
     try {
       const row = await this.prisma.connection.update({
         where: { id },
@@ -222,22 +289,79 @@ export class ConnectionStoreService {
           name: input.name,
           engine: input.engine,
           color: input.color ?? null,
+          readOnly: input.readOnly === true,
+          environment: input.environment ?? null,
           host: input.host ?? null,
           port: input.port ?? null,
           user: input.user ?? null,
           passwordEnc,
           database: input.database ?? null,
-          ssl: input.ssl ?? false,
+          ssl: tls ? tls.mode !== 'disable' : (input.ssl ?? false),
           connectionStringEnc,
           optionsJson: input.options ? JSON.stringify(input.options) : null,
           sshJson: ssh ? JSON.stringify(ssh) : null,
           sshSecretsEnc: this.encryptSshSecrets(sshSecrets),
+          tlsJson: tls ? JSON.stringify(tls) : null,
+          tlsSecretsEnc,
         },
       });
       return this.toConfig(row, false);
     } catch (err) {
       throw this.mapMissing(err, id);
     }
+  }
+
+  /**
+   * an edit form's payload with every REDACTED secret replaced by the stored
+   * value, for testing an edit before it is saved. nothing is written; a secret
+   * the user actually retyped is used as typed.
+   */
+  async withStoredSecrets<T extends ConnectionInput>(id: string, input: T): Promise<T> {
+    const stored = await this.resolve(id);
+    const keep = <V>(given: V, saved: V): V => (given === (REDACTED as unknown) ? saved : given);
+    return {
+      ...input,
+      password: keep(input.password, stored.password),
+      connectionString: keep(input.connectionString, stored.connectionString),
+      ...(input.ssh
+        ? {
+            ssh: {
+              ...input.ssh,
+              password: keep(input.ssh.password, stored.ssh?.password),
+              privateKey: keep(input.ssh.privateKey, stored.ssh?.privateKey),
+              passphrase: keep(input.ssh.passphrase, stored.ssh?.passphrase),
+            },
+          }
+        : {}),
+      ...(input.tls ? { tls: { ...input.tls, key: keep(input.tls.key, stored.tls?.key) } } : {}),
+    };
+  }
+
+  /**
+   * record the jump host's key the first time a tunnel connects (trust on first
+   * use). never overwrites a fingerprint that is already pinned — a CHANGED key
+   * is refused by the tunnel, and only the operator may accept a new one.
+   * `updatedAt` is kept as it was: this is bookkeeping, not an edit, and the
+   * adapter pool treats a new `updatedAt` as "reconnect".
+   */
+  async pinSshHostKey(id: string, fingerprint: string): Promise<void> {
+    const row = await this.prisma.connection.findUnique({ where: { id } });
+    if (!row?.sshJson) return;
+    let ssh: SshTunnelConfig;
+    try {
+      ssh = JSON.parse(row.sshJson) as SshTunnelConfig;
+    } catch {
+      return;
+    }
+    if (ssh.hostKey?.trim()) return;
+    await this.prisma.connection.update({
+      where: { id },
+      data: {
+        sshJson: JSON.stringify({ ...ssh, hostKey: fingerprint }),
+        updatedAt: row.updatedAt,
+      },
+    });
+    this.logger.log(`Pinned the SSH host key of ${ssh.host} for connection ${id}: ${fingerprint}`);
   }
 
   async remove(id: string): Promise<void> {

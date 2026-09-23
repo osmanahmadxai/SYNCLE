@@ -17,7 +17,12 @@ export interface AppHandle {
   prisma: any;
 }
 
-export async function bootstrapApp(): Promise<AppHandle> {
+/**
+ * `standby: true` = do not wait for this app to LEAD. every other test wants
+ * the one app it starts to be the leader (it is, the moment the lease is free —
+ * which, after a test file that did not close its app, is when that lease runs out)
+ */
+export async function bootstrapApp(opts: { standby?: boolean } = {}): Promise<AppHandle> {
   const { NestFactory } = await import('@nestjs/core');
   const { AppModule } = await import('../../src/app.module');
   const { ConnectionStoreService } = await import(
@@ -28,6 +33,13 @@ export async function bootstrapApp(): Promise<AppHandle> {
   const { PrismaService } = await import('../../src/common/prisma.service');
 
   const ctx = await NestFactory.createApplicationContext(AppModule, { logger: false });
+  if (!opts.standby) {
+    const { InstanceService } = await import('../../src/common/instance.service');
+    const instance = ctx.get(InstanceService);
+    for (const deadline = Date.now() + 20_000; !instance.isLeader() && Date.now() < deadline; )
+      await new Promise((r) => setTimeout(r, 100));
+    if (!instance.isLeader()) throw new Error('this test app never became the leader: is another Syncle using the test Redis?');
+  }
   return {
     ctx,
     connections: ctx.get(ConnectionStoreService),
@@ -142,6 +154,12 @@ export async function makeBridge(
     start?: boolean;
     /** engine the source table lives on; defaults to postgres */
     sourceEngine?: ConnKey;
+    /** `beginning`: copy what the table already holds, then follow its changes */
+    startFrom?: 'now' | 'beginning';
+    /** rows written to the source before the bridge exists */
+    seed?: Array<Record<string, unknown>>;
+    /** source filters of the bridge */
+    filters?: Array<{ column: string; operator: string; value?: unknown }>;
   },
 ): Promise<SyncSetup> {
   const { destEngine, sourceConnId, destConnId, cleanups } = opts;
@@ -182,13 +200,15 @@ export async function makeBridge(
     withAdapter(destEngine, (a) => a.dropTable(destTable)).catch(() => undefined),
   );
 
+  if (opts.seed?.length) await writeSourceRows(sourceEngine, sourceTable, opts.seed);
+
   const mapping = mappingFor(sourceEngine, destEngine);
   const keyColumns = shapeOf(destEngine) === 'kv' ? ['key'] : ['id'];
 
   const { bridgeInputSchema } = await import('@syncle/core');
   const input = bridgeInputSchema.parse({
     name: `it-bridge-${sourceTable}`,
-    source: { kind: 'table', connectionId: sourceConnId, table: sourceTable },
+    source: { kind: 'table', connectionId: sourceConnId, table: sourceTable, filters: opts.filters },
     destination: {
       kind: 'database',
       targets: [
@@ -203,7 +223,11 @@ export async function makeBridge(
       ],
     },
     transform: { template: '{{$row}}' },
-    trigger: { kind: 'cdc', operations: ['insert', 'update', 'delete'] },
+    trigger: {
+      kind: 'cdc',
+      operations: ['insert', 'update', 'delete'],
+      startFrom: opts.startFrom ?? 'now',
+    },
   });
   const bridge = await app.bridges.create(input);
 

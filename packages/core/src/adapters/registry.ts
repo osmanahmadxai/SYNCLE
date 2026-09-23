@@ -61,8 +61,8 @@ export function listDrivers(): DriverDefinition[] {
 export function createAdapter(config: ConnectionConfig): DatabaseAdapter {
   const def = registry.get(config.engine);
   if (!def) {
-    // typed so routes answer 501 instead of a generic 500 (e.g. `mssql` is a
-    // declared engine without an adapter implementation yet)
+    // typed so routes answer 501 instead of a generic 500 (a connection saved
+    // by a build that had a driver this one does not)
     throw new UnsupportedError(
       `No driver is registered for engine "${config.engine}"`,
     );

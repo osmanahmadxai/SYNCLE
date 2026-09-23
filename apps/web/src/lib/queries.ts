@@ -8,6 +8,9 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import type {
+  AlertChannelInput,
+  ApiKeyInputDTO,
+  BridgeImportDTO,
   AppSettingsDTO,
   BrowseParams,
   ChangePasswordDTO,
@@ -15,15 +18,25 @@ import type {
   BridgeInputDTO,
   BridgeJob,
   LoginDTO,
+  PasswordResetDTO,
   SetupDTO,
   WorkspaceInputDTO,
+  BridgeBulkInput,
+  UserInputDTO,
+  UserUpdateDTO,
 } from '@syncle/core';
-import { api } from './api';
+import { api, type AuditQuery } from './api';
+import { pollEvery } from './live-events';
 import { useStudio } from './store';
 
 export const queryKeys = {
   authStatus: ['auth', 'status'] as const,
   settings: ['settings'] as const,
+  version: ['version'] as const,
+  alertChannels: ['alert-channels'] as const,
+  users: ['users'] as const,
+  audit: ['audit'] as const,
+  apiKeys: ['api-keys'] as const,
   drivers: ['drivers'] as const,
   workspaces: ['workspaces'] as const,
   connections: ['connections'] as const,
@@ -37,6 +50,12 @@ export const queryKeys = {
   bridge: (id: string) => ['bridges', id] as const,
   bridgeJobs: (id: string) => ['bridges', id, 'jobs'] as const,
   bridgeJob: (id: string, jobId: string) => ['bridges', id, 'jobs', jobId] as const,
+  deadLetters: (id: string) => ['bridges', id, 'deadLetters'] as const,
+  sourceHold: (id: string) => ['bridges', id, 'sourceHold'] as const,
+  schemaDrift: (id: string) => ['bridges', id, 'schemaDrift'] as const,
+  bridgeSchedule: (id: string) => ['bridges', id, 'schedule'] as const,
+  bridgeLoops: (id: string) => ['bridges', id, 'loops'] as const,
+  verifications: (id: string) => ['bridges', id, 'verifications'] as const,
   bridgeDeliveries: (id: string, jobId: string) =>
     ['bridges', id, 'jobs', jobId, 'deliveries'] as const,
 };
@@ -55,6 +74,39 @@ export function useLogin() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: LoginDTO) => api.login(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authStatus }),
+  });
+}
+
+/** only worth showing while a change of master key is under way */
+export function useEncryptionStatus(enabled: boolean) {
+  return useQuery({ queryKey: ['encryptionStatus'], queryFn: () => api.encryptionStatus(), enabled, retry: false });
+}
+
+/** the API processes that are alive on this database, and which of them leads */
+export function useInstances(enabled: boolean) {
+  return useQuery({ queryKey: ['instances'], queryFn: () => api.instances(), enabled, retry: false, refetchInterval: 15_000 });
+}
+
+export function useRotateEncryption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.rotateEncryption(),
+    onSuccess: (report) => qc.setQueryData(['encryptionStatus'], report),
+  });
+}
+
+export function useRequestPasswordReset() {
+  return useMutation({
+    mutationFn: (username?: string) => api.requestPasswordReset(username),
+  });
+}
+
+export function useResetPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PasswordResetDTO) => api.resetPassword(input),
+    // it signs in
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authStatus }),
   });
 }
@@ -97,6 +149,16 @@ export function useSettings() {
   });
 }
 
+/** the running API's version. it cannot change without a restart */
+export function useVersion() {
+  return useQuery({
+    queryKey: queryKeys.version,
+    queryFn: () => api.getVersion(),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 export function useUpdateSettings() {
   const qc = useQueryClient();
   return useMutation({
@@ -105,6 +167,144 @@ export function useUpdateSettings() {
       qc.setQueryData(queryKeys.settings, settings);
       qc.invalidateQueries({ queryKey: queryKeys.settings });
     },
+  });
+}
+
+/* ----- accounts ----- */
+
+export function useUsers(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.users,
+    queryFn: () => api.listUsers(),
+    enabled,
+  });
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UserInputDTO) => api.createUser(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UserUpdateDTO }) =>
+      api.updateUser(id, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.users });
+      // your own role may have changed: what the app shows follows it
+      qc.invalidateQueries({ queryKey: queryKeys.authStatus });
+    },
+  });
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteUser(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useEndUserSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.endUserSessions(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+/* ----- the audit log ----- */
+
+/** one page of who did what; the next page is asked for with the page's `next` */
+export function useAudit(query: AuditQuery, enabled = true) {
+  return useQuery({
+    queryKey: [...queryKeys.audit, query],
+    queryFn: () => api.audit(query),
+    enabled,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useApiKeys() {
+  return useQuery({ queryKey: queryKeys.apiKeys, queryFn: () => api.listApiKeys() });
+}
+
+export function useCreateApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ApiKeyInputDTO) => api.createApiKey(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.apiKeys }),
+  });
+}
+
+export function useRevokeApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.revokeApiKey(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.apiKeys }),
+  });
+}
+
+export function useCloneBridge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.cloneBridge(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
+  });
+}
+
+export function useImportBridges() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BridgeImportDTO) => api.importBridges(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
+  });
+}
+
+export function useBulkBridges() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BridgeBulkInput) => api.bulkBridges(input),
+    // some may have been made even when others were not
+    onSettled: () => qc.invalidateQueries({ queryKey: ['bridges'] }),
+  });
+}
+
+export function useAlertChannels() {
+  return useQuery({
+    queryKey: queryKeys.alertChannels,
+    queryFn: () => api.listAlertChannels(),
+  });
+}
+
+/** create (no id) or update a channel */
+export function useSaveAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string | null; input: AlertChannelInput }) =>
+      id ? api.updateAlertChannel(id, input) : api.createAlertChannel(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
+  });
+}
+
+export function useDeleteAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteAlertChannel(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
+  });
+}
+
+/** the outcome is recorded on the channel, so the list is refreshed either way */
+export function useTestAlertChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.testAlertChannel(id),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.alertChannels }),
   });
 }
 
@@ -244,7 +444,7 @@ export function useBridgeStatuses() {
     queryKey: ['bridgeStatuses', workspaceId],
     queryFn: () => api.listBridgeStatuses(workspaceId as string),
     enabled: !!workspaceId,
-    refetchInterval: 3000,
+    refetchInterval: () => pollEvery(3000),
   });
 }
 
@@ -326,8 +526,13 @@ export function useStartBridgeJob(bridgeId: string) {
 export function useStartWatch(bridgeId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.startWatch(bridgeId),
+    mutationFn: (opts: { fromNow?: boolean; recopy?: boolean } = {}) =>
+      api.startWatch(bridgeId, opts),
+    // refused because the source table changed? the panel's notice says so for
+    // longer than a toast does: have it look now, not on its next minute
+    onError: () => qc.invalidateQueries({ queryKey: queryKeys.schemaDrift(bridgeId) }),
     onSuccess: (job) => {
+      qc.invalidateQueries({ queryKey: queryKeys.sourceHold(bridgeId) });
       upsertBridgeJob(qc, bridgeId, job);
       patchBridgeStatus(qc, bridgeId, { active: true, lastStatus: job.status });
       qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
@@ -361,8 +566,172 @@ export function useRetryFailed(bridgeId: string) {
       qc.invalidateQueries({
         queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId),
       });
+      // on a live bridge this retries the dead-letter queue
+      qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
       qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
     },
+  });
+}
+
+/** retry ONE failed delivery; the job's counters and the delivery itself change */
+export function useRetryDelivery(bridgeId: string, jobId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sequence: number) => api.retryDelivery(bridgeId, jobId, sequence),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+      qc.invalidateQueries({ queryKey: queryKeys.bridgeDeliveries(bridgeId, jobId) });
+      qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
+      qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
+    },
+  });
+}
+
+/**
+ * rows the bridge set aside instead of losing. polled while the bridge is live
+ * (new ones can arrive at any moment), otherwise fetched once.
+ */
+export function useDeadLetters(bridgeId: string | null, live: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.deadLetters(bridgeId) : ['deadLetters', 'none'],
+    queryFn: () => api.listDeadLetters(bridgeId as string, { status: 'pending', limit: 100 }),
+    enabled: !!bridgeId,
+    refetchInterval: () => (live ? pollEvery(5000) : false),
+  });
+}
+
+/**
+ * what a CDC bridge is holding on its source (PostgreSQL: WAL pinned by its
+ * replication slot). it matters most when the bridge is NOT running — that is
+ * when it only grows — so it is polled either way, just slowly
+ */
+export function useSourceHold(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.sourceHold(bridgeId) : ['sourceHold', 'none'],
+    queryFn: () => api.sourceHold(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: 30_000,
+    // the source may be unreachable; that is reported elsewhere, louder
+    retry: false,
+  });
+}
+
+const VERIFYING = ['queued', 'running', 'canceling'];
+
+/** a bridge's verifications, newest first. watched closely while one is running, and not at all otherwise */
+export function useVerifications(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.verifications(bridgeId) : ['verifications', 'none'],
+    queryFn: () => api.verifications(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: (query) =>
+      query.state.data?.some((v) => VERIFYING.includes(v.status)) ? pollEvery(1500) : false,
+    retry: false,
+  });
+}
+
+export function useStartVerification(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: { mode: 'verify' | 'reconcile'; deleteExtra?: boolean }) => api.startVerification(bridgeId, dto),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.verifications(bridgeId) }),
+  });
+}
+
+export function useCancelVerification(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (verificationId: string) => api.cancelVerification(bridgeId, verificationId),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.verifications(bridgeId) }),
+  });
+}
+
+/**
+ * a bridge's replay schedule: whether it is firing, when next, and what became
+ * of the last tick. (under `bridges`, so saving the bridge refreshes it)
+ */
+export function useBridgeSchedule(bridgeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.bridgeSchedule(bridgeId) : ['bridgeSchedule', 'none'],
+    queryFn: () => api.bridgeSchedule(bridgeId as string),
+    enabled: !!bridgeId && enabled,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * the bridges this one is tied to in a ring, and what was kept from going round
+ * again. (under `bridges`: saving ANY bridge can tie or untie this one)
+ */
+export function useBridgeLoops(bridgeId: string | null) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.bridgeLoops(bridgeId) : ['bridgeLoops', 'none'],
+    queryFn: () => api.bridgeLoops(bridgeId as string),
+    enabled: !!bridgeId,
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+/** the next fires of a line being typed in the builder. only asked for a line that has the shape of one */
+export function useSchedulePreview(schedule: { cron: string; timezone: string } | null) {
+  return useQuery({
+    queryKey: ['schedulePreview', schedule?.cron ?? '', schedule?.timezone ?? ''],
+    queryFn: () => api.schedulePreview(schedule as { cron: string; timezone: string }),
+    enabled: !!schedule,
+    staleTime: 30_000,
+    retry: false,
+    // a line the server has refused is not asked about again because the section re-mounted
+    retryOnMount: false,
+  });
+}
+
+/**
+ * has the source table changed since the bridge was set up? asked of the source
+ * itself, so slowly — a stopped bridge says why in its own job, at once. (saving
+ * the bridge invalidates everything under `bridges`, this included)
+ */
+export function useSchemaDrift(bridgeId: string | null) {
+  return useQuery({
+    queryKey: bridgeId ? queryKeys.schemaDrift(bridgeId) : ['schemaDrift', 'none'],
+    queryFn: () => api.schemaDrift(bridgeId as string),
+    enabled: !!bridgeId,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+export function useAcceptSchemaDrift(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.acceptSchemaDrift(bridgeId),
+    onSuccess: (status) => qc.setQueryData(queryKeys.schemaDrift(bridgeId), status),
+  });
+}
+
+/** a retry can turn failed deliveries green, so the job + timeline refresh too */
+function invalidateAfterDeadLetterChange(qc: QueryClient, bridgeId: string) {
+  qc.invalidateQueries({ queryKey: queryKeys.deadLetters(bridgeId) });
+  qc.invalidateQueries({ queryKey: queryKeys.bridgeJobs(bridgeId) });
+  qc.invalidateQueries({ queryKey: ['bridgeStatuses'] });
+}
+
+export function useRetryDeadLetters(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { ids?: string[]; force?: boolean }) =>
+      api.retryDeadLetters(bridgeId, body),
+    // a partial result is still progress: refresh whether it resolved or not
+    onSettled: () => invalidateAfterDeadLetterChange(qc, bridgeId),
+  });
+}
+
+export function useDiscardDeadLetters(bridgeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { ids?: string[] }) => api.discardDeadLetters(bridgeId, body),
+    onSettled: () => invalidateAfterDeadLetterChange(qc, bridgeId),
   });
 }
 
@@ -390,7 +759,7 @@ export function useBridgeJobs(bridgeId: string | null) {
       const active = jobs?.some((r) =>
         ['queued', 'running', 'canceling'].includes(r.status),
       );
-      return active ? 1500 : false;
+      return active ? pollEvery(1500) : false;
     },
   });
 }
@@ -423,7 +792,7 @@ export function useBridgeDeliveries(
         ...opts,
       }),
     enabled: !!bridgeId && !!jobId,
-    refetchInterval: live ? 1500 : false,
+    refetchInterval: () => (live ? pollEvery(1500) : false),
     staleTime: 0,
   });
 

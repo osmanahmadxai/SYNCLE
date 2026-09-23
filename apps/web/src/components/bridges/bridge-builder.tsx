@@ -6,15 +6,20 @@
  * components in `./builder/`. the draft state + cascades live in
  * `./builder/draft.ts`, the pure load/save mappings in `./builder/mapping.ts`.
  */
-import { useEffect, useMemo, useReducer, useRef } from 'react';
-import { Loader2, Webhook } from 'lucide-react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { FlaskConical, Loader2, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
-import type { TableSchema } from '@syncle/core';
+import {
+  columnsAdded,
+  type BridgePreview,
+  type TableSchema,
+} from '@syncle/core';
 import { api, ApiError } from '@/lib/api';
 import {
   useBrowse,
   useConnections,
+  useSettings,
   useCreateBridge,
   useDatabases,
   useSchema,
@@ -29,12 +34,19 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { PAGE_SIZE, builderReducer, initialDraft } from './builder/draft';
-import { buildInput, loadBridge } from './builder/mapping';
+import { redisTargetProblem } from './builder/redis-target';
+import { buildInput, draftTransforms, loadBridge } from './builder/mapping';
 import { SourceSection } from './builder/source-section';
 import { TriggerSection } from './builder/trigger-section';
+import { DryRunDialog } from './builder/dry-run-dialog';
+import { FiltersSection } from './builder/filters-section';
+import { TransformsSection } from './builder/transforms-section';
+import { incompleteFilter, incompleteTransform } from './builder/transform-options';
 import { PayloadSection } from './builder/payload-section';
 import { DestinationSection } from './builder/destination-section';
 import { DeliverySection } from './builder/delivery-section';
+import { ScheduleSection } from './builder/schedule-section';
+import { scheduleProblem } from './builder/schedule-options';
 
 export function BridgeBuilder() {
   const t = useTranslations('bridgeBuilder');
@@ -49,6 +61,7 @@ export function BridgeBuilder() {
     draft;
 
   const { data: connections } = useConnections();
+  const { data: settings } = useSettings();
   const { data: databases } = useDatabases(connectionId || null);
   const { data: schemaData } = useSchema(
     connectionId || null,
@@ -101,8 +114,18 @@ export function BridgeBuilder() {
       };
     }
     // a new bridge runs an on-demand job by default (the reset draft); the user
-    // can switch it to a live bridge in the "What runs in this bridge" selector
-    dispatch({ type: 'reset' });
+    // can switch it to a live bridge in the "What runs in this bridge" selector.
+    // it starts from the instance's saved defaults (Settings › Bridges)
+    dispatch({
+      type: 'reset',
+      defaults: settings
+        ? {
+            pollIntervalMs: settings.defaultPollIntervalMs,
+            maxPerPoll: settings.defaultMaxPerPoll,
+            cdcOperations: settings.defaultCdcOperations,
+          }
+        : undefined,
+    });
     if (bridgeEditor.seed) {
       dispatch({
         type: 'applySeed',
@@ -150,9 +173,33 @@ export function BridgeBuilder() {
     return rows[0];
   }, [rows, mode, singlePk, selectedKeys]);
 
+  const columnNames = useMemo(() => columns.map((c) => c.name), [columns]);
+
+  /* what each column holds, as far as a sample row can tell: a filter typed as
+     "42" on a numeric column is sent as the number 42 */
+  const columnTypes = useMemo(() => {
+    const types: Record<string, string> = {};
+    for (const name of columnNames) {
+      const seen = rows.find((r) => r[name] !== null && r[name] !== undefined);
+      if (seen) types[name] = typeof seen[name];
+    }
+    return types;
+  }, [columnNames, rows]);
+
+  /* the steps exactly as they will be saved, so the preview shows what will run */
+  const { transforms: draftSteps } = draft;
+  const transformList = useMemo(
+    () => draftTransforms({ transforms: draftSteps }, columnTypes),
+    [draftSteps, columnTypes],
+  );
+
+  /* what is sent: the ticked columns, then the ones the transforms add */
   const includedList = useMemo(
-    () => columns.map((c) => c.name).filter((n) => included.has(n)),
-    [columns, included],
+    () => [
+      ...columnNames.filter((n) => included.has(n)),
+      ...columnsAdded(transformList, columnNames),
+    ],
+    [columnNames, included, transformList],
   );
 
   /* ----- save ----- */
@@ -171,7 +218,17 @@ export function BridgeBuilder() {
           (t) =>
             !!t.connectionId &&
             t.table.trim().length > 0 &&
-            (t.writeMode === 'insert' || t.keyColumns.length > 0),
+            // a key per row in Redis: the key template says what the row is found by
+            (t.redisMode === 'template'
+              ? redisTargetProblem(
+                  t,
+                  includedList.map((s) => t.renames[s]?.trim() || s),
+                ) === null
+              : t.writeMode === 'insert' || t.keyColumns.length > 0) &&
+            // a soft delete marks the row in a column of its own
+            (t.onDelete !== 'soft' ||
+              (t.softDeleteColumn.trim().length > 0 &&
+                !t.keyColumns.includes(t.softDeleteColumn.trim()))),
         );
   const canSave =
     !!connectionId &&
@@ -179,14 +236,30 @@ export function BridgeBuilder() {
     destReady &&
     includedList.length > 0 &&
     !(mode === 'selected' && (!singlePk || selectedKeys.size === 0)) &&
-    !watchNeedsColumn;
+    !watchNeedsColumn &&
+    // a half-written condition or step is never dropped on save: it blocks it
+    !draft.filters.some(incompleteFilter) &&
+    !draft.transforms.some(incompleteTransform) &&
+    // a schedule that would be refused is not sent to be refused
+    !(draft.syncMode === 'oneTime' && scheduleProblem(draft.schedule));
+
+  const [dryRun, setDryRun] = useState<{
+    open: boolean;
+    loading: boolean;
+    preview: BridgePreview | null;
+    error: string | null;
+  }>({ open: false, loading: false, preview: null, error: null });
+
+  const sourceEngine = connections?.find((c) => c.id === connectionId)?.engine;
 
   async function handleSave() {
     try {
       const input = buildInput(draft, {
-        columns: columns.map((c) => c.name),
+        columns: columnNames,
         singlePk,
         fallbackName: t('defaultName', { table }),
+        columnTypes,
+        sourceEngine,
       });
       if (editing) {
         await update.mutateAsync({ id: editing, input });
@@ -200,6 +273,29 @@ export function BridgeBuilder() {
     } catch (err) {
       toast.error(t('saveFailed'), {
         description: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
+
+  /** what this draft would do, without saving it or writing anything */
+  async function handleDryRun() {
+    setDryRun({ open: true, loading: true, preview: null, error: null });
+    try {
+      const input = buildInput(draft, {
+        columns: columnNames,
+        singlePk,
+        fallbackName: t('defaultName', { table }),
+        columnTypes,
+        sourceEngine,
+      });
+      const preview = await api.previewDraft(input);
+      setDryRun({ open: true, loading: false, preview, error: null });
+    } catch (err) {
+      setDryRun({
+        open: true,
+        loading: false,
+        preview: null,
+        error: err instanceof ApiError ? err.message : String(err),
       });
     }
   }
@@ -248,12 +344,33 @@ export function BridgeBuilder() {
           <Button variant="ghost" onClick={closeBridgeEditor}>
             {t('cancel')}
           </Button>
+          <Button
+            variant="outline"
+            onClick={handleDryRun}
+            disabled={!canSave || dryRun.loading}
+            title={t('dryRunHint')}
+          >
+            {dryRun.loading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FlaskConical className="mr-2 h-4 w-4" />
+            )}
+            {t('dryRun')}
+          </Button>
           <Button onClick={handleSave} disabled={!canSave || saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {editing ? t('saveBridge') : t('createBridge')}
           </Button>
         </div>
       </div>
+
+      <DryRunDialog
+        open={dryRun.open}
+        onOpenChange={(open) => setDryRun((d) => ({ ...d, open }))}
+        loading={dryRun.loading}
+        preview={dryRun.preview}
+        error={dryRun.error}
+      />
 
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* ---- source / grid ---- */}
@@ -281,18 +398,40 @@ export function BridgeBuilder() {
         <ResizablePanel defaultSize={36} minSize={26}>
           <div className="h-full overflow-y-auto">
             <div className="space-y-5 p-4">
-              <TriggerSection draft={draft} dispatch={dispatch} columns={columns} />
+              <TriggerSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columns}
+                sourceEngine={sourceEngine}
+                bridgeId={editing}
+              />
+              {/* a one-time bridge can run by itself, on a cron line */}
+              {draft.syncMode === 'oneTime' && (
+                <ScheduleSection draft={draft} dispatch={dispatch} />
+              )}
+              <FiltersSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columnNames}
+              />
+              <TransformsSection
+                draft={draft}
+                dispatch={dispatch}
+                columns={columnNames}
+              />
               <PayloadSection
                 draft={draft}
                 dispatch={dispatch}
                 sampleRow={sampleRow}
                 includedList={includedList}
+                transforms={transformList}
               />
               <DestinationSection
                 draft={draft}
                 dispatch={dispatch}
                 includedList={includedList}
                 singlePk={singlePk}
+                sourceTable={table}
               />
               <DeliverySection draft={draft} dispatch={dispatch} />
             </div>

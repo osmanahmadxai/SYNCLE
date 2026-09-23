@@ -31,7 +31,7 @@ export default function Page() {
         carries extra data:
       </p>
       <CodeBlock>{`$ curl http://localhost:3002/api/health
-{"data":{"ok":true}}
+{"data":{"ok":true,"checks":{"database":"ok","redis":"ok"}}}
 
 $ curl http://localhost:3002/api/connections
 {"error":{"code":"UNAUTHORIZED","message":"Authentication required","details":null}}`}</CodeBlock>
@@ -128,9 +128,11 @@ $ curl http://localhost:3002/api/connections
 
       <h2 id="authentication">Authentication</h2>
       <p>
-        Syncle has a single admin account, created on first run with the setup
-        token (the <a href="/docs/quickstart">quickstart</a> walks through
-        that). Signing in sets <code>db_session</code>, a signed httpOnly
+        The first account is created on first run with the setup token (the{' '}
+        <a href="/docs/quickstart">quickstart</a> walks through that); it is
+        an admin, and can make more, each with a{' '}
+        <a href="/docs/self-hosting#accounts">role</a>. Signing in sets{' '}
+        <code>db_session</code>, a signed httpOnly
         cookie with <code>SameSite=Lax</code>, valid for the{' '}
         <code>sessionTtlMinutes</code> setting — one week by default. Keep it
         in a cookie jar and send it back on every call:
@@ -143,12 +145,32 @@ curl -c cookies.txt -H 'Content-Type: application/json' \\
 # every later call sends it back
 curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
       <Note>
-        There are no API keys or bearer tokens — the session cookie is the only
-        credential. Exactly four routes work without it:{' '}
-        <code>GET /api/health</code>, <code>GET /api/auth/status</code>,{' '}
-        <code>POST /api/auth/setup</code> and <code>POST /api/auth/login</code>.
-        Everything else answers 401.
+        Two credentials reach the API: the session cookie of whoever signed
+        in, and an <a href="#api-keys">API key</a> for what cannot sign in. A
+        handful of routes work without either: the two probes{' '}
+        <code>GET /api/health</code> and <code>GET /api/health/ready</code>,{' '}
+        <code>GET /api/auth/status</code>, <code>POST /api/auth/setup</code>,{' '}
+        <code>POST /api/auth/login</code>, and the two a locked-out operator
+        needs: <code>POST /api/auth/reset/request</code> (answers{' '}
+        <code>202</code> and says nothing; if there is an account, a one-time
+        code is printed on the server&apos;s console and written to{' '}
+        <code>reset-code</code> in its data directory) and{' '}
+        <code>POST /api/auth/reset</code> with{' '}
+        <code>{'{ resetCode, newPassword }'}</code> (sets the password, signs
+        in, ends every other session). <code>GET /api/metrics</code>{' '}
+        takes a bearer token of its own instead of a session (and does not
+        exist until one is configured). Everything else answers 401.
       </Note>
+      <p>
+        <code>GET /api/version</code> says which release is running —{' '}
+        <code>{'{ version, source, node }'}</code>, where <code>source</code>{' '}
+        is <code>build</code> when the container image carried the version of
+        the release tag it was built from, and <code>package</code> for a
+        source checkout. It is behind the login on purpose: the public health
+        probe says nothing beyond &quot;up&quot;, and a version number is what
+        someone scanning for a known flaw wants to read without asking. The
+        same line is at the bottom of the Settings dialog.
+      </p>
       <p>
         Repeated failed logins lock the account out per IP and username and
         answer 429 with code <code>RATE_LIMITED</code>; setup attempts are
@@ -308,7 +330,19 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               <td>
                 <code>POST /api/connections/test</code>
               </td>
-              <td>Test an unsaved config without storing it</td>
+              <td>
+                Test an unsaved config without storing it. Add{' '}
+                <code>?from=:id</code> when it is an edit of a saved
+                connection: secrets sent back redacted are then taken from the
+                stored copy. Returns <code>{'{ success, sshHostKey? }'}</code>{' '}
+                — the jump host&apos;s fingerprint, when a tunnel was used. The
+                body takes <code>tls</code> (<code>mode</code>:{' '}
+                <code>disable</code> | <code>require</code> |{' '}
+                <code>verify-ca</code> | <code>verify-full</code>, with
+                optional PEM <code>ca</code>, <code>cert</code>,{' '}
+                <code>key</code> and a <code>servername</code>) and{' '}
+                <code>ssh.hostKey</code>, as every connection body does
+              </td>
             </tr>
             <tr>
               <td>
@@ -328,7 +362,10 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Delete — answers 409 <code>CONFLICT</code> while any bridge
-                still uses it as source or destination
+                still uses it as source or destination, or while Syncle still
+                has a replication slot to remove through it (
+                <code>?force=true</code> deletes it regardless; drop the slot
+                on the server yourself first)
               </td>
             </tr>
             <tr>
@@ -383,7 +420,15 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 <code>POST /api/connections/:id/query?database=</code>
               </td>
               <td>
-                Ad-hoc query — <code>{'{ statement, params }'}</code>
+                Ad-hoc query — <code>{'{ statement, params }'}</code>. On a
+                connection saved with <code>readOnly: true</code> the
+                statement runs only when every part of it is recognisably a
+                read (otherwise 403), and the engine holds it to reading too;
+                every route below that writes answers 403 on such a
+                connection. See{' '}
+                <a href="/docs/workbench#production-and-read-only">
+                  production, and read-only
+                </a>
               </td>
             </tr>
             <tr>
@@ -495,6 +540,221 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         <a href="/docs/configuration">configuration page</a> documents each
         setting and its default.
       </p>
+      <p>
+        <code>GET /api/settings/encryption</code> reports on a{' '}
+        <a href="/docs/self-hosting#changing-the-master-key">
+          change of master key
+        </a>
+        : <code>{'{ previousKeys, reencrypted, unreadable, checkedAt }'}</code>{' '}
+        — how many previous keys are still accepted, and what the last pass over
+        the stored secrets moved to the current key or could not read with
+        any. <code>POST /api/settings/encryption/rotate</code> runs that pass
+        now (it also runs at every start); signed in only, not with an API
+        key.
+      </p>
+      <p>
+        <code>GET /api/settings/instances</code> lists the API processes that
+        are alive on this database —{' '}
+        <code>{'[{ id, startedAt, version, leader, self }]'}</code> — which one{' '}
+        <a href="/docs/self-hosting#more-than-one-api">leads</a>, and which
+        one answered. One entry is the usual answer.
+      </p>
+
+      <h3 id="accounts">Accounts</h3>
+      <p>
+        An admin&apos;s, signed in (never with an API key).{' '}
+        <code>GET /api/auth/users</code> lists them —{' '}
+        <code>{'{ id, username, role, disabledAt, lastLoginAt, createdAt, updatedAt }'}</code>
+        ; <code>POST /api/auth/users</code> with{' '}
+        <code>{'{ username, password, role }'}</code> makes one (role{' '}
+        <code>admin</code>, <code>operator</code> or <code>viewer</code>;
+        default <code>operator</code>); <code>PUT /api/auth/users/:id</code>{' '}
+        with any of <code>{'{ role, newPassword, disabled }'}</code> changes
+        one (a new password or a disable ends its sessions);{' '}
+        <code>DELETE /api/auth/users/:id</code> removes one;{' '}
+        <code>POST /api/auth/users/:id/sessions/end</code> signs it out
+        everywhere. A 400 says why something is refused: the last admin that
+        can sign in, or your own account. <code>GET /api/auth/me</code> now
+        carries <code>role</code>, and a request an account&apos;s role does
+        not allow is a 403 that names the role it takes.{' '}
+        <code>POST /api/auth/reset/request</code> takes an optional{' '}
+        <code>{'{ username }'}</code>: whose code to print; unnamed, the first
+        admin&apos;s.
+      </p>
+
+      <h3 id="audit">The activity log</h3>
+      <p>
+        <code>GET /api/audit</code> — an admin&apos;s — answers{' '}
+        <code>{'{ entries: [{ id, at, actor: { type, id, name }, action, target: { type, id, name } | null, details, ip }], next }'}</code>
+        , newest first. <code>limit</code> (1–200, default 50);{' '}
+        <code>before</code> = the <code>next</code> of the page before, for
+        the page after it; <code>action</code> (one of the names below),{' '}
+        <code>actor</code> (an actor&apos;s name, exactly),{' '}
+        <code>targetId</code>, <code>targetType</code> narrow it. What is
+        recorded and why is in the{' '}
+        <a href="/docs/self-hosting#activity-log">self-hosting guide</a>.
+        Actions: <code>auth.setup</code>, <code>auth.login</code>,{' '}
+        <code>auth.login_failed</code>, <code>auth.logout</code>,{' '}
+        <code>auth.password_changed</code>, <code>auth.reset_requested</code>
+        , <code>auth.password_reset</code>, <code>user.*</code>,{' '}
+        <code>api_key.*</code>, <code>settings.update</code>,{' '}
+        <code>encryption.rotate</code>, <code>workspace.*</code>,{' '}
+        <code>connection.*</code> (create, update, delete, query, rows_*,
+        ddl, restore), <code>bridge.*</code> (create, update, delete, import,
+        bulk_create, clone, run, cancel, retry, skip, start, stop,
+        dead_letters_*, verify, verify_cancel, schema_accepted,
+        slot_surrendered, cleanups_retry, cleanup_dismissed),{' '}
+        <code>retention.run</code>, <code>alert_channel.*</code>.
+      </p>
+
+      <h3 id="api-keys">API keys</h3>
+      <p>
+        A script or a CI job should not be given the operator&apos;s
+        password. Create a key in <strong>Settings › Security</strong> and
+        send it as a bearer token:
+      </p>
+      <CodeBlock>{`$ curl -H "Authorization: Bearer syn_…" http://localhost:3002/api/bridges`}</CodeBlock>
+      <ul>
+        <li>
+          The key is shown <strong>once</strong>, when it is created. What is
+          stored is its SHA-256 — the key is 32 random bytes, so there is
+          nothing to brute-force, and a copy of the metadata store yields no
+          usable key. Lost keys are revoked and replaced, not recovered.
+        </li>
+        <li>
+          <strong>Scope.</strong> <code>read</code> may <code>GET</code> and
+          nothing else — not even a <code>POST</code> that only reads, so
+          that what a read key can do is answerable by looking at the verb.{' '}
+          <code>full</code> may do what the operator can, <em>except</em>{' '}
+          anything about credentials: no key of any scope can list, create or
+          revoke keys, change the password, or end sessions (403). A leaked
+          key cannot mint more keys or lock you out.
+        </li>
+        <li>
+          A key can be given an expiry; a revoked or expired key answers 401
+          at once. Revoked keys stay in the list, crossed out, with when they
+          were last used — so &quot;which key was that?&quot; has an answer.
+        </li>
+      </ul>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint (signed in only)</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/auth/api-keys</code>
+              </td>
+              <td>List keys: name, how each starts, scope, expiry, last use</td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/auth/api-keys</code>
+              </td>
+              <td>
+                <code>{'{ name, scope, expiresInDays? }'}</code> — the answer
+                carries <code>key</code>, this once
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>DELETE /api/auth/api-keys/:id</code>
+              </td>
+              <td>Revoke</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="monitoring">Health, metrics and alerts</h2>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/health</code>
+              </td>
+              <td>
+                Is the API alive, and can it reach its metadata store? 200 —
+                or 503 when the store is unreachable — with{' '}
+                <code>{'{ ok, checks: { database, redis } }'}</code>. It{' '}
+                <em>reports</em> Redis without failing on it: what a
+                container health check should use. Public
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/health/ready</code>
+              </td>
+              <td>
+                Can it do everything? 503 unless the store <em>and</em> Redis
+                answer (replays, polling bridges and the CDC spool run on
+                Redis). What an uptime monitor or a load balancer should use.
+                Public
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/metrics</code>
+              </td>
+              <td>
+                Prometheus text format. Exists only when{' '}
+                <code>SYNCLE_METRICS_TOKEN</code> is set (404 otherwise) and
+                answers only to <code>Authorization: Bearer &lt;token&gt;</code>
+                . See <a href="/docs/self-hosting#monitoring">monitoring</a>{' '}
+                for what it exposes
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/alerts/channels</code>
+              </td>
+              <td>
+                Alert channels. Secrets — everything after a URL&apos;s
+                origin, a signing secret, header values, an SMTP password —
+                come back as <code>••••••••</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/alerts/channels</code>,{' '}
+                <code>PUT …/:id</code>, <code>DELETE …/:id</code>
+              </td>
+              <td>
+                Create, replace, delete. On a <code>PUT</code>, a secret sent
+                back as <code>••••••••</code> keeps what is stored; a mask
+                with nothing stored behind it is refused. Kinds:{' '}
+                <code>webhook</code> (<code>url</code>, optional{' '}
+                <code>headers</code> and <code>secret</code>),{' '}
+                <code>slack</code> (<code>url</code>), <code>email</code> (
+                <code>smtp</code>, <code>from</code>, <code>to</code>); each
+                with <code>name</code>, <code>enabled</code> and{' '}
+                <code>events</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/alerts/channels/:id/test</code>
+              </td>
+              <td>
+                Sends a test alert through the channel as stored; answers{' '}
+                <code>{'{ ok, detail }'}</code> and records the outcome on the
+                channel
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <h2 id="bridges">Bridges</h2>
       <p>
@@ -554,9 +814,116 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>Full lifecycle teardown, then delete</td>
             </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/bulk</code>
+              </td>
+              <td>
+                One bridge per table, for many tables at once. Body{' '}
+                <code>
+                  {'{ source: { connectionId, database?, schema?, tables: [...] }, destination: { connectionId, database?, schema?, tablePrefix? }, trigger: { kind: "cdc", startFrom?, slot? } | { kind: "replay" }, delivery? }'}
+                </code>
+                . Each table is copied as it is into <code>tablePrefix + table</code>,
+                keyed by its primary key; on PostgreSQL the bridges{' '}
+                <a href="/docs/cdc#shared-slot">share one replication slot</a>{' '}
+                unless <code>{'slot: "own"'}</code>. Answers{' '}
+                <code>{'{ created: [{ id, name, table }], skipped: [{ table, reason }] }'}</code>{' '}
+                — a table with no primary key, or one that cannot be read, is
+                skipped with the reason and does not stop the others. Nothing
+                is started
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/clone</code>
+              </td>
+              <td>
+                A copy under a new name, credential included (it never
+                leaves the instance); no job, no position
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/export</code>,{' '}
+                <code>GET /api/bridges/export?workspaceId=</code>
+              </td>
+              <td>
+                One bridge, or a workspace&apos;s, as a document —{' '}
+                <a href="/docs/bridges#export-import">no secret is in it</a>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/import</code>
+              </td>
+              <td>
+                <code>{'{ document, connectionMap?, workspaceId? }'}</code>.
+                All or nothing. 400 with{' '}
+                <code>{'details.reason = "unresolved-connections"'}</code>{' '}
+                and the candidates when the file refers to a connection this
+                instance has no obvious counterpart for
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+
+      <p>
+        The body of a create or an update is the bridge&apos;s whole
+        configuration. Its source can carry <code>filters</code> (ANDed;
+        operators <code>eq</code>, <code>neq</code>, <code>gt</code>,{' '}
+        <code>gte</code>, <code>lt</code>, <code>lte</code>,{' '}
+        <code>contains</code>, <code>startsWith</code>,{' '}
+        <code>endsWith</code>, <code>in</code>, <code>isNull</code>,{' '}
+        <code>notNull</code>), and its <code>transform.columns</code> is the
+        ordered list of{' '}
+        <a href="/docs/bridges#column-transforms">column transforms</a> — at
+        most 100, each one of the five kinds below. A kind the server does
+        not know is refused with a <code>400</code>, never ignored.
+      </p>
+      <p>
+        A CDC trigger is{' '}
+        <code>{'{ "kind": "cdc", "operations": [...], "startFrom": "now" | "beginning" }'}</code>
+        . <code>beginning</code>{' '}
+        <a href="/docs/bridges#copy-then-follow">
+          copies the table, then follows its changes
+        </a>{' '}
+        with nothing lost in between; <code>now</code> (the default, and what
+        every bridge saved before this option existed is) follows changes
+        only.
+      </p>
+      <CodeBlock title="Filters and column transforms in a bridge body">{`{
+  "source": {
+    "kind": "table", "connectionId": "…", "table": "customers",
+    "filters": [
+      { "column": "age", "operator": "gte", "value": 18 },
+      { "column": "deleted_at", "operator": "isNull" }
+    ]
+  },
+  "transform": {
+    "columns": [
+      { "kind": "text", "column": "email", "op": "lower" },
+      { "kind": "mask", "column": "email", "mode": "hash", "salt": "…" },
+      { "kind": "mask", "column": "card", "mode": "partial", "keepStart": 0, "keepEnd": 4, "fill": "*" },
+      { "kind": "cast", "column": "joined", "to": "date", "onError": "null" },
+      { "kind": "default", "column": "tier", "value": "standard" },
+      { "kind": "set", "column": "full_name", "template": "{{first}} {{last}}" }
+    ]
+  }
+}`}</CodeBlock>
+      <p>
+        <code>mask.mode</code> is <code>partial</code>, <code>redact</code>,{' '}
+        <code>hash</code> or <code>null</code>; <code>cast.to</code> is{' '}
+        <code>string</code>, <code>number</code>, <code>integer</code>,{' '}
+        <code>boolean</code>, <code>date</code> or <code>json</code>, and its{' '}
+        <code>onError</code> is <code>fail</code> (the default),{' '}
+        <code>null</code> or <code>keep</code>; <code>text.op</code> is{' '}
+        <code>trim</code>, <code>lower</code> or <code>upper</code>. A column
+        that a <code>set</code> or a <code>default</code> adds has to be named
+        in <code>transform.fields</code> (when that list is pinned) and in a
+        database target&apos;s <code>mapping</code> to be delivered, like any
+        other column.
+      </p>
 
       <h3 id="jobs-and-deliveries">Jobs and deliveries</h3>
       <div className="table-scroll">
@@ -574,7 +941,25 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Render what would be delivered without delivering — body{' '}
-                <code>{'{ sampleRow?, limit }'}</code>, limit 1–10, default 3
+                <code>{'{ sampleRow?, limit }'}</code>, limit 1–10, default 3.
+                For a database destination each target also reports{' '}
+                <code>exists</code> and, when a run would create the table,{' '}
+                <code>plannedColumns</code> (name, source type, target type,
+                nullable, primary key); <code>warnings</code> names every
+                column the target cannot hold faithfully. Read-only: nothing
+                is created
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/preview</code>
+              </td>
+              <td>
+                The same dry run for a bridge that is <em>not saved</em> —
+                body <code>{'{ bridge, sampleRow?, limit }'}</code>, where{' '}
+                <code>bridge</code> is exactly what <code>POST /api/bridges</code>{' '}
+                takes. This is what the builder&apos;s <strong>Dry run</strong>{' '}
+                button calls. Nothing is stored, created or delivered
               </td>
             </tr>
             <tr>
@@ -604,7 +989,43 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
                 <code>POST /api/bridges/:id/jobs/:jobId/retry-failed</code>
               </td>
               <td>
-                Re-queue the same job to re-send only its failed deliveries
+                Re-queue the same job to re-send only its failed deliveries.
+                On a watch or CDC bridge whose failed rows are in the
+                dead-letter queue, retries the queue instead — without
+                stopping the bridge. A replay that had <em>stopped</em> at a
+                failure (on failure: abort) then carries on from where it
+                stopped: the rows after the failure were never read, and
+                &quot;completed&quot; has to mean them too
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>
+                  POST /api/bridges/:id/jobs/:jobId/deliveries/:sequence/retry
+                </code>
+              </td>
+              <td>
+                Retry one failed delivery, now; answers with the delivery as
+                it is afterwards. Rows a live bridge set aside are retried
+                from its dead-letter queue (re-read from the source);
+                anything else is re-sent from what was captured. 400 unless
+                the delivery is <code>failed</code>, 409 while the job is
+                active
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>
+                  GET /api/bridges/:id/jobs/:jobId/failures?format=csv|ndjson
+                </code>
+              </td>
+              <td>
+                The job&apos;s failed deliveries as a file download:
+                sequence, operation, row count, the rows&apos; keys,
+                attempts, HTTP status, error, time and the payload that was
+                sent. Streamed, so a job with very many failures is fine. CSV
+                cells that would be read as a formula by a spreadsheet are
+                neutralised with a leading apostrophe
               </td>
             </tr>
             <tr>
@@ -645,6 +1066,75 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
         deliveries that are still queued.
       </p>
 
+      <h3 id="dead-letters">Dead letters</h3>
+      <p>
+        Rows a watch or CDC bridge could not deliver under{' '}
+        <code>onError: continue</code>, kept in full.{' '}
+        <a href="/docs/bridges#when-a-delivery-fails">How bridges work</a>{' '}
+        explains when a row lands here and what a retry does.
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/dead-letters</code>
+              </td>
+              <td>
+                Newest first; filters <code>status=</code> (one of{' '}
+                <code>pending</code>, <code>resolved</code>,{' '}
+                <code>discarded</code>), <code>offset</code>,{' '}
+                <code>limit</code> (default 100, at most 500). Returns{' '}
+                <code>{'{ items, pendingEntries, pendingRows }'}</code> — the
+                two counts cover the whole bridge, not just the page
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/dead-letters/retry</code>
+              </td>
+              <td>
+                Body <code>{'{ ids?, force? }'}</code>. Omit <code>ids</code>{' '}
+                to retry every pending entry (up to 500 per call, oldest
+                first). Returns{' '}
+                <code>{'{ resolved, stillFailing, needsForce }'}</code>. Safe
+                while the bridge is running; a second call while one is in
+                progress is a 409
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/dead-letters/discard</code>
+              </td>
+              <td>
+                Body <code>{'{ ids? }'}</code>. Marks pending entries as never
+                to be delivered; returns <code>{'{ discarded }'}</code>. The
+                entries stay on record and their delivery stays failed
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Each item carries <code>op</code> (<code>insert</code>,{' '}
+        <code>update</code>, <code>delete</code>, or <code>null</code> for a
+        watch bridge), the source <code>rows</code> as read,{' '}
+        <code>error</code>, <code>attempts</code>, the{' '}
+        <code>sequence</code> of the delivery it came from, and{' '}
+        <code>needsForce</code>. In <code>rows</code>, binary values are
+        shown as a byte count rather than dumped; the stored copy is
+        complete. An entry with <code>needsForce: true</code> was left alone
+        by a plain retry because its source row is gone and the bridge does
+        not propagate deletes — send <code>force: true</code> to write the
+        recorded row anyway, or discard it.
+      </p>
+
       <h3 id="live-listening">Live listening</h3>
       <div className="table-scroll">
         <table>
@@ -661,9 +1151,14 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Probe whether a source can do CDC —{' '}
-                <code>{'{ connectionId, database?, schema?, table }'}</code>;
-                see <a href="/docs/cdc">CDC setup</a> for what readiness means
-                per engine
+                <code>{'{ connectionId, database?, schema?, table, bridgeId? }'}</code>
+                . Pass <code>bridgeId</code> for a bridge that already exists,
+                so that the replication slot it owns is not counted against
+                it. Besides <code>checks</code> and <code>instructions</code>{' '}
+                the answer may carry <code>advisories</code>: things that do
+                not block a start but are worth knowing first. See{' '}
+                <a href="/docs/cdc">CDC setup</a> for what readiness means per
+                engine
               </td>
             </tr>
             <tr>
@@ -672,7 +1167,172 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
               </td>
               <td>
                 Start live listening; routed to CDC or polling watch by the
-                bridge&apos;s trigger
+                bridge&apos;s trigger. If the bridge&apos;s place in the
+                source&apos;s change log is gone, it answers 400 with{' '}
+                <code>{'details: { reason: "position-lost" }'}</code>; send{' '}
+                <code>{'{ "fromNow": true }'}</code> to continue from the
+                current position and accept the gap. On a CDC bridge whose
+                trigger has <code>startFrom: &quot;beginning&quot;</code>, add{' '}
+                <code>{'"recopy": true'}</code> to{' '}
+                <a href="/docs/bridges#copy-then-follow">copy the table again</a>{' '}
+                first; without it, &quot;from now&quot; copies nothing
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/source-hold</code>
+              </td>
+              <td>
+                What a CDC bridge is holding on its source —{' '}
+                <code>
+                  {'{ kind, name, exists, active, retainedBytes, limitBytes, status, level, message, running }'}
+                </code>
+                , or <code>null</code> when it holds nothing. For PostgreSQL,{' '}
+                <code>retainedBytes</code> is the WAL pinned by the
+                bridge&apos;s replication slot
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/loops</code>
+              </td>
+              <td>
+                Is this bridge tied to others in a{' '}
+                <a href="/docs/bridges#two-way">ring</a> —{' '}
+                <code>{'{ guard, fedBy: [{ bridgeId, name }], feeds: [...], heldBack }'}</code>
+                . <code>fedBy</code> are the bridges that write the table this
+                one reads, <code>feeds</code> the enabled watch and CDC bridges
+                that read a table it writes (both not empty = a ring);{' '}
+                <code>heldBack</code> counts the changes it
+                recognised as Syncle&apos;s own and did not send round
+                again. <code>guard: false</code> means loop
+                prevention is switched off
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/schema-drift</code>
+              </td>
+              <td>
+                Has the source table{' '}
+                <a href="/docs/bridges#schema-changes">changed</a> since the
+                bridge was set up —{' '}
+                <code>
+                  {'{ baselineAt, checkedAt, drift: { added, removed, retyped } | null, missingUsed }'}
+                </code>
+                . <code>missingUsed</code> lists the columns the bridge uses
+                that the table no longer has: not empty means the bridge will
+                not run. Reads the source; changes nothing
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/schema-drift/accept</code>
+              </td>
+              <td>
+                The table as it is now becomes what the bridge is built for.{' '}
+                <code>400</code> with{' '}
+                <code>{'details.reason: "schema-drift"'}</code> and{' '}
+                <code>details.missingUsed</code> while the bridge still uses a
+                column that is gone — edit the bridge instead; a{' '}
+                <code>PUT</code> that no longer uses it accepts the table. The
+                same <code>reason</code> comes back from{' '}
+                <code>watch/start</code> when a live bridge is refused for it
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/verify</code>
+              </td>
+              <td>
+                Start a{' '}
+                <a href="/docs/bridges#verify">verification</a> in the
+                background. Body{' '}
+                <code>{'{ mode: "verify" | "reconcile", deleteExtra?: boolean }'}</code>
+                ; answers <code>202</code> with the verification. <code>400</code>{' '}
+                (<code>{'details.reason: "not-verifiable"'}</code>) for a
+                bridge with a query source or an HTTP destination,{' '}
+                <code>409</code> while one is running or a replay of the bridge
+                is
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/verifications[/:verificationId]</code>
+              </td>
+              <td>
+                The last ten, newest first — or one. Each:{' '}
+                <code>
+                  {'{ id, mode, status, sourceRows, sourceTotal, inSync, error, targets: [{ target, unsupported, notes, checked, missing, different, extra, fixed, removed, samples }] }'}
+                </code>
+                . <code>inSync</code> is <code>null</code> until it has
+                completed; <code>extra</code> is <code>null</code> when rows
+                that are only in the destination were not looked for. Poll this
+                for progress
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/:id/verifications/:verificationId/cancel</code>
+              </td>
+              <td>Stop one that is queued or running</td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/:id/schedule</code>
+              </td>
+              <td>
+                A replay bridge&apos;s{' '}
+                <a href="/docs/bridges#scheduled-replays">schedule</a> —{' '}
+                <code>
+                  {'{ schedule, active, nextRuns, lastTickAt, lastOutcome, lastError }'}
+                </code>
+                . <code>active</code> is whether it is registered and firing;{' '}
+                <code>lastOutcome</code> is <code>started</code>,{' '}
+                <code>skipped-active</code> (the run before was still going)
+                or <code>failed</code>. The schedule itself is part of the
+                bridge: set it with <code>trigger.schedule</code> on{' '}
+                <code>POST</code>/<code>PUT /api/bridges</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/schedule-preview</code>
+              </td>
+              <td>
+                <code>{'{ cron, timezone }'}</code> →{' '}
+                <code>{'{ nextRuns: [5 ISO times] }'}</code>, worked out by the
+                library that fires schedules. <code>400</code> with the reason
+                for a line or a zone that cannot be used
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>POST /api/bridges/retention/run</code>
+              </td>
+              <td>
+                Apply the{' '}
+                <a href="/docs/configuration#delivery-history">
+                  delivery-history retention
+                </a>{' '}
+                now instead of at the next hourly sweep. Answers{' '}
+                <code>
+                  {'{ expiredDeliveries, overflowDeliveries, deadLetters, jobsEmptied, limited }'}
+                </code>
+                ; <code>limited</code> means the sweep stopped at its
+                500,000-row limit and the rest goes next time
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>GET /api/bridges/cdc/cleanups</code>
+              </td>
+              <td>
+                Replication slots of deleted or edited bridges that could not
+                be dropped yet. They are retried every minute;{' '}
+                <code>POST /api/bridges/cdc/cleanups/retry</code> tries now,
+                and <code>DELETE /api/bridges/cdc/cleanups/:id</code> stops
+                tracking one you removed by hand
               </td>
             </tr>
             <tr>
@@ -684,6 +1344,49 @@ curl -b cookies.txt http://localhost:3002/api/bridges`}</CodeBlock>
           </tbody>
         </table>
       </div>
+
+      <h2 id="events">Events</h2>
+      <p>
+        <code>GET /api/events</code> is a stream of{' '}
+        <a href="https://developer.mozilla.org/docs/Web/API/Server-sent_events">
+          server-sent events
+        </a>
+        : one message per thing that changed, as it changes. The web app
+        listens to it instead of asking every few seconds whether a run has
+        moved on, and anything else with a session or an API key may listen
+        the same way (<code>curl -N -H &quot;Authorization: Bearer …&quot;</code>
+        ). Each message&apos;s <code>data</code> is one JSON event:
+      </p>
+      <pre>
+        <code>{`{ "type": "bridge.job", "bridgeId": "…", "jobId": "…", "at": "2026-09-23T10:00:00.000Z" }`}</code>
+      </pre>
+      <p>
+        An event says only <em>that</em> something changed and what it was
+        about — ask for the thing itself, the way you would have anyway. The
+        kinds: <code>bridge</code> (<code>bridgeId</code>),{' '}
+        <code>bridge.job</code> (<code>bridgeId</code>, <code>jobId</code>),{' '}
+        <code>bridge.deliveries</code> (<code>jobId</code>),{' '}
+        <code>bridge.verification</code> and <code>bridge.deadLetters</code>{' '}
+        (<code>bridgeId</code>), <code>connection</code> and{' '}
+        <code>workspace</code> (<code>id</code>), <code>settings</code>,{' '}
+        <code>users</code>, <code>apiKeys</code>, <code>audit</code>,{' '}
+        <code>alertChannels</code>. An id is present when the change was about
+        one thing; a change to many at once names none. A burst of changes
+        about one thing (the deliveries of a run, ten a second) is thinned to
+        one event at once and one when the burst pauses. Events from every API
+        process reach every stream, whichever process it was opened on.
+      </p>
+      <p>
+        The stream sends a comment every 25 seconds so that nothing between
+        the two ends decides it is idle, and is ended by the server after 15
+        minutes; a browser&apos;s <code>EventSource</code> opens a new one by
+        itself (it is told to wait 2 seconds), and any other client should do
+        the same. Nothing is replayed on reconnection — ask again for what you
+        care about, then listen. A proxy in front of Syncle has to pass the
+        stream through unbuffered: the response says{' '}
+        <code>Cache-Control: no-transform</code> and{' '}
+        <code>X-Accel-Buffering: no</code>, which the usual ones honour.
+      </p>
 
       <h2 id="limits">Limits</h2>
       <ul>

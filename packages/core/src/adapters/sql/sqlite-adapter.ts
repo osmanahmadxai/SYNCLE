@@ -30,6 +30,29 @@ import {
  * the richer values that flow in from other engines (booleans, Dates, JSON
  * objects) into a storable scalar so a cross-engine bridge into SQLite works.
  */
+/**
+ * an integer read from SQLite, without the silent rounding. better-sqlite3
+ * returns every integer as a JavaScript number unless told otherwise, so
+ * 9223372036854775807 came back as 9223372036854776000 — and a bridge reading
+ * from SQLite then wrote that wrong value everywhere. a number when it is
+ * exact, otherwise the digits as a string: the same convention the Postgres
+ * (int8) and MySQL (`bigNumberStrings`) adapters already follow.
+ */
+function exactInteger(value: bigint): number | string {
+  return value >= BigInt(Number.MIN_SAFE_INTEGER) &&
+    value <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(value)
+    : value.toString();
+}
+
+function exactIntegers(row: Record<string, unknown>): Record<string, unknown> {
+  for (const key of Object.keys(row)) {
+    const v = row[key];
+    if (typeof v === 'bigint') row[key] = exactInteger(v);
+  }
+  return row;
+}
+
 function coerceSqliteParam(value: unknown): unknown {
   if (value === undefined) return null;
   if (typeof value === 'boolean') return value ? 1 : 0;
@@ -49,6 +72,7 @@ export const SQLITE_CAPABILITIES: AdapterCapabilities = {
   rowEditing: true,
   transactions: true,
   ddl: true,
+  keysetPaging: true,
   manageDatabases: false,
   backupFormats: ['json', 'sql'],
 };
@@ -122,9 +146,13 @@ export class SqliteAdapter extends BaseSqlAdapter {
       const stmt = db.prepare(sql);
       const isSelect = stmt.reader;
       if (isSelect) {
-        const rows = stmt.all(...(bound as never[])) as Array<
-          Record<string, unknown>
-        >;
+        // SQLite integers are 64-bit; a JavaScript number is exact only to
+        // 2^53. read as BigInt, then narrow each value back to a number when
+        // that loses nothing (see `exactInteger`)
+        stmt.safeIntegers(true);
+        const rows = (
+          stmt.all(...(bound as never[])) as Array<Record<string, unknown>>
+        ).map(exactIntegers);
         const columns = (stmt.columns?.() ?? []).map((c) => ({
           name: c.name,
           dataType: c.type ?? undefined,
@@ -161,6 +189,25 @@ export class SqliteAdapter extends BaseSqlAdapter {
     params: unknown[],
   ): Promise<QueryResult> {
     return this.runOnDb(this.getDb(), sql, params);
+  }
+
+  /**
+   * SQLite has no read-only transaction, and something better: a prepared
+   * statement says of itself whether it writes. (`prepare` takes ONE statement,
+   * so there is no second one riding along.)
+   */
+  override async queryReadOnly(statement: string, params?: unknown[]): Promise<QueryResult> {
+    const db = this.getDb();
+    let readonly: boolean;
+    try {
+      readonly = db.prepare(statement).readonly;
+    } catch (err) {
+      throw new QueryError((err as Error).message, { sql: statement });
+    }
+    if (!readonly) {
+      throw new QueryError('This connection is read-only, and SQLite says this statement writes.', { sql: statement });
+    }
+    return this.query(statement, params);
   }
 
   /**
@@ -245,6 +292,10 @@ export class SqliteAdapter extends BaseSqlAdapter {
       const columns: ColumnSchema[] = cols.map((c) => ({
         name: c.name,
         dataType: c.type || 'BLOB',
+        // an undeclared column has BLOB affinity, which is what the label above
+        // says — but it holds whatever was put in it, usually text. a bridge
+        // must not mistake it for a declared BLOB, so it gets the truth: ''
+        nativeType: c.type ?? '',
         nullable: c.notnull === 0,
         isPrimaryKey: c.pk > 0,
         isUnique: false,

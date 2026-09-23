@@ -8,6 +8,7 @@ import { useConnections, useDeleteConnection } from '@/lib/queries';
 import { useStudio } from '@/lib/store';
 import { engineMeta } from '@/lib/engines';
 import { cn } from '@/lib/utils';
+import { ConnectionBadges } from './connection-badges';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -107,6 +108,7 @@ export function ConnectionList() {
                   {meta.abbr}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{conn.name}</span>
+                <ConnectionBadges connection={conn} />
               </button>
 
               <DropdownMenu>

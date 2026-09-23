@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useTranslations } from 'next-intl';
-import { Pencil, Play, Radio, Square, Trash2, Loader2 } from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
+import { CopyPlus, Download, Pencil, Play, Radio, ScanSearch, Square, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { ApiError } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import { downloadText, fileSlug } from '@/lib/download';
 import {
+  useCloneBridge,
   useDeleteBridge,
   useBridgeJobs,
   useBridges,
@@ -19,6 +21,11 @@ import { cn } from '@/lib/utils';
 import { useConfirm } from '@/components/confirm';
 import { Button } from '@/components/ui/button';
 import { JobDetail, JobStatusBadge } from './job-detail';
+import { JobStrip } from './job-strip';
+import { SchemaDriftNotice } from './schema-drift-notice';
+import { LoopNotice } from './loop-notice';
+import { ScheduleNotice } from './schedule-notice';
+import { VerifyDialog } from './verify-dialog';
 import { WorkspaceMap } from './workspace-map';
 
 export function BridgesView() {
@@ -53,6 +60,12 @@ export function BridgesView() {
       destLabel={destinationLabel(dest)}
       endpoint={endpoint}
       isWatch={bridge.trigger.kind !== 'replay'}
+      copiesFirst={
+        bridge.trigger.kind === 'cdc' &&
+        bridge.trigger.startFrom === 'beginning'
+      }
+      // only a table that is copied into a database can be compared with its copy
+      verifiable={bridge.source.kind === 'table' && dest.kind === 'database'}
       onDeleted={() => selectBridge(null)}
     />
   );
@@ -65,6 +78,8 @@ function BridgePanel({
   destLabel,
   endpoint,
   isWatch,
+  copiesFirst,
+  verifiable,
   onDeleted,
 }: {
   bridgeId: string;
@@ -73,18 +88,24 @@ function BridgePanel({
   destLabel: string;
   endpoint: EndpointInfo;
   isWatch: boolean;
+  /** a change-stream bridge that copies its table before it follows it */
+  copiesFirst: boolean;
+  verifiable: boolean;
   onDeleted: () => void;
 }) {
   const confirm = useConfirm();
+  const locale = useLocale();
   const t = useTranslations('bridges');
   const tc = useTranslations('common');
-  const { openBridgeEditor } = useStudio();
+  const { openBridgeEditor, selectBridge } = useStudio();
   const start = useStartBridgeJob(bridgeId);
   const startWatch = useStartWatch(bridgeId);
   const stopWatch = useStopWatch(bridgeId);
   const del = useDeleteBridge();
+  const clone = useCloneBridge();
   const { data: jobs } = useBridgeJobs(bridgeId);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const listening = !!jobs?.some((r) =>
     ['queued', 'running', 'canceling'].includes(r.status),
   );
@@ -102,6 +123,25 @@ function BridgePanel({
 
   const selectedJob = jobs?.find((r) => r.id === selectedJobId) ?? null;
 
+  async function handleClone() {
+    try {
+      const copy = await clone.mutateAsync(bridgeId);
+      toast.success(t('cloned', { name: copy.name }));
+      selectBridge(copy.id);
+    } catch (err) {
+      toast.error(t('couldNotClone'), { description: err instanceof ApiError ? err.message : String(err) });
+    }
+  }
+
+  async function handleExport() {
+    try {
+      const doc = await api.exportBridge(bridgeId);
+      downloadText(`${fileSlug(bridgeName)}.syncle-bridge.json`, `${JSON.stringify(doc, null, 2)}\n`);
+    } catch (err) {
+      toast.error(t('couldNotExport'), { description: err instanceof ApiError ? err.message : String(err) });
+    }
+  }
+
   async function handleRun() {
     try {
       const job = await start.mutateAsync({});
@@ -114,12 +154,55 @@ function BridgePanel({
     }
   }
 
-  async function handleStartWatch() {
+  async function handleStartWatch(fromNow = false, recopy = false) {
     try {
-      const job = await startWatch.mutateAsync();
+      const job = await startWatch.mutateAsync({ fromNow, recopy });
       setSelectedJobId(job.id);
       toast.success(t('listeningForData'));
     } catch (err) {
+      // the bridge's place in the source's change log is gone. it can only
+      // carry on from now, leaving a gap — which is the user's call, not ours
+      const lost =
+        err instanceof ApiError &&
+        (err.details as { reason?: string } | undefined)?.reason ===
+          'position-lost';
+      if (lost && !fromNow) {
+        // a bridge that copied its table once can do it again, which brings
+        // every row that still exists up to date. offered first; declining it
+        // leads to the plain "continue from now", never straight to a start
+        if (copiesFirst) {
+          const again = await confirm({
+            title: t('positionLostTitle'),
+            description: (
+              <span className="space-y-2">
+                <span className="block">{(err as ApiError).message}</span>
+                <span className="block">
+                  {t('positionLostRecopyDescription')}
+                </span>
+              </span>
+            ),
+            confirmText: t('copyAgainThenFollow'),
+            cancelText: t('withoutCopying'),
+          });
+          if (again) {
+            await handleStartWatch(true, true);
+            return;
+          }
+        }
+        const ok = await confirm({
+          title: t('positionLostTitle'),
+          description: (
+            <span className="space-y-2">
+              <span className="block">{(err as ApiError).message}</span>
+              <span className="block">{t('positionLostDescription')}</span>
+            </span>
+          ),
+          confirmText: t('continueFromNow'),
+          destructive: true,
+        });
+        if (ok) await handleStartWatch(true);
+        return;
+      }
       toast.error(t('couldNotStartListening'), {
         description: err instanceof ApiError ? err.message : String(err),
       });
@@ -185,7 +268,7 @@ function BridgePanel({
             ) : (
               <Button
                 size="sm"
-                onClick={handleStartWatch}
+                onClick={() => void handleStartWatch()}
                 disabled={startWatch.isPending}
               >
                 {startWatch.isPending ? (
@@ -214,13 +297,39 @@ function BridgePanel({
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
             {tc('edit')}
           </Button>
+          {verifiable && (
+            <Button size="sm" variant="ghost" title={t('verifyHint')} aria-label={t('verify')} onClick={() => setVerifying(true)}>
+              <ScanSearch className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" title={t('clone')} aria-label={t('clone')} disabled={clone.isPending} onClick={() => void handleClone()}>
+            <CopyPlus className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" title={t('exportHint')} aria-label={t('export')} onClick={() => void handleExport()}>
+            <Download className="h-3.5 w-3.5" />
+          </Button>
           <Button size="sm" variant="ghost" onClick={handleDelete}>
             <Trash2 className="text-destructive h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
+      {verifiable && verifying && <VerifyDialog bridgeId={bridgeId} open={verifying} onOpenChange={setVerifying} />}
+
+      {/* a replay that runs by itself: when next, and whether the last tick started one */}
+      <ScheduleNotice bridgeId={bridgeId} enabled={!isWatch} />
+
+      {/* tied to another bridge in a ring (A -> B plus B -> A); silent otherwise */}
+      <LoopNotice bridgeId={bridgeId} />
+
+      {/* the source table is not the one this bridge was built on; silent otherwise */}
+      <SchemaDriftNotice
+        bridgeId={bridgeId}
+        onEdit={() => openBridgeEditor({ editingId: bridgeId })}
+      />
+
       {/* jobs strip */}
+      <JobStrip jobs={jobs ?? []} selectedId={selectedJobId} onSelect={setSelectedJobId} locale={locale} />
 
       {/* selected job */}
       <div className="flex min-h-0 flex-1 flex-col">

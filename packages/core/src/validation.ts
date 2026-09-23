@@ -1,17 +1,18 @@
 /** shared Zod schemas for connection payloads (used on client and server) */
 import { z } from 'zod';
 
-// mirrors the DatabaseEngine union, including forward declarations that have
-// no adapter yet (mssql). the API re-validates the engine against the actual
-// driver registry before persisting, so a declared-but-unimplemented engine is
-// rejected there instead of being saved and 501ing on every later operation.
+// mirrors the DatabaseEngine union: the engines that HAVE an adapter. `mssql`
+// used to be listed as a forward declaration, on the understanding that the API
+// would refuse it until a driver existed — it never did, so such a connection
+// could be saved and then answered 501 to everything. an engine goes here when
+// its adapter does (a test holds the two lists together), and the API checks the
+// driver registry as well before it persists anything.
 export const engineSchema = z.enum([
   'postgres',
   'mysql',
   'sqlite',
   'mongodb',
   'redis',
-  'mssql',
 ]);
 
 /**
@@ -27,7 +28,43 @@ export const sshConfigSchema = z.object({
   password: z.string().optional(),
   privateKey: z.string().optional(),
   passphrase: z.string().optional(),
+  hostKey: z
+    .string()
+    .trim()
+    .max(200)
+    .refine((v) => v === '' || /^SHA256:[A-Za-z0-9+/]{43}=?$/.test(v), {
+      message: 'Expected an OpenSSH fingerprint, e.g. SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8',
+    })
+    .optional(),
 });
+
+const pem = (what: string) =>
+  z
+    .string()
+    .max(64_000)
+    .refine((v) => v.trim() === '' || /-----BEGIN [A-Z0-9 ]+-----/.test(v), {
+      message: `${what} must be PEM text (it starts with "-----BEGIN …-----")`,
+    });
+
+export const tlsConfigSchema = z
+  .object({
+    mode: z.enum(['disable', 'require', 'verify-ca', 'verify-full']),
+    ca: pem('The CA certificate').optional(),
+    cert: pem('The client certificate').optional(),
+    // may also be the redaction sentinel on an update ("keep what is stored")
+    key: z.string().max(64_000).optional(),
+    servername: z.string().max(255).optional(),
+  })
+  .superRefine((val, ctx) => {
+    const has = (v?: string): boolean => !!v && v.trim() !== '';
+    if (has(val.cert) !== has(val.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [has(val.cert) ? 'key' : 'cert'],
+        message: 'A client certificate and its private key are given together, or not at all',
+      });
+    }
+  });
 
 export const connectionInputSchema = z
   .object({
@@ -36,12 +73,22 @@ export const connectionInputSchema = z
     workspaceId: z.string().optional(),
     engine: engineSchema,
     color: z.string().optional(),
+    /**
+     * nothing is written through this connection: no row, no table, no restore,
+     * no statement in the editor that is not recognisably a read — and it cannot
+     * be a bridge's destination. a guard against accidents, not a security
+     * boundary: for that, connect with a database role that cannot write
+     */
+    readOnly: z.boolean().optional(),
+    /** what this database is, so that production looks like production everywhere it is shown */
+    environment: z.enum(['production', 'staging', 'development']).optional(),
     host: z.string().optional(),
     port: z.coerce.number().int().positive().optional(),
     user: z.string().optional(),
     password: z.string().optional(),
     database: z.string().optional(),
     ssl: z.boolean().optional(),
+    tls: tlsConfigSchema.optional(),
     connectionString: z.string().optional(),
     options: z.record(z.string(), z.unknown()).optional(),
     ssh: sshConfigSchema.optional(),

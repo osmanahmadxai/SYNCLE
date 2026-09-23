@@ -1,3 +1,4 @@
+import { Audited } from '../audit/audited.decorator';
 import {
   Body,
   Controller,
@@ -12,6 +13,8 @@ import {
 import {
   type ConnectionConfig,
   ConflictError,
+  ForbiddenError,
+  assessStatement,
   backupSchema,
   browseSchema,
   connectionInputSchema,
@@ -42,6 +45,16 @@ type RelationRefDTO = z.infer<typeof relationRefSchema>;
 type BackupDTO = z.infer<typeof backupSchema>;
 type RestoreDTO = z.infer<typeof restoreSchema>;
 
+/** the numbers in an answer, for an audit entry's details */
+function summary(result: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!result || typeof result !== 'object') return out;
+  for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+    if (typeof value === 'number' || typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
 @Controller('connections')
 export class ConnectionsController {
   constructor(
@@ -49,6 +62,21 @@ export class ConnectionsController {
     private readonly pool: AdapterPoolService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * nothing is written through a connection marked read-only. checked here, at
+   * the door, for every route that writes — so the refusal names the
+   * connection and says how to lift it, instead of surfacing as whatever the
+   * engine or the adapter would have made of it
+   */
+  private async assertWritable(id: string, what: string): Promise<void> {
+    const conn = await this.store.get(id);
+    if (conn.readOnly) {
+      throw new ForbiddenError(
+        `"${conn.name}" is a read-only connection, so ${what}. Untick "Read-only" on the connection if that is what you mean to do.`,
+      );
+    }
+  }
 
   /* ----- CRUD ----- */
 
@@ -60,6 +88,7 @@ export class ConnectionsController {
   }
 
   @Post()
+  @Audited('connection.create', ({ result }) => ({ details: { engine: (result as { engine?: string })?.engine } }))
   create(
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
   ): Promise<ConnectionConfig> {
@@ -69,18 +98,24 @@ export class ConnectionsController {
   @Post('test')
   async testUnsaved(
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
-  ): Promise<{ success: true }> {
+    @Query('from') from?: string,
+  ): Promise<{ success: true; sshHostKey?: string }> {
     const now = new Date().toISOString();
+    // testing an EDIT of a saved connection: the form only ever saw its secrets
+    // redacted, so fill those back in from the stored copy — otherwise the test
+    // dials with the literal string "********" and always fails
+    const input = from ? await this.store.withStoredSecrets(from, dto) : dto;
     const config: ConnectionConfig = {
       id: 'test',
       createdAt: now,
       updatedAt: now,
-      ...dto,
+      ...input,
       // a throwaway config just for a connectivity check; workspace is irrelevant
       workspaceId: dto.workspaceId ?? 'test',
     };
-    await this.pool.test(config);
-    return { success: true };
+    // the jump host's fingerprint comes back so it can be checked, and saved
+    // with the connection, before anything is trusted on first use
+    return { success: true, ...(await this.pool.test(config)) };
   }
 
   @Get(':id')
@@ -89,6 +124,7 @@ export class ConnectionsController {
   }
 
   @Put(':id')
+  @Audited('connection.update', ({ result }) => ({ details: { engine: (result as { engine?: string })?.engine } }))
   async update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(connectionInputSchema)) dto: ConnectionInputDTO,
@@ -99,7 +135,11 @@ export class ConnectionsController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ id: string }> {
+  @Audited('connection.delete')
+  async remove(
+    @Param('id') id: string,
+    @Query('force') force?: string,
+  ): Promise<{ id: string }> {
     await this.store.get(id); // 404s if missing
     // Bridge.connectionId has no FK, so enforce the reference here: deleting a
     // connection out from under its bridges would leave zombie listeners and
@@ -121,15 +161,39 @@ export class ConnectionsController {
         `This connection is used by ${inUse} bridge${inUse === 1 ? '' : 's'}. Delete or repoint ${inUse === 1 ? 'it' : 'them'} first.`,
       );
     }
+    // a bridge that was deleted while this server was unreachable may have left
+    // a replication slot on it, which is retried through THIS connection. once
+    // the connection is gone nothing can reach the slot again, and it pins WAL
+    // there until someone finds it
+    const leftovers = await this.prisma.sourceCleanup.findMany({ where: { connectionId: id } });
+    if (leftovers.length > 0 && force !== 'true') {
+      const names = leftovers.map((l) => l.resource).join(', ');
+      throw new ConflictError(
+        `Syncle still has to remove something from this server and has not managed to yet: ${names}. ` +
+          'It retries every minute through this connection, so the usual fix is to make the server reachable and wait. ' +
+          'To delete the connection regardless, remove it yourself first — on PostgreSQL: ' +
+          "SELECT pg_drop_replication_slot('<slot name>'); — then delete with ?force=true.",
+      );
+    }
+    if (leftovers.length > 0) {
+      await this.prisma.sourceCleanup.deleteMany({ where: { connectionId: id } });
+    }
     await this.pool.evict(id);
     await this.store.remove(id);
     return { id };
   }
 
   @Post(':id/test')
-  async testSaved(@Param('id') id: string): Promise<{ success: true }> {
-    await this.pool.test(await this.store.resolve(id));
-    return { success: true };
+  async testSaved(
+    @Param('id') id: string,
+  ): Promise<{ success: true; sshHostKey?: string }> {
+    const config = await this.store.resolve(id);
+    const result = await this.pool.test(config);
+    // a saved connection that just proved itself: pin the key it presented
+    if (result.sshHostKey && !config.ssh?.hostKey?.trim()) {
+      await this.store.pinSshHostKey(id, result.sshHostKey).catch(() => undefined);
+    }
+    return { success: true, ...result };
   }
 
   /* ----- data operations ----- */
@@ -157,44 +221,79 @@ export class ConnectionsController {
   }
 
   @Post(':id/query')
-  query(
+  @Audited('connection.query', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    const text = String(b.statement ?? '');
+    return { details: { database: b.database, statement: text.length > 300 ? `${text.slice(0, 299)}…` : text } };
+  })
+  async query(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(querySchema)) dto: QueryDTO,
     @Query('database') database?: string,
   ) {
+    const conn = await this.store.get(id);
+    if (!conn.readOnly) {
+      return this.pool.withAdapter(id, database || undefined, (a) => a.query(dto.statement, dto.params));
+    }
+    // read-only: run it only when EVERY statement in it is recognisably a read
+    // (an allowlist: what is not known to be a read is not run) …
+    const assessed = assessStatement(conn.engine, dto.statement);
+    if (assessed.risk !== 'read') {
+      throw new ForbiddenError(
+        `"${conn.name}" is a read-only connection, and this is not something Syncle can tell is only a read (${assessed.reasons.join(', ')}). ` +
+          'Untick "Read-only" on the connection if that is what you mean to do.',
+      );
+    }
+    // … and then let the ENGINE hold it to that where it can: the text cannot
+    // know what a function called from a SELECT does; a read-only transaction can
     return this.pool.withAdapter(id, database || undefined, (a) =>
-      a.query(dto.statement, dto.params),
+      a.queryReadOnly ? a.queryReadOnly(dto.statement, dto.params) : a.query(dto.statement, dto.params),
     );
   }
 
   @Post(':id/rows')
-  insertRow(
+  @Audited('connection.rows_insert', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
+  async insertRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(insertRowSchema)) dto: InsertDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not inserted through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.insertRow(dto),
     );
   }
 
   @Patch(':id/rows')
-  updateRow(
+  @Audited('connection.rows_update', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
+  async updateRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(updateRowSchema)) dto: UpdateDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not changed through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.updateRow(dto),
     );
   }
 
   @Delete(':id/rows')
-  deleteRow(
+  @Audited('connection.rows_delete', ({ body }) => {
+    const b = body as Record<string, unknown>;
+    return { details: { database: b.database, schema: b.schema, table: b.table } };
+  })
+  async deleteRow(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(deleteRowSchema)) dto: DeleteDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a row is not deleted through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.deleteRow(dto),
     );
@@ -203,6 +302,7 @@ export class ConnectionsController {
   /* ----- schema management (DDL) ----- */
 
   @Post(':id/ddl/database')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'create-database', ...(body as Record<string, unknown>) } }))
   async createDatabase(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(databaseNameSchema)) dto: DatabaseNameDTO,
@@ -214,6 +314,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/drop-database')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'drop-database', ...(body as Record<string, unknown>) } }))
   async dropDatabase(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(databaseNameSchema)) dto: DatabaseNameDTO,
@@ -226,6 +327,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'create-table', ...(body as Record<string, unknown>) } }))
   async createTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(createTableSchema)) dto: CreateTableDTO,
@@ -238,6 +340,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/drop-table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'drop-table', ...(body as Record<string, unknown>) } }))
   async dropTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(relationRefSchema)) dto: RelationRefDTO,
@@ -250,6 +353,7 @@ export class ConnectionsController {
   }
 
   @Post(':id/ddl/truncate-table')
+  @Audited('connection.ddl', ({ body }) => ({ details: { op: 'truncate-table', ...(body as Record<string, unknown>) } }))
   async truncateTable(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(relationRefSchema)) dto: RelationRefDTO,
@@ -282,11 +386,18 @@ export class ConnectionsController {
   }
 
   @Post(':id/restore')
+  @Audited('connection.restore', ({ body, result }) => ({ details: { format: (body as { format?: string })?.format, ...summary(result) } }))
   async restore(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(restoreSchema)) dto: RestoreDTO,
     @Query('database') database?: string,
   ) {
+    await this.assertWritable(id, 'a backup is not restored through it');
+    await this.assertWritable(id, 'a table is not emptied through it');
+    await this.assertWritable(id, 'a table is not dropped through it');
+    await this.assertWritable(id, 'a table is not created through it');
+    await this.assertWritable(id, 'a database is not dropped through it');
+    await this.assertWritable(id, 'a database is not created through it');
     return this.pool.withAdapter(id, database || undefined, (a) =>
       a.restore(dto.content, dto.format),
     );

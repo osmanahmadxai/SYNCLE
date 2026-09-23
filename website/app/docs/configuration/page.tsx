@@ -42,7 +42,8 @@ export default function Page() {
                 Written by <code>install.sh</code> with mode 600; passed to
                 Docker Compose as the env file. Holds{' '}
                 <code>SYNCLE_MASTER_KEY</code> and the pinned{' '}
-                <code>SYNCLE_IMAGE</code>.
+                <code>SYNCLE_IMAGE</code>, and is where you add any of the{' '}
+                <a href="#api-environment-variables">API settings</a> below.
               </td>
             </tr>
             <tr>
@@ -75,14 +76,23 @@ export default function Page() {
         every run.
       </p>
       <p>
-        In the Docker install the container environment is fixed inside{' '}
-        <code>docker-compose.app.yml</code> (<code>PORT=4002</code>, a{' '}
-        <code>DATABASE_URL</code> pointing at the bundled Postgres, and so on);
-        only <code>SYNCLE_MASTER_KEY</code> and <code>SYNCLE_IMAGE</code> flow
-        in from <code>$SYNCLE_HOME/.env</code>. The <code>syncle</code>{' '}
-        launcher itself reads <code>SYNCLE_PORT</code> and{' '}
-        <code>SYNCLE_HOME</code> from your shell — the{' '}
-        <a href="/docs/install">installation page</a> covers those.
+        In the Docker install, <code>docker-compose.app.yml</code> fixes the
+        wiring (<code>PORT=4002</code>, a <code>DATABASE_URL</code> pointing
+        at the bundled Postgres, the Redis URL, the data directory) and
+        passes every other API setting on this page through from{' '}
+        <code>$SYNCLE_HOME/.env</code>. To change one, add a line and bring
+        the stack up again:
+      </p>
+      <CodeBlock title="~/.syncle/.env">{`SYNCLE_CDC_SPOOL=on
+SYNCLE_DELIVERY_RETENTION_DAYS=90`}</CodeBlock>
+      <CodeBlock title="apply it">{`syncle up      # not "syncle restart": a restart keeps the old environment`}</CodeBlock>
+      <p>
+        A setting you leave out keeps its default. (Releases up to 1.3 passed
+        only <code>SYNCLE_MASTER_KEY</code> and <code>SYNCLE_IMAGE</code>, so
+        none of the others could be changed on a Docker install at all; run{' '}
+        <code>syncle update</code> to get the newer compose file.) The <code>syncle</code> launcher itself reads{' '}
+        <code>SYNCLE_PORT</code> and <code>SYNCLE_HOME</code> from your shell
+        — the <a href="/docs/install">installation page</a> covers those.
       </p>
 
       <h2 id="api-environment-variables">API environment variables</h2>
@@ -154,6 +164,22 @@ export default function Page() {
             </tr>
             <tr>
               <td>
+                <code>SYNCLE_MASTER_KEY_PREVIOUS</code>
+              </td>
+              <td>—</td>
+              <td>
+                While{' '}
+                <a href="/docs/self-hosting#changing-the-master-key">
+                  changing the master key
+                </a>
+                : the old key or keys, comma-separated. Still accepted for
+                decrypting, never used for encrypting; what is under them is
+                re-encrypted at start. Remove it when the API says nothing
+                depends on a previous key any more.
+              </td>
+            </tr>
+            <tr>
+              <td>
                 <code>SYNCLE_DATA_DIR</code>
               </td>
               <td>
@@ -173,9 +199,15 @@ export default function Page() {
                 <code>http://localhost:3002</code>
               </td>
               <td>
-                Browser origins allowed by credentialed CORS, comma-separated.
-                Only matters when the browser calls the API directly via{' '}
-                <code>NEXT_PUBLIC_API_URL</code>.
+                Origins a browser may use Syncle from <em>besides the
+                app&apos;s own</em>, comma-separated. They are allowed by
+                credentialed CORS, and they are the only other origins a request
+                that changes something is{' '}
+                <a href="/docs/self-hosting#request-origin">taken from</a>.
+                Needed when the browser calls the API directly via{' '}
+                <code>NEXT_PUBLIC_API_URL</code>; otherwise only behind a
+                reverse proxy that rewrites the <code>Host</code> header, for
+                browsers too old to send <code>Sec-Fetch-Site</code>.
               </td>
             </tr>
             <tr>
@@ -260,6 +292,255 @@ export default function Page() {
               <td>
                 Unwritten changes held in the spool before the reader is
                 throttled.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_DEAD_LETTER_MAX_ROWS</code>
+              </td>
+              <td>
+                <code>10000</code>
+              </td>
+              <td>
+                Undelivered rows one bridge may hold in its{' '}
+                <a href="/docs/bridges#dead-letter-queue">dead-letter queue</a>.
+                At the limit a <code>continue</code> bridge stops, without
+                moving its cursor, rather than grow the metadata store
+                without bound.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_MAX_CONSECUTIVE_FAILURES</code>
+              </td>
+              <td>
+                <code>5</code>
+              </td>
+              <td>
+                Batches in a row that may deliver nothing before a{' '}
+                <code>continue</code> bridge stops. One bad row fails one
+                batch; a destination that is down fails all of them.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SLOT_CHECK_SECONDS</code>
+              </td>
+              <td>
+                <code>60</code>
+              </td>
+              <td>
+                How often to measure what each CDC bridge is holding on its
+                source — for PostgreSQL, the WAL pinned by its replication
+                slot — and to retry dropping slots that could not be dropped.{' '}
+                <code>0</code> turns it off.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SLOT_WARN_BYTES</code>
+              </td>
+              <td>
+                <code>1073741824</code>
+              </td>
+              <td>
+                WAL pinned by one bridge before it is flagged in the job view
+                and the log (1 GiB). <code>0</code> never warns.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SLOT_MAX_BYTES</code>
+              </td>
+              <td>
+                <code>0</code>
+              </td>
+              <td>
+                WAL pinned by a bridge that is <em>not running</em> before
+                Syncle drops its replication slot to protect the source.{' '}
+                <code>0</code> (the default) never does: a dropped slot is a
+                gap in that bridge. Prefer{' '}
+                <code>max_slot_wal_keep_size</code> on the server, which also
+                works while Syncle is down — see{' '}
+                <a href="/docs/cdc#postgres-slots">replication slots</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SNAPSHOT_HOLD_MAX</code>
+              </td>
+              <td>
+                <code>100000</code>
+              </td>
+              <td>
+                A Redis CDC bridge that{' '}
+                <a href="/docs/bridges#copy-then-follow">
+                  copies its keys before following them
+                </a>{' '}
+                holds the changes made meanwhile in memory — the newest per
+                key, since Redis has no log to read them back from. This is
+                how many keys may be held before the bridge stops rather than
+                grow without limit. PostgreSQL, MySQL and MongoDB keep those
+                changes in their own log and are not affected.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_LOG_LEVEL</code>
+              </td>
+              <td>
+                <code>warn</code>
+              </td>
+              <td>
+                <code>error</code>, <code>warn</code>, <code>log</code> (or{' '}
+                <code>info</code>), <code>debug</code>, <code>verbose</code>.
+                The default logs what it always did — warnings and errors;{' '}
+                <code>log</code> adds the lifecycle lines: a bridge started, a
+                table copied, a slot released, a retention sweep.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_METRICS_TOKEN</code>
+              </td>
+              <td>unset</td>
+              <td>
+                Turns on <code>GET /api/metrics</code> (Prometheus) for
+                requests carrying{' '}
+                <code>Authorization: Bearer &lt;token&gt;</code>. Unset, the
+                endpoint does not exist. See{' '}
+                <a href="/docs/self-hosting#monitoring">monitoring</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_ALERT_THROTTLE_SECONDS</code>
+              </td>
+              <td>
+                <code>300</code>
+              </td>
+              <td>
+                <a href="/docs/self-hosting#alerts">Alerts</a> are throttled
+                per channel, kind of event and bridge: one per this many
+                seconds, the next one saying how many were held back.{' '}
+                <code>0</code> sends every one.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_VERIFY_RECHECK_MS</code>
+              </td>
+              <td>
+                <code>1500</code>
+              </td>
+              <td>
+                <a href="/docs/bridges#verify">Verifying</a> a bridge that is
+                delivering: a row that looks wrong is looked at again this many
+                milliseconds later, from both ends, before it counts. A change
+                that was only in flight is not a difference.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_SHARED_SLOT_JOIN_WAIT_MS</code>
+              </td>
+              <td>
+                <code>60000</code>
+              </td>
+              <td>
+                A bridge joining a{' '}
+                <a href="/docs/cdc#shared-slot">shared replication slot</a>{' '}
+                waits for the transactions that were open when its table was
+                published to end. After this long it gives up and names the
+                transaction it was waiting for.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_AUDIT_RETENTION_DAYS</code>
+              </td>
+              <td>
+                <code>365</code>
+              </td>
+              <td>
+                Days the{' '}
+                <a href="/docs/self-hosting#activity-log">activity log</a> is
+                kept — the default for the in-app setting (Settings ›
+                Security). <code>0</code> keeps it for ever.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_LEADER_TTL_SECONDS</code>
+              </td>
+              <td>
+                <code>20</code>
+              </td>
+              <td>
+                With{' '}
+                <a href="/docs/self-hosting#more-than-one-api">
+                  more than one API process
+                </a>
+                : how long the leader&apos;s lease lasts. It is how long a
+                failover takes at most after a process dies, and how long a
+                leader that cannot reach Redis keeps reading the live bridges
+                before it stops.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_ECHO_TTL_SECONDS</code>
+              </td>
+              <td>
+                <code>300</code>
+              </td>
+              <td>
+                <a href="/docs/bridges#two-way">Loop prevention</a>: how long
+                a write to a table that another bridge reads is remembered, so
+                that bridge knows it when it comes back. It has to outlast how
+                far behind that bridge can fall; a change that comes back later
+                than this is sent on once more and dies out there.{' '}
+                <code>0</code> switches loop prevention off.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>
+              </td>
+              <td>
+                <code>30</code>
+              </td>
+              <td>
+                Default for the <code>deliveryRetentionDays</code> setting:
+                days a delivery&apos;s details are kept. <code>0</code> keeps
+                them for ever. See{' '}
+                <a href="#delivery-history">delivery history</a>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_DELIVERY_MAX_PER_JOB</code>
+              </td>
+              <td>
+                <code>100000</code>
+              </td>
+              <td>
+                Default for the <code>deliveryMaxPerJob</code> setting: how
+                many deliveries a live (watch / CDC) bridge keeps, however
+                recent. <code>0</code> is no limit.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>SYNCLE_RETENTION_SWEEP_MINUTES</code>
+              </td>
+              <td>
+                <code>60</code>
+              </td>
+              <td>
+                How often delivery history is pruned. <code>0</code> never
+                prunes on a timer (<code>POST /api/bridges/retention/run</code>{' '}
+                still does it on demand).
               </td>
             </tr>
             <tr>
@@ -542,24 +823,91 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`}</C
               <td>15 – 43,200</td>
               <td>Minutes before a login session expires.</td>
             </tr>
+            <tr>
+              <td>
+                <code>deliveryRetentionDays</code>
+              </td>
+              <td>
+                <code>SYNCLE_DELIVERY_RETENTION_DAYS</code>, else 30
+              </td>
+              <td>0 – 3,650</td>
+              <td>
+                Days a delivery&apos;s details are kept. 0 keeps them for
+                ever.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>deliveryMaxPerJob</code>
+              </td>
+              <td>
+                <code>SYNCLE_DELIVERY_MAX_PER_JOB</code>, else 100,000
+              </td>
+              <td>0 – 100,000,000</td>
+              <td>
+                Deliveries a live (watch / CDC) bridge keeps, however recent.
+                0 is no limit.
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+
+      <h3 id="delivery-history">Delivery history</h3>
       <p>
-        A candid note on what is wired up in 1.0.{' '}
-        <code>sessionTtlMinutes</code> takes effect immediately and has no
-        env var — it is edited only here, under Settings › Security. The
-        others are stored and reported back by the API, but do not yet steer
-        the engine: the bridge builder hard-codes a 5&nbsp;second poll, 500
-        rows per poll and all three CDC operations regardless of the{' '}
-        <code>default*</code> values; the working query cap is the built-in
-        5000 or the per-connection <code>maxQueryRows</code> option; and
-        worker concurrency comes solely from{' '}
-        <code>SYNCLE_JOB_CONCURRENCY</code> at boot. Treat those dialog
-        values as declarations of intent until a release wires them through.
-        A settings row persisted before the bridges rename under the old{' '}
+        Every delivery is recorded with what was sent and what came back (up
+        to 16&nbsp;KB each), which is what the timeline shows. Nothing used to
+        remove those rows, and a live bridge writes them for as long as it
+        runs — ten deliveries a second is 26 million rows a month in the
+        metadata store. Two settings, under Settings › Engine, bound it, and
+        both take effect at the next hourly sweep without a restart:
+      </p>
+      <ul>
+        <li>
+          <strong>Keep delivery details for (days)</strong> — a finished
+          replay loses its details all at once, when the <em>job</em> is older
+          than this (never row by row, which would leave a timeline with
+          holes in it); a live bridge loses them as each row passes that age.
+        </li>
+        <li>
+          <strong>Deliveries kept per live bridge</strong> — a watch or CDC
+          bridge never finishes, so age alone does not bound it: only the
+          newest this-many are kept.
+        </li>
+      </ul>
+      <p>
+        What is never removed: the job&apos;s delivered / failed / skipped{' '}
+        <strong>totals</strong>, which are stored on the job and do not change
+        when details go; a failed delivery whose rows are still waiting in the{' '}
+        <a href="/docs/bridges">dead-letter queue</a>; and anything belonging
+        to a replay that is still queued or running. On the timeline a
+        delivery whose details are gone is drawn as a dashed cell —{' '}
+        <em>delivered, details removed</em> — rather than as queued. Retrying
+        failed deliveries needs those details, so it is available for as long
+        as they are kept; after that, run the bridge again. Settled
+        dead letters (retried successfully, or discarded) expire on the same
+        schedule; pending ones are data and are kept until you deal with them.
+      </p>
+      <p>
+        All of them take effect without a restart. The three{' '}
+        <code>default*</code> values are what the bridge builder starts a{' '}
+        <em>new</em> bridge from; existing bridges keep their own.{' '}
+        <code>maxQueryRows</code> caps ad-hoc queries on every connection that
+        does not set its own <code>maxQueryRows</code> option, and reaches
+        connections that are already open. <code>jobConcurrency</code> is
+        applied to the replay worker as soon as it is saved (jobs already
+        running finish as they are). <code>sessionTtlMinutes</code> has no env
+        var and is edited only here, under Settings › Security. A settings row
+        persisted before the bridges rename under the old{' '}
         <code>hookConcurrency</code> key is migrated to{' '}
         <code>jobConcurrency</code> automatically.
+      </p>
+      <p>
+        Releases up to 1.3 stored these values and reported them back, but only{' '}
+        <code>sessionTtlMinutes</code> did anything: the builder used a 5
+        second poll, 500 rows per poll and all three CDC operations whatever
+        was saved, the query cap was the built-in 5000, and concurrency came
+        from <code>SYNCLE_JOB_CONCURRENCY</code> alone.
       </p>
     </DocArticle>
   );

@@ -18,11 +18,11 @@ export function DeliverySection({
   draft,
   dispatch,
 }: {
-  draft: Pick<BuilderDraft, 'delivery' | 'syncMode'>;
+  draft: Pick<BuilderDraft, 'delivery' | 'syncMode' | 'destKind'>;
   dispatch: Dispatch<BuilderAction>;
 }) {
   const t = useTranslations('bridgeBuilder');
-  const { delivery, syncMode } = draft;
+  const { delivery, syncMode, destKind } = draft;
 
   return (
     <section className="space-y-2">
@@ -65,31 +65,74 @@ export function DeliverySection({
           }
         />
       </div>
-      {/* on-failure abort is a job concept. a listener must never stop on one bad delivery */}
-      {syncMode === 'oneTime' && (
-        <div className="grid gap-1.5">
-          <Label className="text-xs">{t('onFailure')}</Label>
-          <Select
-            value={delivery.onError}
-            onValueChange={(v) =>
-              dispatch({
-                type: 'patchDelivery',
-                patch: { onError: v as 'continue' | 'abort' },
-              })
-            }
-          >
-            <SelectTrigger className="h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="continue">
-                {t('logContinue')}
-              </SelectItem>
-              <SelectItem value="abort">{t('stopJob')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      {/* a live bridge defaults to `continue`: one bad row must not stop a
+          listener. that used to mean the row was lost once the source's change
+          log moved on; it is now parked in the dead-letter queue instead, so
+          the choice is safe to offer either way */}
+      <div className="grid gap-1.5">
+        <Label className="text-xs">{t('onFailure')}</Label>
+        <Select
+          value={delivery.onError}
+          onValueChange={(v) =>
+            dispatch({
+              type: 'patchDelivery',
+              patch: { onError: v as 'continue' | 'abort' },
+            })
+          }
+        >
+          <SelectTrigger className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="continue">
+              {syncMode === 'oneTime'
+                ? t('logContinue')
+                : t('setAsideContinue')}
+            </SelectItem>
+            <SelectItem value="abort">
+              {syncMode === 'oneTime' ? t('stopJob') : t('stopBridge')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {syncMode !== 'oneTime' && (
+          <p className="text-muted-foreground text-xs">
+            {delivery.onError === 'continue'
+              ? t('onFailureContinueHint')
+              : t('onFailureStopHint')}
+          </p>
+        )}
+      </div>
+      {/* a column the bridge maps, dropped or renamed at the source, used to
+          reach the destination as NULL — over the value it held. `stop` is the
+          default because that is the one outcome nobody chooses */}
+      <div className="grid gap-1.5">
+        <Label className="text-xs">{t('onSchemaChange')}</Label>
+        <Select
+          value={delivery.onSchemaChange}
+          onValueChange={(v) =>
+            dispatch({
+              type: 'patchDelivery',
+              patch: { onSchemaChange: v as 'stop' | 'continue' | 'evolve' },
+            })
+          }
+        >
+          <SelectTrigger className="h-8" aria-label={t('onSchemaChange')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="stop">{t('schemaChangeStop')}</SelectItem>
+            {destKind === 'database' && (
+              <SelectItem value="evolve">{t('schemaChangeEvolve')}</SelectItem>
+            )}
+            <SelectItem value="continue">
+              {t('schemaChangeContinue')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-muted-foreground text-xs">
+          {t(`schemaChangeHint.${delivery.onSchemaChange}`)}
+        </p>
+      </div>
     </section>
   );
 }
