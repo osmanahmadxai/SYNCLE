@@ -69,6 +69,11 @@ can no longer lose a row to a failed delivery.
   whose bridge is gone (one removed while no API process was up to unschedule
   it polled for ever, "bridge not found" every tick), and keeps that of one
   which is listening.
+- **A settings listener that threw could end the API process.** A new listener
+  is told the current settings once, from a promise nobody awaited; a listener
+  that threw there surfaced as an unhandled rejection, which ends a Node
+  process by default. Both paths are guarded now, and a listener that
+  unsubscribes before the settings were read is not called.
 - **The query editor's tabs were named in English whatever the language.**
   "Query 3" is now "Query 3", "Query 3" or "查询 3" as the app is set; a tab
   keeps its number when one before it is closed.
