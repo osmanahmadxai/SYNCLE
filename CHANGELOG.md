@@ -11,6 +11,13 @@ can no longer lose a row to a failed delivery.
 
 ### Security
 
+- **NestJS 11 and Express 5.** The API ran on NestJS 10, whose `@nestjs/core`
+  (below 11.1.18) carries a moderate advisory (GHSA-36xv-jgw5-4q75, improper
+  neutralisation of special elements) and whose `@nestjs/common` pulls a
+  `file-type` with two more (an infinite loop in its ASF parser, a ZIP
+  decompression bomb) — none of them reachable the way Syncle uses them, and
+  now none of them present: `pnpm audit --prod` is clean. Nothing changes for
+  the API's callers: every route, header, cookie and body limit is as it was.
 - **Requests that change something must come from the app.** The session is a
   cookie, and `SameSite=Lax` is not the whole answer to cross-site request
   forgery (a sibling subdomain is the same site; older browsers ignore it).
