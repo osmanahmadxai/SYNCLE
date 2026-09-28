@@ -4,7 +4,7 @@
  * into the page, and a line of small type saying what you are looking at.
  *
  * Plain <img> rather than next/image — the site is a static export, the
- * files are already sized for the column, and this keeps the markup honest.
+ * files are already sized for the column, so the markup matches the assets.
  */
 export function Shot({
   src,

@@ -32,7 +32,7 @@ you'd rather stay anonymous.
 Syncle is built to run on a trusted network, but it does ship its own
 protections:
 
-- **Single-operator auth on every route.** First run creates the one admin
+- **Every route sits behind an account.** First run creates the first admin
   account (guarded by a one-time setup token printed to the server console),
   after which a scrypt-hashed password and a signed httpOnly session cookie
   protect the whole API. Password changes invalidate all outstanding sessions,

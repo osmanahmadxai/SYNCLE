@@ -9,12 +9,12 @@ export default function Page() {
     <DocArticle slug="self-hosting">
       <p>
         Syncle is built to run on your own machine or a trusted network. This
-        page covers the protections it ships with, what stays your job when you
-        expose it further, which volumes hold your data, and what the common
-        failure messages mean.
+        page covers the protections it ships with, what remains your
+        responsibility if you expose it further, which volumes hold your data,
+        and what the common failure messages mean.
       </p>
 
-      <h2 id="security-posture">The security posture</h2>
+      <h2 id="security-posture">What is protected, and how</h2>
       <p>
         Every API route sits behind an account. The first one is created on
         first run, guarded by a one-time setup token, with no signup (the{' '}
@@ -41,10 +41,10 @@ export default function Page() {
         limited per address, and the setup token is 72 random bits.
       </p>
       <p>
-        What Syncle does not ship: TLS. It serves plain HTTP, and the security
-        policy is explicit that TLS termination and network-level control over
-        who can reach the port are the operator&apos;s job the moment anything
-        beyond localhost can connect.
+        One thing Syncle does not ship is TLS. It serves plain HTTP. The
+        security policy is explicit that TLS termination, and network-level
+        control over who can reach the port, become the operator&apos;s
+        responsibility as soon as anything beyond localhost can connect.
       </p>
 
       <h3 id="accounts">Accounts and roles</h3>

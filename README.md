@@ -5,19 +5,18 @@
   <img alt="Syncle" src="apps/web/public/logo-dark.png" width="400">
 </picture>
 
-### Database sync that finishes the job. No Kafka, no platform, one command.
+### Keep your databases in sync, across engines and in real time
 
-Most change-data-capture tools hand you a stream and leave the rest to you.
-Debezium gives you a Kafka topic — you still run the broker, and you still build
-the thing that reads it and writes to your database. **Syncle writes to your
-database.**
+Most change-data-capture tools hand you a stream and stop there. Debezium gives
+you a Kafka topic: you run the broker, and you still build the thing that reads
+it and writes to your database. **Syncle writes to your database.**
 
 Draw a **bridge** from a source to one or more destinations and rows go across
 it: the moment one changes in the source, it's written to every destination you
 linked. Any engine to any engine — **PostgreSQL · MySQL · SQLite · MongoDB ·
 Redis** — plus HTTP endpoints when you need them.
 
-<sub>A bridge is just: a source → one or more destinations → kept in sync.</sub>
+<sub>A bridge is a source, one or more destinations, and a trigger that decides when rows move.</sub>
 
 <br>
 
@@ -80,21 +79,21 @@ flowchart LR
     ROUTER -- "token template · retries" --> HTTP
 ```
 
-What makes the database-to-database sync trustworthy:
+What the database-to-database sync guarantees:
 
 - **Any engine → any engine.** The same bridge moves a row between relational,
   document, and key-value stores. Values are translated to fit the target.
-- **No duplicates, ever.** Writes are **idempotent upserts** keyed by the columns
+- **No duplicate rows.** Writes are **idempotent upserts** keyed by the columns
   you choose, so replays, retries, and redeliveries never double-write. Inserts,
   updates, **and deletes** all propagate.
-- **Missing table? Auto-create it.** If the destination table/collection doesn't
+- **Missing tables are created.** If the destination table or collection doesn't
   exist, Syncle creates it from the source's shape. Between two instances of one
   engine the source's own types are reused word for word; across engines each
-  type is translated to the closest the target has, and **a narrowing is never
-  silent** — the preview lists the exact columns a run would create, and names
+  type is translated to the closest the target has, and **a narrowing is always
+  reported**: the preview lists the exact columns a run would create, and names
   every one the target can't hold faithfully, before anything runs. Or **map and
   rename columns** yourself — "write this column into that column over there."
-- **Values arrive as the values they were.** Exact decimals and 64-bit integers
+- **Values keep their types.** Exact decimals and 64-bit integers
   stay exact, bytes stay bytes, microseconds survive, and a wall-clock timestamp
   can't shift by the server's time zone — checked against real engines, by
   replay and by CDC, under more than one time zone.
@@ -117,63 +116,64 @@ What makes the database-to-database sync trustworthy:
 
 The rest is the same whichever destination and trigger you pick:
 
-- **Build it visually.** Browse the source table, toggle the columns to send,
+- **Visual builder.** Browse the source table, toggle the columns to send,
   pick destinations, and watch a live preview of exactly what will be written.
-- **Map or shape the data.** For a database target, map source → target columns
+- **Column mapping and payload templates.** For a database target, map source → target columns
   (rename, drop, pick keys). For an HTTP target, use a safe token template —
   `{{column}}`, `{{$row}}`, `{{$table}}`, `{{$op}}`, `{{$now}}`, `{{$index}}`.
   Structured substitution only — no string injection, no code execution.
-- **Filter and transform on the way.** Send only the rows that meet a list of
+- **Filters and transforms.** Send only the rows that meet a list of
   conditions. Mask a column (keep the last four, redact, or a salted SHA-256
   that still joins and works as a key), convert its type, trim or re-case it,
   give it a default, or compute a new column from the others. Steps run in the
-  order you put them, a value that cannot be converted fails loudly instead of
-  being guessed at, and a table Syncle creates is typed for what the columns
-  have become. Declarative — no expressions, nothing evaluated.
-- **Sync reliably.** Retries with backoff, rate limiting, optional batching, and
+  order you put them, a value that cannot be converted fails instead of being
+  guessed at, and a table Syncle creates is typed for what the columns have
+  become. Steps are declarative: no expressions, nothing evaluated.
+- **Retries, rate limiting and batching.** Retries with backoff, rate limiting, optional batching, and
   exactly-once delivery so a change is applied once and only once downstream.
-- **Never lose a row to a failure.** A row that has been read is always in one
+- **Failed rows are set aside, not dropped.** A row that has been read is always in one
   of three places: the destination, the bridge's dead-letter queue, or still
   ahead of the cursor. A bridge either stops *at* a failure (`abort`), or sets
   the rows that failed aside — in full — and carries on (`continue`). One bad
   row is isolated from the rest of its batch, and a retry re-reads it from the
   source, so it can never overwrite a newer version that arrived since.
-- **Locked down by default.** Requests that change anything must come from the
+- **Hardened by default.** Requests that change anything must come from the
   app itself (the browser's own `Sec-Fetch-Site` / `Origin`, so a forged
   cross-site request is refused before it reaches a route), every response
   carries a strict Content-Security-Policy and the usual hardening headers, and
   nothing is loaded from a CDN — the query editor included, so Syncle works on a
   network with no internet.
-- **Thirty tables, one replication slot.** On PostgreSQL, bridges can share a
+- **Shared replication slots.** On PostgreSQL, bridges can share a
   slot: one connection and one decoding of the WAL for every table of a source,
   confirmed only as far as the slowest bridge has got, each bridge still its own
   — filters, transforms, dead letters, verification. *Bridge many tables* makes
   one per table in a step.
-- **Prove the copy is the copy.** Verify reads both ends and compares them row
+- **Verify and reconcile.** Verify reads both ends and compares them row
   by row — by what kind of value each column holds, so `'1.50'` and `1.5` are the
   same number and `007` and `7` are not the same key — and reports what is
   missing, different, or only in the destination, with both readings of every
-  column that differs. On a bridge that is delivering, nothing counts until a
-  second look. Reconcile repairs only the rows that are wrong.
-- **Run it on a schedule.** A replay bridge takes a cron line and a named time
+  column that differs. On a bridge that is still delivering, a row that looks
+  wrong is read a second time before it is reported. Reconcile repairs only the
+  rows that are actually wrong.
+- **Scheduling.** A replay bridge takes a cron line and a named time
   zone, and replays its source by itself — nightly, hourly, on weekdays. Never
-  two runs at once (a tick that finds one still going is skipped, and said),
+  two runs at once (a tick that finds one still running is skipped, and logged),
   always from the top, once per tick however many API processes share the
   Redis, and correct across daylight saving.
-- **Survive a schema change.** Rename or drop a column a bridge maps and the
+- **Schema changes are caught.** Rename or drop a column a bridge maps and the
   bridge stops *before* it writes `NULL` over what the destination holds, naming
   the column. A harmless change — a column added, a type changed — is shown on
   the bridge and sent to your alert channels; with `evolve`, a new column is
   added to the tables Syncle created, too.
-- **Watch it happen.** A live timeline colours every delivery green (synced) ·
-  red (failed) · amber (skipped) · slate (queued). Click any cell for the exact
-  row written, the result, timing, and any error.
-- **Stay in control.** Jobs survive restarts, resume where they stopped, and can
+- **Live delivery timeline.** Each delivery gets a cell, coloured green
+  (synced) · red (failed) · amber (skipped) · slate (queued). Click one for the
+  exact row written, the result, timing, and any error.
+- **Job control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
   place — failed cells flip green. On a live bridge, retrying works without
   stopping it.
 
-### See it happen
+### Screenshots and recordings
 
 <img src="docs/assets/media/syncle-live-sync.gif" width="100%" alt="A newly built Syncle bridge delivering rows: the delivered counter climbs from zero as orders inserted into PostgreSQL arrive in MongoDB, each listed with the time it took">
 
@@ -197,16 +197,16 @@ The rest is the same whichever destination and trigger you pick:
 curl -fsSL https://syncle.dev/install | sh -s -- up
 ```
 
-That's the whole thing. It downloads the newest release, starts Syncle, and
-opens it at **http://localhost:3002**. Docker is the only requirement — Node,
-Postgres and Redis all run in containers, and the app image is pulled prebuilt,
-so nothing is compiled on your machine.
+That downloads the newest release, starts Syncle, and opens it at
+**http://localhost:3002**. Docker is the only requirement: Node, Postgres and
+Redis all run in containers, and the app image is pulled prebuilt, so nothing is
+compiled on your machine.
 
 On first run it opens the setup form with a one-time **setup token** already
-filled in, so all you do is pick a username and password. The token proves you
-are the operator of this machine — it is read off the server by `syncle up`,
-never typed. If you're setting up from another device, `syncle logs api` prints
-it and the form accepts it by hand.
+filled in, so all you do is pick a username and password. `syncle up` reads that
+token off the server, so it is never typed, and only someone with access to the
+machine can complete setup. If you're setting up from another device,
+`syncle logs api` prints the token and the form accepts it by hand.
 
 After that, the `syncle` command manages the stack:
 
@@ -271,9 +271,9 @@ docker compose up -d          # postgres (metadata) + redis (job queue)
 pnpm start                    # initialize and run the whole app
 ```
 
-`pnpm start` does the boring parts for you: it writes the local env files,
-builds the workspace, runs the database migrations, then launches both the API
-and the web app.
+`pnpm start` handles the setup steps: it writes the local env files, builds the
+workspace, runs the database migrations, then launches both the API and the web
+app.
 
 ```
   Syncle · ready
@@ -301,9 +301,9 @@ Working on the code? `pnpm dev` is the same thing in watch mode.
 
 ---
 
-## How to use — your first bridge in five minutes
+## Your first bridge
 
-A quick tour from zero to a live sync. All of it happens in the web app at
+From zero to a live sync. All of it happens in the web app at
 `http://localhost:3002`.
 
 **1 · Connect your databases.** Open **Data sources** and add the source and
@@ -375,7 +375,7 @@ flowchart LR
 
 ---
 
-## Source data, when you need it
+## The database workbench
 
 Syncle ships a full database workbench (the "Data sources" surface) — handy
 for shaping a source and for inspecting what landed in a destination:
@@ -446,7 +446,7 @@ stream, cursor). The service around them handles the job lifecycle and the
 shared dedupe → map → write → record → checkpoint pipeline, so adding a new
 engine's CDC is a single file.
 
-**Two data layers, two right tools.** The databases you connect _to_ have
+**Two data layers, two access strategies.** The databases you connect _to_ have
 unknown, runtime-discovered schemas, so the adapters use raw drivers with fully
 parameterized queries (an ORM can't introspect arbitrary schemas). Syncle's
 _own_ store has a fixed schema we control, so it uses Prisma with migrations.
@@ -538,7 +538,7 @@ MongoDB, Redis); SQLite is a local file and never tunnels.
 The jump host's key is checked the way `ssh` checks it: paste its fingerprint
 (`SHA256:…`) and any other key is refused, or leave it empty and the key seen on
 the first connection is recorded and enforced from then on. A host that later
-presents a different key is refused, loudly.
+presents a different key is refused.
 
 ### TLS to the database
 
@@ -561,10 +561,10 @@ the tunnel's `127.0.0.1`.
 
 ## Benchmarks
 
-Syncle's throughput is measured, not asserted. The suite runs against real
+Throughput is measured rather than estimated. The suite runs against real
 PostgreSQL, MySQL, SQLite and MongoDB in containers, moving **millions of rows**
-per scenario, and records what it observed — including the CPU and memory the
-run cost, and the resource use of each database container.
+per scenario, and records what it observed, including the CPU and memory the run
+cost and the resource use of each database container.
 
 **[See the results → syncle.dev/benchmarks](https://syncle.dev/benchmarks)**
 
@@ -580,15 +580,15 @@ pnpm benchmark
 ```
 
 Read the disclaimer on that page before quoting anything from it. Every database
-runs on the same machine as Syncle there, with no network in between — which
-flatters the absolute figures and is exactly why the comparisons between code
-paths, rather than the raw rates, are the useful part.
+runs on the same machine as Syncle there, with no network in between, which
+flatters the absolute figures. The comparisons between code paths are more useful
+than the raw rates.
 
 ## CDC prerequisites
 
 Replay and watch bridges work anywhere. CDC needs the **source** database
 configured for change capture; the builder's readiness panel checks all of this
-for you and spells out what's missing.
+for you and lists what's missing.
 
 | Engine     | Mechanism              | What it needs                                                                                               |
 | ---------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -619,7 +619,7 @@ for you and spells out what's missing.
   when the server has no `max_slot_wal_keep_size` — set one; it is the safety
   net that still works while Syncle is off. Each CDC bridge needs one slot and
   one WAL sender (`max_replication_slots`, `max_wal_senders`).
-- **A lost position is never papered over.** If the slot was dropped or
+- **A lost position is reported, not skipped past.** If the slot was dropped or
   invalidated (or MySQL purged the binlog, or MongoDB's oplog rolled over), the
   bridge stops and says so; starting it again asks you to confirm continuing
   from now, and a replay fills the gap.
@@ -691,7 +691,7 @@ React Flow · Zod · Vitest.
 
 - **Questions and setup help** belong in
   [Discussions](https://github.com/osmanahmadxai/SYNCLE/discussions/categories/q-a),
-  not the issue tracker — an answer there stays searchable for whoever asks next.
+  not the issue tracker, so the answer stays searchable.
 - **Ideas** for where Syncle should go next are welcome in
   [Ideas](https://github.com/osmanahmadxai/SYNCLE/discussions/categories/ideas),
   and what you pointed it at belongs in

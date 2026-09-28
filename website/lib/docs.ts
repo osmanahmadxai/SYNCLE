@@ -39,7 +39,7 @@ export const DOC_PAGES: DocPage[] = [
     slug: 'cdc',
     title: 'CDC setup',
     description:
-      'Per-engine prerequisites for real-time change data capture, what Syncle provisions for you, and the honest limitations.',
+      'Per-engine prerequisites for real-time change data capture, what Syncle provisions for you, and where each engine falls short.',
   },
   {
     slug: 'workbench',
@@ -63,13 +63,13 @@ export const DOC_PAGES: DocPage[] = [
     slug: 'troubleshooting',
     title: 'Troubleshooting',
     description:
-      'The failures people actually hit: CDC that never fires, watch bridges that deliver nothing, connections that will not test, and rows that fail.',
+      'The failures that come up most: CDC that never fires, watch bridges that deliver nothing, connections that will not test, and rows that fail.',
   },
   {
     slug: 'self-hosting',
     title: 'Self-hosting & security',
     description:
-      'Running Syncle beyond localhost: the security posture, encryption, what to back up, and a troubleshooting list.',
+      'Running Syncle beyond localhost: accounts and sessions, encryption, what to back up, and a troubleshooting list.',
   },
 ];
 

@@ -9,34 +9,34 @@ export default function DocsIndex() {
   return (
     <DocArticle slug="">
       <p>
-        Syncle keeps databases in sync — live, across engines, and without a
-        data platform in the way. Most change-data-capture tools hand you a
-        stream and leave the rest to you; Debezium gives you a Kafka topic, and
-        you still run the broker and build the thing that writes to your
-        database. Syncle writes to your database. You connect databases, draw a{' '}
+        Syncle keeps databases in sync, live and across engines, without a
+        data platform in between. Most change-data-capture tools hand you a
+        stream and stop there: Debezium gives you a Kafka topic, and you still
+        run the broker and build the thing that writes to your database. Syncle
+        writes to your database. You connect databases, draw a{' '}
         <strong>bridge</strong> from a source to one or more destinations, and
-        rows move across it: once, on a schedule, or the moment they change.
+        rows move across it — once, on a schedule, or the moment they change.
       </p>
 
       <p>
-        It speaks five engines — PostgreSQL, MySQL, SQLite, MongoDB
+        Five engines are supported — PostgreSQL, MySQL, SQLite, MongoDB
         and Redis — and any of them can sit on either end of a bridge. A
         relational table can feed a document store, a document collection can
         feed a key-value cache, and an HTTP endpoint can stand in for a
         database on the receiving side. Everything runs on your own machine,
-        under the MIT licence, with a web interface as the only way you touch
-        it day to day.
+        under the MIT licence, and the web interface is how you use it day to
+        day.
       </p>
 
-      <h2 id="the-shape-of-it">The shape of it</h2>
+      <h2 id="the-shape-of-it">What gets installed</h2>
       <p>
-        An installed Syncle is four containers: the web interface, the API,
-        and a PostgreSQL and Redis instance of its own — the first for
-        Syncle&apos;s metadata (connections, bridges, job history), the second
-        for the job queue. Your databases stay wherever they already are;
-        Syncle connects out to them.
+        Four containers: the web interface, the API, and a PostgreSQL and
+        Redis instance of its own. The PostgreSQL holds Syncle&apos;s metadata
+        (connections, bridges, job history) and the Redis backs the job queue.
+        Your databases stay wherever they already are; Syncle connects out to
+        them.
       </p>
-      <p>Three words carry most of these docs:</p>
+      <p>Three terms come up throughout these pages:</p>
       <ul>
         <li>
           A <strong>bridge</strong> is the saved sync path — the source table
@@ -75,15 +75,15 @@ export default function DocsIndex() {
 
       <h2 id="about-these-docs">About these docs</h2>
       <p>
-        These pages document Syncle 1.0, and every command, endpoint and
-        default in them is taken from{' '}
+        These pages document Syncle 1.0. Every command, endpoint and default
+        in them was taken from{' '}
         <a href={GITHUB} rel="noopener">
           the source repository
         </a>{' '}
-        rather than from memory. Where the honest answer has a limitation —
-        SQLite has no change log to capture, Redis change events are not
-        durable — the limitation is written down next to the feature. If you
-        find a place where the docs and the software disagree, that is a bug:{' '}
+        rather than from memory. Where a feature has a limitation — SQLite has
+        no change log to capture, Redis change events are not durable — it is
+        written down next to the feature itself. If you find a place where the
+        docs and the software disagree, that is a bug:{' '}
         <a href={`${GITHUB}/issues`} rel="noopener">
           please report it
         </a>

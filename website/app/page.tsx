@@ -17,38 +17,38 @@ export const metadata: Metadata = {
 const TRIGGERS = [
   {
     name: 'Replay',
-    body: 'A one-shot pass: stream all — or a filtered slice — of the source once, then finish. The right tool for an initial backfill or a migration.',
+    body: 'Runs when you press the button: read the source table, or a filtered slice of it, from top to bottom and then stop. This is the one for an initial backfill or a migration.',
   },
   {
     name: 'Watch',
-    body: 'Polling on a cursor: an auto-increment id, an updated_at column, or a primary-key diff. New rows sync as they appear. Works on every engine, including SQLite.',
+    body: 'Polls the source on a cursor — an auto-increment id, an updated_at column, or a diff of the primary keys. New rows sync as they appear. Works on every engine, SQLite included.',
   },
   {
     name: 'CDC',
-    body: 'Change data capture: read the change log itself — Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications. Changes arrive as they happen, no polling.',
+    body: 'Reads the database change log itself: Postgres logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications. Changes show up as they commit, with no polling.',
   },
 ];
 
 const GUARANTEES = [
   {
-    title: 'No duplicates.',
-    body: 'Writes are idempotent upserts keyed by the columns you choose, so replays, retries and redeliveries rewrite the same row instead of adding another.',
+    title: 'Writes are idempotent.',
+    body: 'Every write is an upsert keyed by the columns you choose, so a replay, a retry or a redelivery rewrites the same row instead of adding a second one.',
   },
   {
-    title: 'Deletes propagate — on CDC bridges.',
-    body: 'With a CDC trigger, inserts, updates and deletes all cross the bridge, each tagged with its operation. A watch bridge polls, so it sees new rows (and updates, on a timestamp cursor) but cannot see deletes.',
+    title: 'Deletes cross CDC bridges.',
+    body: 'On a CDC trigger, inserts, updates and deletes all come through, each tagged with its operation. A watch bridge polls, so it sees new rows (and updates, if the cursor is a timestamp) but has no way to notice a delete.',
   },
   {
-    title: 'Missing tables are created.',
-    body: "If the destination table doesn't exist, Syncle builds it from the source's shape, translating types across engines.",
+    title: 'Missing tables get created.',
+    body: "If the destination table doesn't exist, Syncle builds it from the source's shape and translates the types for the target engine.",
   },
   {
     title: 'Interrupted jobs resume.',
-    body: 'Jobs checkpoint their cursor as they go. A crash or restart picks up where it stopped instead of starting over.',
+    body: 'Jobs checkpoint their cursor as they go, so a crash or a restart picks up where it stopped instead of starting over.',
   },
   {
-    title: 'Columns can be mapped and renamed.',
-    body: 'Write this column into that column over there — or design a JSON payload and POST each row to an HTTP endpoint instead.',
+    title: 'Columns can be remapped.',
+    body: 'Write this column into that column over there. Or build a JSON payload and POST each row to an HTTP endpoint instead.',
   },
 ];
 
@@ -59,10 +59,10 @@ const STEPS = [
   },
   {
     t: 'Create your admin account.',
-    b: 'The setup form opens with a one-time token already filled in — read from the server’s own data directory, and printed in the logs too — proving you operate the machine.',
+    b: 'The setup form opens with a one-time token already filled in. It is read off the server’s own data directory, and printed in the logs as well, so only someone with access to the machine can finish setup.',
   },
   {
-    t: 'Draw your first bridge.',
+    t: 'Build a bridge.',
     b: 'Pick a source table and its destinations, then start it. Backfill first, then leave it listening.',
   },
 ];
@@ -103,29 +103,28 @@ export default function Home() {
         {/* ── intro ───────────────────────────────────────────────────── */}
         <section className="pt-10 sm:pt-14">
           <h1 className="max-w-[17ch] text-[2.4rem] leading-[1.1] sm:text-[2.9rem]">
-            Database sync that finishes the job
+            Keep your databases in sync
           </h1>
 
           <p className="mt-7 max-w-[62ch] text-pretty text-[19px] leading-[1.65]">
-            Most change-data-capture tools hand you a stream and leave the rest
-            to you. Debezium gives you a Kafka topic — you still run the broker,
-            and you still build the thing that reads it and writes to your
-            database. <strong>Syncle writes to your database.</strong> One
-            command, no broker, no DAGs, no account.
+            Syncle copies rows between databases and keeps them copied. You
+            point it at a source table, say where the rows should go, and it
+            writes them there — once, on a timer, or the moment they change.
           </p>
 
           <p className="mt-4 max-w-[62ch] text-pretty">
-            You draw a bridge from a source to one or more destinations, and
-            rows go across it — as a one-off backfill, on a polling cursor, or
-            the moment they change, straight from the database&apos;s own
-            change log.
+            Most change-data-capture tools stop one step short of that.
+            Debezium puts change events on a Kafka topic; you run the broker
+            and write the consumer that turns those events into rows in your
+            database. <strong>Syncle does the writing part.</strong> There is
+            no broker to operate and no account to create.
           </p>
 
           <p className="mt-4 max-w-[70ch]">
-            It speaks PostgreSQL, MySQL, SQLite, MongoDB and Redis,
-            and any of them can sit on either end. An HTTP endpoint works as a
-            destination too, when the thing that needs the rows is a service
-            rather than a database.
+            It works with PostgreSQL, MySQL, SQLite, MongoDB and Redis, and
+            any of them can be the source or the destination. If the rows need
+            to reach a service instead of a database, a bridge can POST them
+            to an HTTP endpoint.
           </p>
 
           <div className="mt-8">
@@ -133,9 +132,9 @@ export default function Home() {
           </div>
 
           <p className="mt-4 max-w-[70ch] text-[15px] leading-relaxed text-muted-foreground">
-            Docker with Compose v2 and curl are the only requirements — the
-            script checks for exactly those before it runs, and everything else
-            lives in containers. Open source under the MIT licence.
+            Docker with Compose v2 and curl are the only requirements; the
+            script checks for those before it runs, and everything else lives
+            in containers. Open source under the MIT licence.
           </p>
 
           <p className="mt-6">
@@ -152,25 +151,25 @@ export default function Home() {
             eager
             src="/media/04-workspace-map.webp"
             alt="The Syncle workspace map: one PostgreSQL source feeding four bridges — on-demand, CDC and watch — into MySQL, MongoDB and Redis destinations"
-            caption="One source, four bridges, four destinations — the whole workspace on one canvas."
+            caption="One source, four bridges, four destinations, on one canvas."
           />
         </section>
 
         {/* ── the walkthrough ─────────────────────────────────────────── */}
-        <Section id="demo" title="One bridge, built and running">
+        <Section id="demo" title="A bridge being built">
           <p className="mt-4">
-            Fifty-eight seconds, no cuts: an empty workspace, then a bridge
-            from a Postgres <code className="code">orders</code> table into
-            MongoDB — naming it, picking the source, choosing change data
-            capture, pointing it at the destination. It is started, rows are
-            inserted into Postgres from outside the browser, and they arrive.
+            Fifty-eight seconds, uncut. It starts on an empty workspace and
+            builds a bridge from a Postgres <code className="code">orders</code>{' '}
+            table into MongoDB: naming it, picking the source, choosing change
+            data capture, pointing it at the destination. Then it starts, rows
+            are inserted into Postgres from a terminal outside the browser, and
+            they show up on the other side.
           </p>
           <DemoVideo
             caption={
               <>
-                Recorded against a running instance. The counter climbing is
-                the bridge doing the work, and the collection at the end did
-                not exist when the recording started.
+                Recorded against a running instance. The MongoDB collection at
+                the end did not exist when the recording started.
               </>
             }
           />
@@ -179,24 +178,24 @@ export default function Home() {
         {/* ── why ─────────────────────────────────────────────────────── */}
         <Section title="Why it exists">
           <p className="mt-4">
-            I kept writing the same one-off sync scripts — a cron job here, a
-            copy-paste ETL there — and none of them handled deletes, retries,
-            or the day the schema changed. I wanted one small thing I could run
-            on my own box, point at two databases, and trust. That is all
-            Syncle is meant to be.
+            I kept writing the same one-off sync scripts: a cron job here, a
+            copy-pasted ETL script there. None of them handled deletes, or
+            retries, or the day someone changed the schema. I wanted one thing
+            I could run on my own machine, point at two databases, and stop
+            thinking about.
           </p>
         </Section>
 
         {/* ── how it works ────────────────────────────────────────────── */}
-        <Section id="how-it-works" title="How a bridge fires">
+        <Section id="how-it-works" title="How a bridge runs">
           <p className="mt-4">
             A bridge is a saved sync path: a source table or query, the columns
-            and mapping, the destinations, and a trigger. The trigger is how it
-            notices that something changed — there are three, and you pick per
-            bridge. The rest of the pipeline is identical. The destination table
-            does not have to exist first: unless you turn it off, Syncle creates
-            it from the source schema on the first write, with the types
-            translated for whichever engine is receiving them.
+            and how they map, the destinations, and a trigger. There are three
+            triggers and you pick one per bridge; everything downstream of the
+            trigger is the same either way. The destination table does not have
+            to exist beforehand — unless you turn that off, Syncle creates it
+            from the source schema on the first write, translating the types
+            for whichever engine is receiving them.
           </p>
           <div className="mt-5 space-y-4">
             {TRIGGERS.map((t) => (
@@ -208,35 +207,34 @@ export default function Home() {
           <Shot
             src="/media/05-bridge-builder.webp"
             alt="The Syncle bridge builder: source table with selectable columns, a live preview of real rows, trigger configuration, the inferred schema and a sample payload"
-            caption="Picking the trigger in the builder, with a live preview of what will be sent."
+            caption="Picking a trigger in the builder, with a live preview of what will be sent."
           />
 
           <p className="mt-5">
-            Choosing CDC checks the source before it lets you continue: whether
-            logical replication is on for Postgres, the binlog is set to row
-            format for MySQL, the Mongo deployment is a replica set, or Redis
-            has keyspace notifications enabled — and when something is missing,
-            it says which setting and what to change it to. You find out at the
-            builder rather than from a bridge that silently never fires.
+            Choosing CDC checks the source before it lets you continue: logical
+            replication on for Postgres, row-format binlog for MySQL, a replica
+            set for Mongo, keyspace notifications for Redis. If something is
+            missing it names the setting and the value it needs, so you find
+            out in the builder instead of from a bridge that never fires.
           </p>
 
           <p className="mt-5 text-[15px] text-muted-foreground">
-            The honest edges: SQLite has no change log, so it syncs by watch
-            rather than CDC; and Redis keyspace notifications are not durable,
-            so a Redis CDC bridge misses events that happen while Syncle is
-            down. Details in{' '}
+            Two limits worth knowing up front. SQLite has no change log, so it
+            syncs by watch instead of CDC. And Redis keyspace notifications are
+            not durable, so a Redis CDC bridge misses anything that happens
+            while Syncle is down. The{' '}
             <a href="/docs/cdc" className="link">
-              the CDC documentation
-            </a>
-            .
+              CDC documentation
+            </a>{' '}
+            covers both.
           </p>
         </Section>
 
         {/* ── guarantees ──────────────────────────────────────────────── */}
-        <Section title="What it promises about your rows">
+        <Section title="Delivery guarantees">
           <p className="mt-4">
-            Moving data is the easy half. The hard half is moving it exactly
-            once, in the right shape, and noticing when a row disappears.
+            What you can rely on once a bridge is actually running, whichever
+            trigger it uses:
           </p>
           <div className="mt-5 space-y-4">
             {GUARANTEES.map((g) => (
@@ -248,12 +246,12 @@ export default function Home() {
         </Section>
 
         {/* ── the interface ───────────────────────────────────────────── */}
-        <Section title="What you see while it runs">
+        <Section title="The interface">
           <p className="mt-4">
-            Every delivery lands on a live timeline — synced, failed, skipped
-            or queued — and clicking one shows the exact row that was written,
-            how long it took, and any error. Failed rows can be retried in
-            place, without rerunning the job.
+            Every delivery lands on a live timeline, marked synced, failed,
+            skipped or queued. Click one and you get the row that was written,
+            how long it took, and the error if there was one. Failed rows can
+            be retried in place, without rerunning the whole job.
           </p>
 
           <Shot
@@ -263,15 +261,15 @@ export default function Home() {
           />
 
           <p className="mt-8">
-            Connecting a database for syncing also makes it browsable, so the
-            same interface doubles as a small database workbench, for every
-            connected engine and not just the ones in a bridge: browse, filter,
-            sort and edit rows, with CSV and JSON export; a query editor — SQL
+            Any database you connect for syncing is also browsable, so the
+            interface doubles as a small workbench — for every connection, not
+            only the ones in a bridge. You can browse, filter, sort and edit
+            rows, and export them as CSV or JSON. There is a query editor (SQL
             for the relational engines, command documents for MongoDB, plain
-            commands for Redis; schema views and an interactive ER diagram;
-            create and drop tables and databases; and backup and restore, as
-            portable JSON for any engine or a .sql script for the relational
-            ones.
+            commands for Redis), schema views and an interactive ER diagram,
+            DDL for creating and dropping tables and databases, and backup and
+            restore — portable JSON for any engine, or a{' '}
+            <code className="code">.sql</code> script for the relational ones.
           </p>
           <Shot
             src="/media/06-workbench-data.webp"
@@ -287,7 +285,7 @@ export default function Home() {
         </Section>
 
         {/* ── install ─────────────────────────────────────────────────── */}
-        <Section id="install" title="Installing it">
+        <Section id="install" title="Installing">
           <div className="mt-5">
             <CopyCommand command={INSTALL_COMMAND} />
           </div>
@@ -336,10 +334,9 @@ export default function Home() {
         </Section>
 
         {/* ── use cases ───────────────────────────────────────────────── */}
-        <Section id="use-cases" title="What people point it at">
+        <Section id="use-cases" title="What people use it for">
           <p className="mt-4">
-            Every one of these is the same primitive — a source, some
-            destinations, and a trigger — aimed at a different problem.
+            Each of these is one bridge, configured differently.
           </p>
           <div className="mt-5 space-y-4">
             {USE_CASES.map((u) => (
@@ -353,11 +350,11 @@ export default function Home() {
         </Section>
 
         {/* ── http destinations ───────────────────────────────────────── */}
-        <Section title="When the destination is an API">
+        <Section title="HTTP destinations">
           <p className="mt-4">
-            Sometimes the thing that needs the rows is a service, not another
-            database. A bridge can POST each change to a URL instead, with a
-            JSON body you shape yourself:
+            If the rows need to reach a service rather than a database, a
+            bridge can POST each change to a URL with a JSON body you design
+            yourself:
           </p>
           <CodeBlock title="Payload template">{`{
   "event": "row.changed",
@@ -366,63 +363,60 @@ export default function Home() {
   "sent_at": "{{$now}}"
 }`}</CodeBlock>
           <p className="mt-4">
-            Tokens fill in per row — any column by name, the whole row, the
-            operation that produced it. Substitution happens on the parsed
-            JSON, never by pasting strings together, so a value full of quotes
-            cannot break the body and nothing in a row is ever executed. Failed
-            requests retry with backoff. The details live in{' '}
+            Tokens are filled in per row: any column by name, the whole row,
+            the operation that produced it. Substitution happens on the parsed
+            JSON rather than by concatenating strings, so a value full of
+            quotes cannot break the body and nothing in a row is ever
+            evaluated. Failed requests retry with backoff.{' '}
             <a href="/docs/bridges" className="link">
               How bridges work
-            </a>
-            .
+            </a>{' '}
+            has the full token list.
           </p>
         </Section>
 
         {/* ── what it isn't ───────────────────────────────────────────── */}
         <Section id="compare" title="What it isn’t">
-          <p className="mt-4">
-            Knowing what a tool refuses to be tells you as much as its feature
-            list, so, plainly:
-          </p>
+          <p className="mt-4">Some things Syncle deliberately is not:</p>
           <div className="mt-5 space-y-4">
             <p>
-              <span className="font-semibold">Not a data platform.</span> No
-              Kafka, no connector marketplace, no scheduling DAGs. Airbyte
-              expects a platform deployment and a team to operate it, and
-              Debezium expects Kafka; both are built for teams running
-              pipelines as a discipline. If that is you, they will serve you
-              better — genuinely. Syncle is for one person who wants their
-              databases to agree.
+              <span className="font-semibold">Not a data platform.</span> There
+              is no Kafka, no connector marketplace and no DAG scheduler.
+              Airbyte expects a platform deployment and someone to operate it;
+              Debezium expects Kafka. Both are aimed at teams whose job is
+              running data pipelines, and if that describes you, they are the
+              better fit. Syncle is aimed at one person with two databases that
+              need to match.
             </p>
             <p>
               <span className="font-semibold">Not a cloud service.</span>{' '}
-              Nothing is hosted and there is no account. You run it, it is
-              yours, and backing it up is your job too — the{' '}
+              Nothing is hosted and there is no account to create. You run it,
+              which also means backups are yours to do — the{' '}
               <a href="/docs/self-hosting" className="link">
                 self-hosting page
               </a>{' '}
-              says exactly what to back up.
+              lists what to back up.
             </p>
             <p>
-              <span className="font-semibold">Not multi-user.</span> One admin
-              account, on purpose. It is a tool for the person who operates the
-              machine, not a workspace for a department.
+              <span className="font-semibold">Not a team platform.</span> The
+              first run creates one admin account, and an admin can add
+              operators and viewers. But there are no organisations, no
+              per-bridge permissions and no SSO.
             </p>
             <p>
-              <span className="font-semibold">Not magic.</span> CDC has
-              per-engine prerequisites, SQLite has no change log to read, and
-              Redis change events are not durable. The documentation writes
-              every limitation next to the feature it limits.
+              <span className="font-semibold">Not free of caveats.</span> CDC
+              has prerequisites on each engine, SQLite has no change log to
+              read, and Redis change events are not durable. Each of those is
+              written down next to the feature it affects.
             </p>
           </div>
         </Section>
 
         {/* ── security ────────────────────────────────────────────────── */}
-        <Section id="security" title="Your data, your machines">
+        <Section id="security" title="Credentials and data">
           <p className="mt-4">
-            A sync tool sees every row it moves and holds the credentials to
-            both ends. That earns some scrutiny, so here is exactly where
-            things stand:
+            Syncle holds credentials for both ends of every bridge and sees
+            every row that crosses it. What that means in practice:
           </p>
           <div className="mt-5 space-y-4">
             {SECURITY.map((item) => (
@@ -434,10 +428,10 @@ export default function Home() {
         </Section>
 
         {/* ── under the hood ──────────────────────────────────────────── */}
-        <Section title="Under the hood">
+        <Section title="How it is built">
           <p className="mt-4">
-            The first stable release, 1.0.0, shipped on 23 July 2026, after
-            the project grew up under its working name, Data Bridge.{' '}
+            The first stable release, 1.0.0, shipped on 23 July 2026; before
+            that the project went by Data Bridge.{' '}
             {/* the sentence already names 1.0.0; only add the clause once
                 the changelog has something newer to report */}
             {release && release.version !== '1.0.0' ? (
@@ -450,9 +444,9 @@ export default function Home() {
             )}{' '}
             It is TypeScript throughout: a NestJS API and a Next.js
             interface, running as four containers behind one published port,
-            keeping their own state in a bundled PostgreSQL and Redis. The
-            interface speaks English and Chinese, and the whole thing is MIT
-            licensed.
+            with a bundled PostgreSQL and Redis for their own state. The
+            interface is available in English and Chinese, and the whole thing
+            is MIT licensed.
           </p>
           <p className="mt-4">
             The changelog follows Keep a Changelog and releases aim at semantic
@@ -476,12 +470,11 @@ export default function Home() {
         </Section>
 
         {/* ── documentation ───────────────────────────────────────────── */}
-        <Section id="docs" title="The documentation">
+        <Section id="docs" title="Documentation">
           <p className="mt-4">
-            Nine short pages cover the whole tool. Every command, default and
-            endpoint in them was taken from the source code rather than from
-            memory, and where something has a limit, the limit is written next
-            to it.
+            Nine pages cover the whole tool. The commands, defaults and
+            endpoints in them were taken from the source rather than from
+            memory, and limits are written next to the features they apply to.
           </p>
           <ul className="mt-5 space-y-3 text-[15px]">
             {DOC_PAGES.map((page) => (
@@ -498,7 +491,7 @@ export default function Home() {
         </Section>
 
         {/* ── faq ─────────────────────────────────────────────────────── */}
-        <Section id="faq" title="Questions people ask first">
+        <Section id="faq" title="Common questions">
           <div className="mt-5 space-y-6">
             {FAQ.map((item) => (
               <div key={item.q}>
@@ -510,11 +503,11 @@ export default function Home() {
         </Section>
 
         {/* ── closing ─────────────────────────────────────────────────── */}
-        <Section title="Try it against two databases you already have">
+        <Section title="Try it">
           <p className="mt-4">
-            One command, about a minute, and nothing to clean up afterwards if
-            it is not for you — <code className="code">syncle uninstall</code>{' '}
-            removes every trace.
+            One command, about a minute. If it turns out not to be for you,{' '}
+            <code className="code">syncle uninstall</code> removes everything it
+            installed.
           </p>
           <div className="mt-5">
             <CopyCommand command={INSTALL_COMMAND} />
@@ -529,14 +522,13 @@ export default function Home() {
             <a href={`${GITHUB}/discussions`} rel="noopener" className="link">
               Discussions
             </a>
-            , where the answer stays readable for whoever asks the same thing
-            next month. Bug reports and rough edges go in{' '}
+            , so the answer is searchable for the next person who asks. Bugs go
+            in{' '}
             <a href={`${GITHUB}/issues`} rel="noopener" className="link">
               the issue tracker
-            </a>{' '}
-            — including places where the documentation and the software
-            disagree, which counts as a bug here. I read all of them. Code
-            contributions are welcome too; the{' '}
+            </a>
+            , and that includes places where the documentation and the software
+            disagree. I read all of them. Code contributions are welcome; the{' '}
             <a
               href={`${GITHUB}/blob/main/CONTRIBUTING.md`}
               rel="noopener"
@@ -545,8 +537,8 @@ export default function Home() {
               contributing guide
             </a>{' '}
             covers the setup, which is three commands once you have Node 22,
-            pnpm 10 and Docker. Security problems go by email rather than into
-            a public issue — the{' '}
+            pnpm 10 and Docker. Security problems should go by email rather
+            than into a public issue — the{' '}
             <a href="/docs/self-hosting#reporting" className="link">
               self-hosting page
             </a>{' '}
