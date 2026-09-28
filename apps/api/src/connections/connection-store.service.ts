@@ -16,7 +16,7 @@ import {
   NotFoundError,
   BadRequestError,
 } from '@syncle/core';
-import { getDriver } from '@syncle/core/adapters';
+import { getDriver, reachHostFromContainer } from '@syncle/core/adapters';
 import { CryptoService } from '../common/crypto.service';
 import { PrismaService } from '../common/prisma.service';
 
@@ -191,9 +191,18 @@ export class ConnectionStoreService {
     return this.toConfig(await this.getRow(id), false);
   }
 
-  /** full config including decrypted secrets, server-internal use only */
+  /**
+   * full config including decrypted secrets, server-internal use only.
+   *
+   * This is where every dial the server makes comes from — the workbench, a
+   * replay, a change stream, a dead-letter retry — so it is also where a
+   * loopback address is pointed at the host running Syncle when Syncle is in a
+   * container. What is stored and shown is left exactly as it was typed; only
+   * the copy handed to a driver is corrected, and a tunnelled connection is
+   * never touched (see reachHostFromContainer).
+   */
   async resolve(id: string): Promise<ConnectionConfig> {
-    return this.toConfig(await this.getRow(id), true);
+    return reachHostFromContainer(this.toConfig(await this.getRow(id), true));
   }
 
   /**

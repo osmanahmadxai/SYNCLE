@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-28
+
+### Fixed
+
+- **A database on the machine running Syncle could not be reached by typing
+  `localhost`.** It is the first address anyone tries, and on a Docker install
+  it was the one address that could never work: inside a container `localhost`
+  is the container, where nothing is listening. What came back was the driver's
+  own words — `Could not connect to PostgreSQL: connect ECONNREFUSED
+  127.0.0.1:5432` — which leaves the reader to already know that a container has
+  a loopback of its own, and the docs said to type `host.docker.internal`
+  instead. A loopback address is now read as what it plainly means, the database
+  on this machine, and dialled at the host: `host.docker.internal` where Docker
+  provides that name, the container's own gateway where it does not, or
+  `SYNCLE_HOST_GATEWAY` when it is set. `127.0.0.1`, the rest of `127.0.0.0/8`,
+  `::1`, `0.0.0.0` and a loopback host inside a connection string are all
+  covered, on every engine.
+  - It applies on the way to a driver and nowhere else: what is stored and shown
+    is the address that was typed, and saving a connection again keeps it.
+  - **A connection that tunnels through SSH is left exactly as it was**, because
+    there `localhost` is the bastion's own localhost — usually the point of the
+    tunnel. The correction runs before the tunnel puts its own loopback address
+    in place, never after.
+  - A certificate is still checked against the name that was asked for: where a
+    loopback host is corrected, it becomes the TLS server name unless one was
+    given.
+  - `docker-compose.app.yml` now maps `host.docker.internal` to the host
+    gateway, so the name resolves on Linux as it already did on Docker Desktop,
+    and passes `SYNCLE_HOST_GATEWAY` through like every other setting. The test
+    that holds the compose file to the settings the code reads now covers
+    `packages/core` as well as the API.
+
 ## [1.4.0] - 2026-09-28
 
 The largest release so far, and most of it is correctness. A row that has been

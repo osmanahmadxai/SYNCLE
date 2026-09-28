@@ -39,7 +39,13 @@ function sourceFiles(dir: string): string[] {
 /** every variable name the API's own source reads */
 function variablesRead(): string[] {
   const names = new Set<string>();
-  for (const file of sourceFiles(resolve(__dirname, '../src'))) {
+  const roots = [
+    resolve(__dirname, '../src'),
+    // core reads the environment too (where a database on this machine is),
+    // and a setting there is just as unreachable on a Docker install
+    resolve(ROOT, 'packages/core/src'),
+  ];
+  for (const file of roots.flatMap(sourceFiles)) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g))
       names.add(m[1]!);
