@@ -27,7 +27,14 @@ export {
   normalizeMongoDocument,
   normalizeMongoValue,
 } from './nosql/mongodb-adapter';
-export { describeConnectionString, withDatabase } from './connection-string';
+export { describeConnectionString, withDatabase, withHost } from './connection-string';
+export {
+  hostGateway,
+  inContainer,
+  isLoopbackHost,
+  reachHostFromContainer,
+  type HostReach,
+} from './container-host';
 export { redisGlobMatch, redisKeyPattern } from './nosql/redis-key-pattern';
 export {
   describeTls,

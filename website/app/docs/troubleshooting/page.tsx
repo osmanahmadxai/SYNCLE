@@ -214,9 +214,33 @@ export default function Page() {
         Without a tunnel, the usual causes are the database not listening on an
         interface Syncle can reach, or TLS. Syncle connects out to your
         database, so the database has to accept a connection from the Docker
-        host. On the same machine, that is generally{' '}
-        <code>host.docker.internal</code> rather than{' '}
-        <code>localhost</code>, which inside a container means the container.
+        host — and it has to be listening on an address that is not only the
+        host&apos;s own loopback (PostgreSQL&apos;s{' '}
+        <code>listen_addresses</code>, MySQL&apos;s <code>bind-address</code>),
+        with a <code>pg_hba.conf</code> rule or grant that admits the Docker
+        network.
+      </p>
+      <p>
+        The address itself needs nothing from you:{' '}
+        <strong>
+          a database on the machine running Syncle is reached by typing{' '}
+          <code>localhost</code>
+        </strong>
+        , as you would expect. Inside a container that name means the container,
+        so Syncle reads it as the host and dials there instead —{' '}
+        <code>host.docker.internal</code> where Docker provides that name, and
+        the container&apos;s gateway otherwise. It is applied on the way to the
+        database only: the connection still shows the address you typed.{' '}
+        <code>127.0.0.1</code> and a loopback address inside a connection string
+        are treated the same way, and <code>SYNCLE_HOST_GATEWAY</code> overrides
+        the address if your Docker reaches the host at some other one.
+      </p>
+      <p>
+        One place this does <em>not</em> apply, because there it would be wrong:
+        a connection that goes through an <strong>SSH tunnel</strong>. Its host
+        is resolved on the far side of the bastion, where <code>localhost</code>{' '}
+        means the bastion&apos;s own database — which is usually exactly what a
+        tunnel is for.
       </p>
 
       <h2 id="deliveries-failing">Rows are failing rather than syncing</h2>

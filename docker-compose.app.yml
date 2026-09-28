@@ -110,7 +110,17 @@ services:
       SYNCLE_BLOCK_PRIVATE_DESTINATIONS: ${SYNCLE_BLOCK_PRIVATE_DESTINATIONS:-}
       SYNCLE_SECURE_COOKIES: ${SYNCLE_SECURE_COOKIES:-}
       SYNCLE_SQLITE_DIR: ${SYNCLE_SQLITE_DIR:-}
+      # where a database on THIS machine is, seen from in here. Worked out on
+      # its own (the name below, else the container's gateway); set it only if
+      # your Docker reaches the host at some other address.
+      SYNCLE_HOST_GATEWAY: ${SYNCLE_HOST_GATEWAY:-}
       WEB_ORIGIN: ${WEB_ORIGIN:-}
+    # So that a connection to a database running on THIS machine works: typing
+    # `localhost` is read as the host rather than the container (which is what
+    # localhost means in here, where nothing is listening). Docker Desktop maps
+    # this name itself; on Linux only this line does.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     volumes:
       - syncle-api-data:/app/apps/api/.syncle
     # Not published: the browser reaches the API through the web app's /api

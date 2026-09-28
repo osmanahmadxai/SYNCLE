@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeConnectionString, withDatabase } from './connection-string';
+import { describeConnectionString, withDatabase, withHost } from './connection-string';
 
 describe('withDatabase', () => {
   it('points the string at the chosen database, keeping everything else', () => {
@@ -71,5 +71,28 @@ describe('describeConnectionString', () => {
       database: null,
       user: null,
     });
+  });
+});
+
+describe('withHost', () => {
+  it('points the string at another host, keeping everything else', () => {
+    expect(withHost('postgres://u:p@localhost:5432/app?sslmode=require', 'host.docker.internal')).toBe(
+      'postgres://u:p@host.docker.internal:5432/app?sslmode=require',
+    );
+    expect(withHost('rediss://default:s3cret@127.0.0.1:6379/2', '192.168.65.254')).toBe(
+      'rediss://default:s3cret@192.168.65.254:6379/2',
+    );
+  });
+
+  it('leaves alone what it cannot or should not rewrite', () => {
+    // a +srv host is a DNS record naming the servers, not an address to dial
+    expect(withHost('mongodb+srv://u:p@cluster.example.com/app', 'h')).toBe(
+      'mongodb+srv://u:p@cluster.example.com/app',
+    );
+    expect(withHost('not a url', 'h')).toBe('not a url');
+    expect(withHost('postgres://u@db:5432/app', undefined)).toBe('postgres://u@db:5432/app');
+    expect(withHost('postgres://u@db:5432/app', '  ')).toBe('postgres://u@db:5432/app');
+    // already there: byte-for-byte unchanged, not re-serialised
+    expect(withHost('postgres://u@db:5432/app', 'db')).toBe('postgres://u@db:5432/app');
   });
 });

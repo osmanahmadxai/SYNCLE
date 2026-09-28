@@ -6,7 +6,7 @@
  * connects and closes with it
  */
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { createAdapter } from '@syncle/core/adapters';
+import { createAdapter, reachHostFromContainer } from '@syncle/core/adapters';
 import { runtimeConfig } from '../common/runtime-config';
 import type { ConnectionConfig, DatabaseAdapter } from '@syncle/core';
 import { SettingsStoreService } from '../settings/settings-store.service';
@@ -186,7 +186,10 @@ export class AdapterPoolService implements OnModuleDestroy {
    * can be shown — and pinned — before the connection is ever saved.
    */
   async test(config: ConnectionConfig): Promise<{ sshHostKey?: string }> {
-    const restricted = withServerRestrictions(config);
+    // a config that has not been saved does not come through the store, so the
+    // loopback correction the store applies has to happen here too — otherwise
+    // Test fails on an address that works the moment it is saved
+    const restricted = withServerRestrictions(await reachHostFromContainer(config));
     const tunnel = await this.tunnels.openFor(restricted);
     const adapter = createAdapter(this.tunnels.reroute(restricted, tunnel));
     try {

@@ -28,6 +28,25 @@ export function withDatabase(
   }
 }
 
+/**
+ * the same connection string, pointed at `host`. unparseable = unchanged, and so
+ * is a `+srv` scheme, where the host is a DNS record that names the servers
+ * rather than an address to dial.
+ */
+export function withHost(connectionString: string, host: string | undefined): string {
+  const name = host?.trim();
+  if (!name) return connectionString;
+  try {
+    const url = new URL(connectionString);
+    if (url.protocol.includes('+srv')) return connectionString;
+    if (url.hostname === name) return connectionString;
+    url.hostname = name;
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
 /** what a connection string points at, without its secrets — for labels and logs */
 export function describeConnectionString(connectionString: string): {
   host: string | null;
