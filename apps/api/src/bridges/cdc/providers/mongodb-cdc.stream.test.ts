@@ -14,8 +14,11 @@ const fake = vi.hoisted(() => {
     scripts: [] as Array<{
       fail?: Error & { code?: number; codeName?: string };
       changes?: unknown[];
+      /** when set, the first read waits on it: the cursor is not created yet */
+      positioned?: Promise<void>;
     }>,
     watched: [] as Array<Record<string, unknown>>,
+    positioned: 0,
     closed: 0,
   };
   class FakeClient {
@@ -31,6 +34,12 @@ const fake = vi.hoisted(() => {
             const script = state.scripts.shift() ?? {};
             return {
               close: async () => undefined,
+              // the driver creates the server-side cursor on the first read
+              tryNext: async () => {
+                await script.positioned;
+                state.positioned++;
+                return null;
+              },
               async *[Symbol.asyncIterator]() {
                 for (const change of script.changes ?? []) yield change;
                 if (script.fail) throw script.fail;
@@ -76,6 +85,7 @@ const historyLost = Object.assign(
 beforeEach(() => {
   fake.state.scripts = [];
   fake.state.watched = [];
+  fake.state.positioned = 0;
   fake.state.closed = 0;
 });
 
@@ -196,3 +206,41 @@ describe('an update whose document is gone by the time it is looked up', () => {
   });
 });
 
+
+describe('a bridge that has only just started', () => {
+  it('is not running until its change stream is positioned: a document written the moment after start() would otherwise be ahead of it', async () => {
+    let position!: () => void;
+    fake.state.scripts = [
+      { positioned: new Promise<void>((r) => (position = r)) },
+    ];
+    const provider = new MongodbCdcProvider();
+    let started = false;
+    const starting = provider
+      .startStream({
+        bridgeId: 'b1',
+        bridge,
+        conn,
+        fromCursor: null,
+        handlers: {
+          onChange: async () => undefined,
+          onError: () => undefined,
+        },
+      })
+      .then((h) => {
+        started = true;
+        return h;
+      });
+
+    // the stream is open but its cursor does not exist yet
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fake.state.watched).toHaveLength(1);
+    expect(fake.state.positioned).toBe(0);
+    expect(started).toBe(false);
+
+    position();
+    const handle = await starting;
+    expect(started).toBe(true);
+    expect(fake.state.positioned).toBe(1);
+    await handle.stop();
+  });
+});

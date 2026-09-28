@@ -253,6 +253,15 @@ can no longer lose a row to a failed delivery.
   fills it. MySQL is covered too: a purged binlog file, or a connection that
   now reaches a different server, is detected before the stream is opened
   instead of failing in a loop.
+- **A MongoDB CDC bridge reported itself running before its change stream
+  existed.** A change stream with no resume token starts wherever the server
+  creates its cursor, and the driver creates that cursor on the first read —
+  which happened after `start()` had already returned. A document written in
+  between was never in the stream and never in the destination, and nothing
+  showed it: the bridge was green and a row was simply missing. The window is
+  microseconds against a database on the same machine and wide enough to lose
+  rows through an SSH tunnel, which is where it was caught. A start now waits
+  for the stream to be positioned, as the MySQL binlog reader has since 1.3.0.
 - **CDC ignored a connection's SSH tunnel.** Change streams open their own
   connections — a replication connection, a binlog client, a change stream, a
   subscriber — and dialled the database host as written. Behind a bastion that
