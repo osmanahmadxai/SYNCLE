@@ -8,10 +8,11 @@ export default function Page() {
   return (
     <DocArticle slug="api">
       <p>
-        The web interface has no privileged path into Syncle — everything it
-        does goes through the REST API on this page, so anything you can click,
-        you can script. Every route lives under <code>/api</code>, requests and
-        responses are JSON, and a session cookie is the only authentication.
+        The web interface has no privileged path into Syncle. Everything it
+        does goes through the REST API documented on this page, so anything you
+        can do in the interface you can also do from a script. Every route
+        lives under <code>/api</code>, requests and responses are JSON, and a
+        session cookie is the only authentication.
       </p>
 
       <h2 id="conventions">Conventions</h2>

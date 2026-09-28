@@ -15,7 +15,7 @@ export default function Page() {
         sources button at the top of the sidebar; close it with Done.
       </p>
 
-      <h2 id="one-overlay-four-tabs">One overlay, four tabs</h2>
+      <h2 id="one-overlay-four-tabs">The overlay and its four tabs</h2>
       <p>
         The overlay splits in two. The left side lists your connections and,
         under each one, a schema tree of databases and tables. The right side
@@ -53,8 +53,8 @@ export default function Page() {
         and delete existing ones. Rows are identified by primary key, so
         editing is only offered when the engine supports row editing and the
         table actually has a primary key. The export buttons write the rows
-        currently in the grid to CSV or JSON entirely in the browser — no
-        server round-trip, so what you export is exactly the page you are
+        currently in the grid to CSV or JSON entirely in the browser. There is
+        no server round-trip, so what you export is exactly the page you are
         looking at.
       </p>
 

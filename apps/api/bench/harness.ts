@@ -1,9 +1,9 @@
 /**
  * Benchmark plumbing: timing, environment capture, and the JSON writer.
  *
- * Everything published on the website comes from this file's output. Nothing is
- * typed by hand, nothing is rounded up, and every record carries the row count
- * and elapsed time it was derived from so a reader can check the arithmetic.
+ * Everything published on the website comes from this file's output, and every
+ * record carries the row count and elapsed time it was derived from so a reader
+ * can check the arithmetic.
  */
 import { cpus, totalmem, platform, release, arch } from 'node:os';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -51,18 +51,19 @@ export interface BenchReport {
 /**
  * Every database, Redis and Syncle itself run on ONE machine here, so there is
  * effectively no network between them. That flatters throughput compared with a
- * managed or remote database, where round-trip latency dominates — and it is
- * exactly the reason the batching work matters, so it would be dishonest to
- * publish the figures without saying so.
+ * managed or remote database, where round-trip latency dominates. It is also
+ * why the batching work matters, and why the figures are published with this
+ * caveat attached rather than on their own.
  */
 export const DISCLAIMER =
-  'Measured on a single local machine: Syncle, both databases and Redis all run ' +
-  'on the same host, in containers, with no network between them. Real ' +
+  'Measured on a single local machine: Syncle, both databases and Redis all ' +
+  'run on the same host, in containers, with no network between them. Real ' +
   'deployments put a network in that path, and against a managed or remote ' +
-  'database latency — not the database — is usually what sets the pace, so ' +
-  'expect lower absolute numbers there. These runs are useful for comparing ' +
-  'code paths against each other, not for predicting your production ceiling. ' +
-  'Every figure is measured; none is estimated, extrapolated or rounded up.';
+  'database the round-trip latency is usually what sets the pace rather ' +
+  'than the database itself, so expect lower absolute numbers there. Use ' +
+  'these runs to compare code paths against each other; they will not ' +
+  'predict your production ceiling. Every figure here was measured, not ' +
+  'estimated.';
 
 /** time `fn`, returning its value and the elapsed wall clock */
 export async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }> {

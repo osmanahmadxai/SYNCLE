@@ -12,13 +12,13 @@ export default function Page() {
         database&apos;s own change log the moment they commit — no polling.
         Each engine captures changes a different way and each has
         prerequisites Syncle cannot always set up for you. This page lists
-        them per engine, shows what Syncle provisions itself, and states the
-        limits plainly.
+        them per engine, shows what Syncle provisions itself, and gives the
+        limits for each.
       </p>
 
       <p>
         The alternative for live syncing is a <strong>watch</strong> bridge,
-        which polls the source on a cursor and works on every engine —
+        which polls the source on a cursor and works on every engine,
         including the two cases where CDC falls short: SQLite has no change
         log at all, and the Redis change feed is not durable. The trigger
         modes are compared on <a href="/docs/bridges">How bridges work</a>.
