@@ -8,10 +8,10 @@ export default function Page() {
   return (
     <DocArticle slug="troubleshooting">
       <p>
-        The failures people actually hit, and what each one means. Most of them
-        are a database setting rather than a bug in Syncle — CDC in particular
-        needs the source server configured for it, and no tool can turn that on
-        from the outside.
+        The failures that come up most often, and what each one means. Most
+        turn out to be a database setting rather than a bug in Syncle. CDC in
+        particular needs the source server configured for it, and no tool can
+        turn those settings on from the outside.
       </p>
 
       <h2 id="syncle-up-does-nothing">syncle up exits without starting</h2>
@@ -48,9 +48,9 @@ export default function Page() {
 
       <h2 id="forgot-password">I cannot sign in: the password is gone</h2>
       <p>
-        There is no e-mail to send a link to. The proof of being the operator is
-        what it was on the first day — being able to read the server — so a
-        reset code is printed there:
+        There is no e-mail address on file to send a link to, so the reset
+        works the way first-run setup did: a code is printed on the server, and
+        reading it proves you have access to the machine.
       </p>
       <CodeBlock>{`syncle reset-password`}</CodeBlock>
       <p>

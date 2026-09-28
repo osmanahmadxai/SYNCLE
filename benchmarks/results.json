@@ -7,7 +7,7 @@
     "Durable spool": "off — the default; one scenario below enables it",
     "Write mode": "idempotent upsert, keyed on the primary key"
   },
-  "disclaimer": "Measured on a single local machine: Syncle, both databases and Redis all run on the same host, in containers, with no network between them. Real deployments put a network in that path, and against a managed or remote database latency — not the database — is usually what sets the pace, so expect lower absolute numbers there. These runs are useful for comparing code paths against each other, not for predicting your production ceiling. Every figure is measured; none is estimated, extrapolated or rounded up.",
+  "disclaimer": "Measured on a single local machine: Syncle, both databases and Redis all run on the same host, in containers, with no network between them. Real deployments put a network in that path, and against a managed or remote database the round-trip latency is usually what sets the pace rather than the database itself, so expect lower absolute numbers there. Use these runs to compare code paths against each other; they will not predict your production ceiling. Every figure here was measured, not estimated.",
   "environment": {
     "Platform": "darwin 25.5.0 (arm64)",
     "CPU": "Apple M4",

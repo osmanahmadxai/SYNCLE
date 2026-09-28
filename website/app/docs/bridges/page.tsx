@@ -10,14 +10,14 @@ export default function Page() {
       <p>
         A bridge is the saved sync path: a source, a column mapping, one or
         more destinations, and a trigger that decides when rows move. This
-        page is the mental model — how a bridge turns into jobs and
-        deliveries, what each trigger mode does, and what Syncle guarantees
-        about what lands on the other side.
+        page covers how a bridge turns into jobs and deliveries, what each
+        trigger mode does, and what Syncle guarantees about what lands on the
+        other side.
       </p>
 
       <h2 id="bridges-jobs-deliveries">Bridges, jobs and deliveries</h2>
       <p>
-        Three words carry everything here. A <strong>bridge</strong> is the
+        Three terms cover most of it. A <strong>bridge</strong> is the
         configuration: the source (a table, optionally filtered and sorted, or
         a raw query on a connection), the transform, the destinations, and the
         trigger. A <strong>job</strong> is one execution of a bridge. A{' '}
@@ -211,7 +211,7 @@ export default function Page() {
         subscribe to a subset of operations (insert, update, delete; default
         all three — PostgreSQL sources can also mirror{' '}
         <code>TRUNCATE</code>, which is opt-in). SQLite has no change log, so CDC is not available there —
-        use a watch bridge. Each engine has prerequisites and honest
+        use a watch bridge. Each engine has prerequisites and documented
         limitations, and the bridge builder runs a readiness check that lists
         anything missing; the <a href="/docs/cdc">CDC setup page</a> covers
         all of it.
@@ -885,7 +885,7 @@ export default function Page() {
         that holds both numbers and strings is stored as text.
       </p>
       <p>
-        <strong>A narrowing is never silent.</strong> Whenever the target
+        <strong>Narrowing is always reported.</strong> Whenever the target
         cannot hold everything the source column can — a time zone MySQL has
         nowhere to put, a precision beyond MySQL&apos;s 65 digits, a key
         column that had to be bounded to <code>VARCHAR(255)</code>, an enum
@@ -897,7 +897,7 @@ export default function Page() {
         table is never altered.
       </p>
 
-      <h3 id="dry-run">See it before it happens</h3>
+      <h3 id="dry-run">Previewing a run</h3>
       <p>
         The builder&apos;s <strong>Dry run</strong> button shows what the
         bridge would do as it is set up right now, before it is saved: for
@@ -912,11 +912,12 @@ export default function Page() {
         <a href="/docs/api">preview endpoints</a>.
       </p>
 
-      <h3 id="value-fidelity">Values arrive as the values they were</h3>
+      <h3 id="value-fidelity">How values keep their precision</h3>
       <p>
-        The right column type is half of it; the drivers on either side also
-        have to agree on what a value <em>is</em>. Syncle reads values in the
-        form that loses nothing and converts only where the target needs it:
+        Picking the right column type is only part of it: the drivers on
+        either side also have to agree on what a value <em>is</em>. Syncle
+        reads values in whichever form loses nothing, and converts only where
+        the target needs it:
       </p>
       <ul>
         <li>
@@ -1344,11 +1345,12 @@ export default function Page() {
         be the same twice and is left out, with a note.
       </p>
       <p>
-        <strong>A bridge that is delivering is a moving target.</strong> A row
-        read a moment before its change arrives looks different, and is not. So
-        nothing counts at first sight: what looks wrong is read again from both
-        ends a little later (<code>SYNCLE_VERIFY_RECHECK_MS</code>, default
-        1.5 s), and only what is still wrong is reported.
+        <strong>A bridge that is still delivering is a moving target.</strong>{' '}
+        A row read a moment before its change arrives looks different without
+        being wrong, so nothing is reported on a first reading. What looks
+        wrong is read again from both ends a little later
+        (<code>SYNCLE_VERIFY_RECHECK_MS</code>, default 1.5 s), and only what
+        is still wrong is reported.
       </p>
       <p>
         <strong>Reconcile</strong> does the same and writes the rows that are

@@ -13,7 +13,7 @@ import {
 export const metadata: Metadata = {
   title: 'Benchmarks — Syncle',
   description:
-    'Measured throughput for Syncle, run against real PostgreSQL, MySQL and MongoDB with millions of rows. Every figure comes from a recorded run, not an estimate.',
+    'Measured throughput for Syncle, run against real PostgreSQL, MySQL and MongoDB with millions of rows. Every figure comes from a recorded benchmark run.',
 };
 
 const RESULTS_SOURCE = `${GITHUB}/blob/main/benchmarks/results.json`;
@@ -103,8 +103,8 @@ export default function BenchmarksPage() {
               <a href={RESULTS_SOURCE} rel="noopener" className="link">
                 <code>benchmarks/results.json</code>
               </a>{' '}
-              and this page only renders that file — so anything shown here can
-              be reproduced, and nothing here was typed by hand.
+              and this page only renders that file, so every figure here can
+              be traced back to a run and reproduced.
             </p>
 
             <div className="mt-8 rounded-lg border border-amber-500/30 bg-amber-500/5 p-5">
@@ -121,9 +121,9 @@ export default function BenchmarksPage() {
                 The configuration
               </h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                The shipped defaults — these are not tuned for the benchmark.
-                Read from the running configuration, so this cannot claim
-                settings the run did not use.
+                The shipped defaults, not tuning done for the benchmark.
+                These values are read from the running configuration, so they
+                are the ones the run actually used.
               </p>
               <dl className="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
                 {Object.entries(report.configuration ?? {}).map(([k, v]) => (
@@ -140,7 +140,7 @@ export default function BenchmarksPage() {
                 The machine
               </h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                Syncle, the databases and Redis all ran here, together.
+                Syncle, the databases and Redis all ran on this one machine.
               </p>
               <dl className="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
                 {Object.entries(report.environment).map(([k, v]) => (
@@ -260,9 +260,9 @@ pnpm benchmark`}</code>
               <p className="mt-3 text-sm text-muted-foreground">
                 The run resets replication slots, fixtures and the metadata
                 store first, because leftovers from a previous run distort
-                everything after them. Each figure is verified complete and
-                duplicate-free before its time is recorded — a throughput number
-                is worthless if the data is wrong.
+                everything after them. Each run is checked for completeness and
+                duplicates before its time is recorded, so a fast number that
+                moved the wrong data is not published as a result.
               </p>
             </section>
 
