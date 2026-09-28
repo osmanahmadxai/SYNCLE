@@ -37,6 +37,9 @@ function operationTypes(ops: Set<CdcOperation>): string[] {
   return out;
 }
 
+/** how long startStream() waits for the change stream to be positioned */
+const READY_TIMEOUT_MS = 10_000;
+
 @Injectable()
 export class MongodbCdcProvider implements CdcProvider {
   readonly engine: DatabaseEngine = 'mongodb';
@@ -210,6 +213,24 @@ export class MongodbCdcProvider implements CdcProvider {
     const pipeline =
       matchTypes.length > 0 ? [{ $match: { operationType: { $in: matchTypes } } }] : [];
 
+    const handle = async (change: ChangeStreamDocument): Promise<void> => {
+      const mapped = this.mapChange(change);
+      if (mapped && 'skip' in mapped) await handlers.onSkip?.(mapped.skip);
+      else if (mapped) await handlers.onChange(mapped);
+      resumeToken = (change as { _id?: unknown })._id ?? resumeToken;
+    };
+
+    // `startStream()` must not return before the stream is positioned. A change
+    // stream with no resume token starts where the server creates its cursor,
+    // and the driver creates that cursor on the first read — so a document
+    // written in between is never seen by it. The window is invisible against a
+    // local server and wide open through an SSH tunnel. (The binlog reader
+    // waits to be positioned for the same reason.)
+    let signalReady: (() => void) | null = null;
+    const positioned = new Promise<void>((resolve) => {
+      signalReady = resolve;
+    });
+
     const loop = async (): Promise<void> => {
       while (!stopped) {
         try {
@@ -225,12 +246,17 @@ export class MongodbCdcProvider implements CdcProvider {
           current = stream;
           attempt = 0; // successful open resets backoff
 
+          // the read that makes the server create the cursor. it hands back a
+          // change if one was already waiting, which is delivered like any other
+          const first = await stream.tryNext();
+          signalReady?.();
+          signalReady = null;
+          if (stopped) break;
+          if (first) await handle(first as ChangeStreamDocument);
+
           for await (const change of stream as AsyncIterable<ChangeStreamDocument>) {
             if (stopped) break;
-            const mapped = this.mapChange(change);
-            if (mapped && 'skip' in mapped) await handlers.onSkip?.(mapped.skip);
-            else if (mapped) await handlers.onChange(mapped);
-            resumeToken = (change as { _id?: unknown })._id ?? resumeToken;
+            await handle(change);
           }
           // iterator ended without error (e.g. closed by stop())
           if (stopped) break;
@@ -267,6 +293,16 @@ export class MongodbCdcProvider implements CdcProvider {
 
     // drive the loop in the background, it owns its own lifecycle
     void loop().catch((err) => handlers.onError(err as Error));
+
+    // bounded: a server that never opens the stream must not hang the start
+    // call, and the stream is still usable — it delivers from whenever it opens
+    await Promise.race([
+      positioned,
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, READY_TIMEOUT_MS);
+        t.unref?.();
+      }),
+    ]);
 
     return {
       stop: async () => {
