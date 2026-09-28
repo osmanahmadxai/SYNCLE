@@ -158,15 +158,22 @@ describe('a watch on a Redis source', () => {
     try {
       const b = await watchBridge(prefix);
       await watch.start(b.id);
-      // the first poll (nothing new: every key was there at the start)
+      // the pages of the keyspace — which is what is counted below. the watch
+      // also probes the source once for its primary key, with no filters, and
+      // waiting on `calls` counted that probe towards the six: where the probe
+      // landed inside the window, the wait ended with only five pages read
+      const keyspacePages = (): BrowseParams[] =>
+        calls.filter((c) =>
+          c.filters?.some((f) => String(f.value).includes(prefix)),
+        );
+      // the snapshot taken at the start and the first poll: three pages each
+      // (nothing new — every key was there at the start)
       await waitFor(
         'the first poll',
-        async () => (calls.length >= 6 ? true : null),
+        async () => (keyspacePages().length >= 6 ? true : null),
         { timeoutMs: 20_000 },
       );
-      const pages = calls.filter((c) =>
-        c.filters?.some((f) => String(f.value).includes(prefix)),
-      );
+      const pages = keyspacePages();
       expect(pages.length).toBeGreaterThanOrEqual(6);
       // every page by cursor, none by offset; the pages after the first at the cursor the one before gave
       expect(
