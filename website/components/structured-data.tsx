@@ -8,16 +8,40 @@ import {
 } from '@/lib/content';
 
 /**
- * JSON-LD for the page. Three graphs:
+ * The FAQ graph, rendered only by the page that shows those questions —
+ * the docs overview. Structured data has to mirror text a reader can see,
+ * so this travels with the visible list rather than sitting in the layout.
+ */
+export function FaqStructuredData() {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{
+        __html: JSON.stringify({
+          '@context': 'https://schema.org',
+          '@type': 'FAQPage',
+          '@id': `${SITE_URL}/docs#faq`,
+          mainEntity: FAQ.map((item) => ({
+            '@type': 'Question',
+            name: item.q,
+            acceptedAnswer: { '@type': 'Answer', text: item.a },
+          })),
+        }),
+      }}
+    />
+  );
+}
+
+/**
+ * JSON-LD for every page. Two graphs:
  *
  *  - SoftwareApplication + SoftwareSourceCode (multi-typed — the standard
  *    pattern for open-source tools, which makes codeRepository and
  *    programmingLanguage legal properties).
- *  - FAQPage, mirroring the visible FAQ exactly — the answers must be present
- *    on the page, which is why both read from lib/content. Google has retired
- *    FAQ rich results for most sites; the value now is entity clarity and
- *    LLM/AI-overview consumption.
  *  - WebSite, for brand/entity disambiguation.
+ *
+ * The FAQ graph is not here: it belongs on the one page that shows those
+ * questions, and `FaqStructuredData` above is rendered there.
  *
  * softwareVersion is deliberately absent: a hardcoded version goes stale the
  * moment a release ships, and wrong structured data is worse than none.
@@ -69,15 +93,6 @@ export function StructuredData() {
         'HTTP endpoints as a destination',
         'SSH tunnels to private databases',
       ],
-    },
-    {
-      '@type': 'FAQPage',
-      '@id': `${SITE_URL}/#faq`,
-      mainEntity: FAQ.map((item) => ({
-        '@type': 'Question',
-        name: item.q,
-        acceptedAnswer: { '@type': 'Answer', text: item.a },
-      })),
     },
     {
       '@type': 'WebSite',

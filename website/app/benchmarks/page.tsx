@@ -23,16 +23,15 @@ const RUNNER_SOURCE = `${GITHUB}/blob/main/apps/api/bench`;
 function Detail({ detail }: { detail: BenchResult['detail'] }) {
   if (!detail || Object.keys(detail).length === 0) return null;
   return (
-    <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+    <ul className="mt-1 flex flex-wrap gap-x-4 text-[13px] text-muted-foreground">
       {Object.entries(detail).map(([k, v]) => (
         <li key={k}>
-          <span className="opacity-70">{k}:</span> {String(v)}
+          {k}: {String(v)}
         </li>
       ))}
     </ul>
   );
 }
-
 
 /**
  * A suite whose scenarios are all "Source → Destination" reads far better as a
@@ -61,20 +60,17 @@ function asMatrix(results: BenchResult[]): {
   };
 }
 
-/** rows/sec, coloured by magnitude so the shape of the grid reads instantly */
-function Rate({ result }: { result?: BenchResult }) {
-  if (!result) return <span className="text-muted-foreground/50">—</span>;
-  const v = result.rowsPerSec;
-  const tone =
-    v >= 50_000
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : v >= 10_000
-        ? 'text-foreground'
-        : 'text-amber-600 dark:text-amber-400';
+/** a table of key/value readings: the run's settings, or the machine */
+function Readings({ values }: { values: Record<string, string> }) {
   return (
-    <span className={`font-semibold tabular-nums ${tone}`}>
-      {formatNumber(v)}
-    </span>
+    <dl className="mt-4 text-[15px]">
+      {Object.entries(values).map(([k, v]) => (
+        <div key={k} className="flex gap-4 border-b py-2">
+          <dt className="w-44 shrink-0 text-muted-foreground">{k}</dt>
+          <dd className="min-w-0 break-words">{v}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -84,101 +80,79 @@ export default function BenchmarksPage() {
   return (
     <>
       <SiteHeader current="benchmarks" />
-      <main className={`mx-auto px-6 pb-16 ${MEASURE}`}>
-        <h1 className="text-3xl font-semibold tracking-tight">Benchmarks</h1>
+      <main className={`mx-auto px-6 pb-16 text-[17px] leading-[1.7] ${MEASURE}`}>
+        <h1 className="text-[2.2rem] leading-[1.15]">Benchmarks</h1>
 
         {!report ? (
           <p className="mt-6 text-muted-foreground">
-            No recorded run is checked in yet. Run <code>pnpm benchmark</code>{' '}
-            against the test stack to produce one.
+            No recorded run is checked in yet. Run{' '}
+            <code className="code">pnpm benchmark</code> against the test stack
+            to produce one.
           </p>
         ) : (
           <>
-            <p className="mt-4 max-w-[70ch] text-muted-foreground">
-              Every number on this page comes from a recorded run of{' '}
+            <p className="mt-6 max-w-[62ch]">
+              Every number here comes from a recorded run of{' '}
               <a href={RUNNER_SOURCE} rel="noopener" className="link">
                 the benchmark suite
               </a>{' '}
               against real databases. The results are committed as{' '}
               <a href={RESULTS_SOURCE} rel="noopener" className="link">
-                <code>benchmarks/results.json</code>
+                benchmarks/results.json
               </a>{' '}
-              and this page only renders that file, so every figure here can
-              be traced back to a run and reproduced.
+              and this page only renders that file, so every figure can be
+              traced back to a run and reproduced.
             </p>
 
-            <div className="mt-8 rounded-lg border border-amber-500/30 bg-amber-500/5 p-5">
-              <h2 className="text-sm font-semibold">
-                Read this before quoting a number
-              </h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {report.disclaimer}
-              </p>
-            </div>
+            <p className="mt-4 max-w-[62ch] text-[15px] text-muted-foreground">
+              {report.disclaimer}
+            </p>
 
-            <section className="mt-10">
-              <h2 className="text-xl font-semibold tracking-tight">
-                The configuration
-              </h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                The shipped defaults, not tuning done for the benchmark.
-                These values are read from the running configuration, so they
-                are the ones the run actually used.
+            <section className="mt-12">
+              <h2 className="text-[1.3rem]">The configuration</h2>
+              <p className="mt-2 max-w-[62ch] text-[15px] text-muted-foreground">
+                The shipped defaults, not tuning done for the benchmark. These
+                are read from the running configuration, so they are the ones
+                the run actually used.
               </p>
-              <dl className="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-                {Object.entries(report.configuration ?? {}).map(([k, v]) => (
-                  <div key={k} className="flex gap-2 border-b py-2">
-                    <dt className="w-40 shrink-0 text-muted-foreground">{k}</dt>
-                    <dd className="min-w-0 break-words">{v}</dd>
-                  </div>
-                ))}
-              </dl>
+              <Readings values={report.configuration ?? {}} />
             </section>
 
-            <section className="mt-10">
-              <h2 className="text-xl font-semibold tracking-tight">
-                The machine
-              </h2>
-              <p className="mt-2 text-sm text-muted-foreground">
+            <section className="mt-12">
+              <h2 className="text-[1.3rem]">The machine</h2>
+              <p className="mt-2 max-w-[62ch] text-[15px] text-muted-foreground">
                 Syncle, the databases and Redis all ran on this one machine.
               </p>
-              <dl className="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-                {Object.entries(report.environment).map(([k, v]) => (
-                  <div key={k} className="flex gap-2 border-b py-2">
-                    <dt className="w-32 shrink-0 text-muted-foreground">{k}</dt>
-                    <dd className="min-w-0 break-words">{v}</dd>
-                  </div>
-                ))}
-              </dl>
+              <Readings values={report.environment} />
             </section>
 
-            {report.suites.map((suite) => (
-              <section key={suite.id} className="mt-12">
-                <h2 className="text-xl font-semibold tracking-tight">
-                  {suite.name}
-                </h2>
-                <p className="mt-2 max-w-[70ch] text-sm text-muted-foreground">
-                  {suite.description}
-                </p>
+            {report.suites.map((suite) => {
+              const matrix = asMatrix(suite.results);
+              return (
+                <section key={suite.id} className="mt-12">
+                  <h2 className="text-[1.3rem]">{suite.name}</h2>
+                  <p className="mt-2 max-w-[62ch] text-[15px] text-muted-foreground">
+                    {suite.description}
+                  </p>
 
-                {(() => {
-                  const matrix = asMatrix(suite.results);
-                  if (!matrix) return null;
-                  return (
+                  {matrix ? (
                     <div className="mt-5 overflow-x-auto">
-                      <table className="w-full min-w-[40rem] border-collapse text-sm">
-                        <caption className="caption-bottom pt-3 text-left text-xs text-muted-foreground">
+                      <table className="w-full min-w-[34rem] border-collapse text-[15px]">
+                        <caption className="caption-bottom pt-3 text-left text-[13px] text-muted-foreground">
                           Rows per second, source down the side, destination
                           across the top. Every run was verified complete and
                           duplicate-free before its time was recorded.
                         </caption>
                         <thead>
-                          <tr className="border-b text-left">
-                            <th className="py-2 pr-4 font-medium">
+                          <tr className="text-left">
+                            <th className="border-b border-foreground py-2 pr-4 font-semibold">
                               Source \ Destination
                             </th>
                             {matrix.dests.map((d) => (
-                              <th key={d} className="py-2 pr-4 text-right font-medium">
+                              <th
+                                key={d}
+                                className="whitespace-nowrap border-b border-foreground py-2 pr-4 text-right font-semibold"
+                              >
                                 {d}
                               </th>
                             ))}
@@ -186,15 +160,18 @@ export default function BenchmarksPage() {
                         </thead>
                         <tbody>
                           {matrix.sources.map((src) => (
-                            <tr key={src} className="border-b">
-                              <td className="py-3 pr-4 font-medium">{src}</td>
+                            <tr key={src}>
+                              <td className="border-b py-2.5 pr-4">{src}</td>
                               {matrix.dests.map((d) => {
                                 const cell = matrix.cell(src, d);
                                 return (
-                                  <td key={d} className="py-3 pr-4 text-right">
-                                    <Rate result={cell} />
+                                  <td
+                                    key={d}
+                                    className="border-b py-2.5 pr-4 text-right tabular-nums"
+                                  >
+                                    {cell ? formatNumber(cell.rowsPerSec) : '—'}
                                     {cell ? (
-                                      <div className="text-xs text-muted-foreground">
+                                      <div className="text-[13px] text-muted-foreground">
                                         {formatNumber(cell.rows)} rows
                                       </div>
                                     ) : null}
@@ -206,58 +183,58 @@ export default function BenchmarksPage() {
                         </tbody>
                       </table>
                     </div>
-                  );
-                })()}
-
-                <div className={`mt-5 overflow-x-auto${asMatrix(suite.results) ? ' hidden' : ''}`}>
-                  <table className="w-full min-w-[40rem] border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2 pr-4 font-medium">Scenario</th>
-                        <th className="py-2 pr-4 text-right font-medium">
-                          Rows
-                        </th>
-                        <th className="py-2 pr-4 text-right font-medium">
-                          Time
-                        </th>
-                        <th className="py-2 text-right font-medium">
-                          Rows / sec
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {suite.results.map((r) => (
-                        <tr key={r.scenario} className="border-b align-top">
-                          <td className="py-3 pr-4">
-                            {r.scenario}
-                            <Detail detail={r.detail} />
-                          </td>
-                          <td className="py-3 pr-4 text-right tabular-nums">
-                            {formatNumber(r.rows)}
-                          </td>
-                          <td className="py-3 pr-4 text-right tabular-nums text-muted-foreground">
-                            {formatDuration(r.ms)}
-                          </td>
-                          <td className="py-3 text-right font-semibold tabular-nums">
-                            {formatNumber(r.rowsPerSec)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            ))}
+                  ) : (
+                    <div className="mt-5 overflow-x-auto">
+                      <table className="w-full min-w-[34rem] border-collapse text-[15px]">
+                        <thead>
+                          <tr className="text-left">
+                            {['Scenario', 'Rows', 'Time', 'Rows / sec'].map(
+                              (h, i) => (
+                                <th
+                                  key={h}
+                                  className={`whitespace-nowrap border-b border-foreground py-2 pr-4 font-semibold${
+                                    i === 0 ? '' : ' text-right'
+                                  }`}
+                                >
+                                  {h}
+                                </th>
+                              ),
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {suite.results.map((r) => (
+                            <tr key={r.scenario} className="align-top">
+                              <td className="border-b py-2.5 pr-4">
+                                {r.scenario}
+                                <Detail detail={r.detail} />
+                              </td>
+                              <td className="border-b py-2.5 pr-4 text-right tabular-nums">
+                                {formatNumber(r.rows)}
+                              </td>
+                              <td className="whitespace-nowrap border-b py-2.5 pr-4 text-right tabular-nums text-muted-foreground">
+                                {formatDuration(r.ms)}
+                              </td>
+                              <td className="border-b py-2.5 pr-4 text-right tabular-nums">
+                                {formatNumber(r.rowsPerSec)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              );
+            })}
 
             <section className="mt-12">
-              <h2 className="text-xl font-semibold tracking-tight">
-                Reproducing this
-              </h2>
-              <pre className="mt-4 overflow-x-auto rounded-lg border p-4 text-sm">
+              <h2 className="text-[1.3rem]">Reproducing this</h2>
+              <pre className="mt-4 overflow-x-auto rounded bg-muted px-4 py-3.5 font-mono text-[13px] leading-relaxed">
                 <code>{`docker compose -f docker-compose.test.yml up -d
 pnpm benchmark`}</code>
               </pre>
-              <p className="mt-3 text-sm text-muted-foreground">
+              <p className="mt-3 max-w-[62ch] text-[15px] text-muted-foreground">
                 The run resets replication slots, fixtures and the metadata
                 store first, because leftovers from a previous run distort
                 everything after them. Each run is checked for completeness and
@@ -266,7 +243,7 @@ pnpm benchmark`}</code>
               </p>
             </section>
 
-            <p className="mt-10 text-xs text-muted-foreground">
+            <p className="mt-10 text-[13px] text-muted-foreground">
               Recorded {new Date(report.generatedAt).toISOString().slice(0, 10)}.
             </p>
           </>

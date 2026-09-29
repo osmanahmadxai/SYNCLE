@@ -1,6 +1,7 @@
 import { CodeBlock } from '@/components/docs/code-block';
 import { DocArticle, docMetadata } from '@/components/docs/doc-article';
 import { Note } from '@/components/docs/note';
+import { DemoVideo } from '@/components/shot';
 
 export const metadata = docMetadata('quickstart');
 
@@ -14,6 +15,18 @@ export default function Page() {
         run <code>syncle up</code> — if not, start with the{' '}
         <a href="/docs/install">installation page</a>.
       </p>
+
+      <DemoVideo
+        caption={
+          <>
+            Fifty-eight seconds, uncut: an empty workspace, then a CDC bridge
+            from a Postgres <code>orders</code> table into MongoDB. Rows are
+            inserted from a terminal outside the browser and show up on the
+            other side. The MongoDB collection did not exist when the
+            recording started.
+          </>
+        }
+      />
 
       <h2 id="create-the-operator-account">Create the operator account</h2>
       <p>
