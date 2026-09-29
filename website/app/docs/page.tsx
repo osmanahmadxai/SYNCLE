@@ -1,6 +1,7 @@
 import { CodeBlock } from '@/components/docs/code-block';
 import { DocArticle, docMetadata } from '@/components/docs/doc-article';
-import { GITHUB, INSTALL_COMMAND } from '@/lib/content';
+import { FaqStructuredData } from '@/components/structured-data';
+import { FAQ, GITHUB, INSTALL_COMMAND, USE_CASES } from '@/lib/content';
 import { DOC_PAGES, docHref } from '@/lib/docs';
 
 export const metadata = docMetadata('');
@@ -8,6 +9,7 @@ export const metadata = docMetadata('');
 export default function DocsIndex() {
   return (
     <DocArticle slug="">
+      <FaqStructuredData />
       <p>
         Syncle keeps databases in sync, live and across engines, without a
         data platform in between. Most change-data-capture tools hand you a
@@ -64,6 +66,16 @@ export default function DocsIndex() {
         rather not pipe curl into sh, and how updating and uninstalling work.
       </p>
 
+      <h2 id="use-cases">What people use it for</h2>
+      <p>Each of these is one bridge, configured differently.</p>
+      <ul>
+        {USE_CASES.map((u) => (
+          <li key={u.title}>
+            <strong>{u.title}</strong> ({u.tag}) — {u.body}
+          </li>
+        ))}
+      </ul>
+
       <h2 id="reading-order">Where to go next</h2>
       <ul>
         {DOC_PAGES.filter((p) => p.slug !== '').map((p) => (
@@ -72,6 +84,14 @@ export default function DocsIndex() {
           </li>
         ))}
       </ul>
+
+      <h2 id="faq">Common questions</h2>
+      {FAQ.map((item) => (
+        <div key={item.q}>
+          <h3>{item.q}</h3>
+          <p>{item.a}</p>
+        </div>
+      ))}
 
       <h2 id="about-these-docs">About these docs</h2>
       <p>

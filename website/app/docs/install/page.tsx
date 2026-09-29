@@ -1,6 +1,7 @@
 import { CodeBlock } from '@/components/docs/code-block';
 import { DocArticle, docMetadata } from '@/components/docs/doc-article';
 import { Note } from '@/components/docs/note';
+import { InstallTranscript } from '@/components/install-transcript';
 import { INSTALL_COMMAND } from '@/lib/content';
 
 export const metadata = docMetadata('install');
@@ -18,6 +19,8 @@ export default function Page() {
 
       <h2 id="the-one-command-install">The one-command install</h2>
       <CodeBlock>{INSTALL_COMMAND}</CodeBlock>
+      <p>A first run prints this — the script&apos;s real output, not a mock-up:</p>
+      <InstallTranscript />
       <p>
         <code>syncle.dev/install</code> redirects to <code>install.sh</code>{' '}
         at the head of the repository, so this is the same script you can

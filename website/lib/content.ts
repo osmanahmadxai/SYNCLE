@@ -90,23 +90,3 @@ export const USE_CASES: { title: string; body: string; tag: string }[] = [
     body: 'Send each change to an HTTP endpoint with a payload you design, with retries and backoff, when the thing to feed is an API rather than another store.',
   },
 ];
-
-/** What happens to credentials and data. */
-export const SECURITY: { title: string; body: string }[] = [
-  {
-    title: 'Data stays on your machines',
-    body: 'Syncle runs where you install it and talks to your databases directly. There is no account and no third party in the path: rows go from your source to your destination and nowhere else.',
-  },
-  {
-    title: 'Credentials are encrypted at rest',
-    body: 'Saved connection details are sealed with AES-256-GCM under a key generated at install, which stays on the host. Losing that key costs you the stored secrets rather than exposing them.',
-  },
-  {
-    title: 'The first account is claimed with a server-side token',
-    body: 'The first admin account is created with a one-time token printed on the server, and login is rate limited. If you expose an instance beyond your own machine, finish that first-run setup before the port is reachable. The token is a guard, not a substitute for a firewall.',
-  },
-  {
-    title: 'Private databases are reachable over SSH',
-    body: 'Connect through a bastion to databases that never listen on a public interface, so nothing has to be exposed to make a bridge work.',
-  },
-];
