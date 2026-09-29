@@ -306,7 +306,13 @@ function registerSqlCompletion(monaco: Monaco) {
   ];
 
   monaco.languages.registerCompletionItemProvider('sql', {
-    provideCompletionItems(model, position) {
+    // annotated rather than inferred: monaco-editor 0.57 no longer contextually
+    // types these through the wrapper's `Monaco`, and an implicit `any` here is
+    // a typecheck error
+    provideCompletionItems(
+      model: import('monaco-editor').editor.ITextModel,
+      position: import('monaco-editor').Position,
+    ) {
       const word = model.getWordUntilPosition(position);
       const range = {
         startLineNumber: position.lineNumber,
