@@ -33,7 +33,7 @@
     "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "pg-logical-replication": "^2.0.3",
-    "prisma": "^5.22.0",
+    "prisma": "^7.10.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "ssh2": "^1.17.0",
