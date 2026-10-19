@@ -207,12 +207,15 @@
     "newBridge": "Nuovo bridge",
     "noBridges": "Ancora nessun bridge in questa area di lavoro.",
     "createFirst": "Crea il tuo primo bridge",
-    "customQuery": "query personalizzata",
     "badgeOff": "Spento",
     "badgeLive": "Live",
     "badgeFailed": "Fallito",
     "badgeOnDemand": "Su richiesta",
-    "badgeIdle": "Inattivo"
+    "badgeIdle": "Inattivo",
+    "searchPlaceholder": "Cerca bridge",
+    "filterAll": "Tutti",
+    "noMatches": "Nessun bridge corrisponde.",
+    "clearFilters": "Azzera ricerca e filtro"
   },
   "bridgeTransfer": {
     "import": "Importa",
@@ -233,9 +236,35 @@
     "noBridges": "Ancora nessun bridge in questa area di lavoro",
     "description": "Un bridge sposta i dati da un database a un endpoint.",
     "createOne": "Creane uno",
-    "newBridge": "Nuovo bridge",
-    "kindOnDemand": "su richiesta",
-    "kindWatch": "osserva"
+    "newBridge": "Nuovo bridge"
+  },
+  "bridgeSummary": {
+    "from": "Da",
+    "to": "A",
+    "host": "Host",
+    "database": "Database",
+    "columns": "Colonne",
+    "trigger": "Attivazione",
+    "writes": "Scrittura",
+    "allColumns": "tutte le colonne",
+    "columnCount": "{count, plural, one {# colonna} other {# colonne}}",
+    "customQuery": "query personalizzata",
+    "missingConnection": "connessione mancante",
+    "connectionString": "da una stringa di connessione",
+    "via": "tramite SSH {host}",
+    "onDemand": "Su richiesta",
+    "scheduled": "Pianificato · {cron} ({timezone})",
+    "watchColumn": "Osserva {column} ogni {seconds}s",
+    "watchSnapshot": "Osserva per differenza di chiavi ogni {seconds}s",
+    "cdc": "CDC · {operations}",
+    "cdcBackfill": "copia prima le righe esistenti",
+    "filters": "{count, plural, one {# filtro} other {# filtri}}",
+    "transforms": "{count, plural, one {# trasformazione} other {# trasformazioni}}",
+    "upsertBy": "upsert per {keys}",
+    "upsert": "upsert",
+    "insert": "solo inserimento",
+    "deleteSoft": "le eliminazioni segnano {column}",
+    "deleteIgnore": "eliminazioni conservate"
   },
   "bridgeBuilder": {
     "redis": {

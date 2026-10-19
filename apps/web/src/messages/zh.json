@@ -207,12 +207,15 @@
     "newBridge": "新建桥接",
     "noBridges": "此工作区还没有桥接。",
     "createFirst": "创建你的第一个桥接",
-    "customQuery": "自定义查询",
     "badgeOff": "已关闭",
     "badgeLive": "运行中",
     "badgeFailed": "失败",
     "badgeOnDemand": "按需",
-    "badgeIdle": "空闲"
+    "badgeIdle": "空闲",
+    "searchPlaceholder": "搜索桥接",
+    "filterAll": "全部",
+    "noMatches": "没有匹配的桥接。",
+    "clearFilters": "清除搜索和筛选"
   },
   "bridgeTransfer": {
     "import": "导入",
@@ -233,9 +236,35 @@
     "noBridges": "此工作区还没有桥接",
     "description": "桥接将数据从数据库同步到目标端点。",
     "createOne": "去创建",
-    "newBridge": "新建桥接",
-    "kindOnDemand": "按需",
-    "kindWatch": "监听"
+    "newBridge": "新建桥接"
+  },
+  "bridgeSummary": {
+    "from": "来源",
+    "to": "目标",
+    "host": "主机",
+    "database": "数据库",
+    "columns": "列",
+    "trigger": "触发方式",
+    "writes": "写入",
+    "allColumns": "所有列",
+    "columnCount": "{count} 列",
+    "customQuery": "自定义查询",
+    "missingConnection": "连接缺失",
+    "connectionString": "来自连接字符串",
+    "via": "经由 SSH {host}",
+    "onDemand": "按需",
+    "scheduled": "定时 · {cron}（{timezone}）",
+    "watchColumn": "每 {seconds} 秒监听 {column}",
+    "watchSnapshot": "每 {seconds} 秒按键比对监听",
+    "cdc": "CDC · {operations}",
+    "cdcBackfill": "先复制现有行",
+    "filters": "{count} 个筛选条件",
+    "transforms": "{count} 个转换",
+    "upsertBy": "按 {keys} upsert",
+    "upsert": "upsert",
+    "insert": "仅插入",
+    "deleteSoft": "删除时标记 {column}",
+    "deleteIgnore": "保留已删除行"
   },
   "bridgeBuilder": {
     "redis": {

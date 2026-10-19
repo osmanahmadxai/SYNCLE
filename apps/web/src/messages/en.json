@@ -207,12 +207,15 @@
     "newBridge": "New bridge",
     "noBridges": "No bridges in this workspace yet.",
     "createFirst": "Create your first bridge",
-    "customQuery": "custom query",
     "badgeOff": "Off",
     "badgeLive": "Live",
     "badgeFailed": "Failed",
     "badgeOnDemand": "On-demand",
-    "badgeIdle": "Idle"
+    "badgeIdle": "Idle",
+    "searchPlaceholder": "Search bridges",
+    "filterAll": "All",
+    "noMatches": "No bridges match.",
+    "clearFilters": "Clear search and filter"
   },
   "bridgeTransfer": {
     "import": "Import",
@@ -233,9 +236,35 @@
     "noBridges": "No bridges in this workspace yet",
     "description": "A bridge moves data from a database to an endpoint.",
     "createOne": "Create one",
-    "newBridge": "New bridge",
-    "kindOnDemand": "on-demand",
-    "kindWatch": "watch"
+    "newBridge": "New bridge"
+  },
+  "bridgeSummary": {
+    "from": "From",
+    "to": "To",
+    "host": "Host",
+    "database": "Database",
+    "columns": "Columns",
+    "trigger": "Trigger",
+    "writes": "Writes",
+    "allColumns": "all columns",
+    "columnCount": "{count, plural, one {# column} other {# columns}}",
+    "customQuery": "custom query",
+    "missingConnection": "missing connection",
+    "connectionString": "from a connection string",
+    "via": "via SSH {host}",
+    "onDemand": "On demand",
+    "scheduled": "Scheduled · {cron} ({timezone})",
+    "watchColumn": "Watch {column} every {seconds}s",
+    "watchSnapshot": "Watch by key diff every {seconds}s",
+    "cdc": "CDC · {operations}",
+    "cdcBackfill": "copies existing rows first",
+    "filters": "{count, plural, one {# filter} other {# filters}}",
+    "transforms": "{count, plural, one {# transform} other {# transforms}}",
+    "upsertBy": "upsert by {keys}",
+    "upsert": "upsert",
+    "insert": "insert only",
+    "deleteSoft": "deletes mark {column}",
+    "deleteIgnore": "deletes kept"
   },
   "bridgeBuilder": {
     "redis": {
