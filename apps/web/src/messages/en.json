@@ -714,7 +714,8 @@
       "bridges": "Bridges",
       "connections": "Connections",
       "workspaces": "Workspaces"
-    }
+    },
+    "help": "Help & suggestions"
   },
   "confirmDialog": {
     "confirm": "Confirm"
@@ -1352,5 +1353,289 @@
   },
   "uiCommon": {
     "close": "Close"
+  },
+  "help": {
+    "title": "Help & suggestions",
+    "description": "What needs your attention, and how Syncle works.",
+    "bulbOff": "Help & guide — nothing needs your attention",
+    "bulbOn": "{count, plural, one {# suggestion} other {# suggestions}} — click to see what to do",
+    "tabSuggestions": "Suggestions",
+    "tabGuide": "Guide",
+    "severity": {
+      "critical": "Needs action",
+      "warning": "Will cause trouble",
+      "info": "Good to know"
+    },
+    "emptyTitle": "Nothing needs your attention",
+    "emptyBody": "When something goes wrong — or is set up in a way that will go wrong — the bulb lights up and what to do appears here.",
+    "new": "New",
+    "dismiss": "Dismiss",
+    "restore": "Show again",
+    "showDismissed": "Show dismissed ({count})",
+    "hideDismissed": "Hide dismissed",
+    "likelyCause": "Likely cause",
+    "whatToDo": "What to do",
+    "errorText": "The error, word for word",
+    "copy": "Copy",
+    "copied": "Copied",
+    "readGuide": "Explained in the guide",
+    "shortcutHint": "Press ? anywhere to open this panel.",
+    "actions": {
+      "openBridge": "Open the bridge",
+      "editBridge": "Edit the bridge",
+      "newBridge": "New bridge",
+      "dataSources": "Open data sources"
+    },
+    "rules": {
+      "missing-connection": {
+        "title": "“{bridge}” points at a connection that no longer exists",
+        "body": "{count, plural, one {A connection} other {# connections}} this bridge reads from or writes to was deleted, or belongs to another workspace. The bridge cannot run until it points at one that exists.",
+        "steps": "Open the bridge editor.\nPick an existing connection for the source and for every destination — or add the missing one again under Data sources.\nSave, then start the bridge."
+      },
+      "failed": {
+        "title": "“{bridge}” failed on its last run",
+        "body": "The run stopped on an error. Nothing past the failing row was written, so once the cause is fixed, starting again carries on from the same place.",
+        "steps": "Open the bridge and read the error on the failed run.\nFix the cause — the guide’s troubleshooting section lists the usual ones.\nStart the bridge again. On a one-time job, Retry failed re-sends only the rows that failed."
+      },
+      "dead-letters": {
+        "title": "“{bridge}” set {count, plural, one {# row} other {# rows}} aside",
+        "body": "These rows could not be delivered, so they were moved to the bridge’s dead-letter queue and the rest kept flowing. Nothing is lost: they wait there, in full, until they are retried or discarded.",
+        "steps": "Open the bridge and look at the rows waiting in the dead-letter queue — what do they have in common?\nFix the cause.\nPress Retry all. A retry reads each row from the source again, so it can never overwrite something newer."
+      },
+      "insert-on-live": {
+        "title": "“{bridge}” will fail the first time a row changes",
+        "body": "It writes to {table} with Insert (append), but it is a live bridge, and a live bridge sees a row again every time it is updated. The update is then inserted a second time, and the table’s key refuses the duplicate.",
+        "steps": "Open the bridge editor and find the destination {table}.\nSet Write mode to Upsert (no duplicates), with the table’s key ({keys}) as the Key columns.\nSave. Rows already set aside: open the bridge and press Retry all in the dead-letter queue.\nThen Verify the bridge and Reconcile, so the destination matches the source again."
+      },
+      "schema-drift": {
+        "title": "The source table of “{bridge}” changed",
+        "body": "{breaking, select, yes {It no longer has {columns}, which the bridge uses. The bridge stops rather than write empty values over what the destination holds.} other {A column was added or its type changed. The bridge carries on; the change is noted on its timeline.}}",
+        "steps": "Open the bridge to see exactly what changed.\nA column renamed: map the new name in the editor. A column dropped: take it out of the mapping.\nSave — saving accepts the table as it is now — and start the bridge again."
+      },
+      "source-hold": {
+        "title": "“{bridge}” is holding {size} of change log on its source",
+        "body": "{running, select, yes {The bridge is reading, but more slowly than the source writes.} other {The bridge is stopped, and its place in the change log stops the database from freeing it.}} If it keeps growing, the source’s disk fills up.",
+        "steps": "Start the bridge so it catches up — the log is released as it is read.\nNo longer need the bridge? Delete it: its replication slot or log position goes with it.\nThe bridge page shows what is held, and can release it if the bridge’s place does not matter any more."
+      },
+      "cdc-from-now": {
+        "title": "“{bridge}” only copies changes made after it started",
+        "body": "It follows the change log from its first start (Only changes from now on). Rows the table already held were not copied, so the destination can be missing some — expected, not an error.",
+        "steps": "To check: Verify the bridge. It lists the rows missing from the destination.\nTo fill the gap: Reconcile. It writes only the rows that are missing or different.\nNext time, choose Copy what is there, then follow changes to do both in one bridge."
+      },
+      "redis-cdc": {
+        "title": "“{bridge}” follows Redis changes that are not durable",
+        "body": "Event-based capture from Redis rides keyspace notifications, which are fire-and-forget: a change made while Syncle is disconnected — a restart, a network blip — is lost, and nothing reports it. Every write also arrives as an update.",
+        "steps": "Need every change? Switch How it listens to Polling, which cannot miss one.\nKeep event-based when an occasional lost change during downtime is acceptable.\nVerify the bridge now and then to catch anything missed."
+      },
+      "abort-on-live": {
+        "title": "One bad row stops “{bridge}”",
+        "body": "On failure it is set to Stop the bridge. On a live bridge, one row the destination refuses halts everything after it until somebody fixes it.",
+        "steps": "Open the bridge editor, Delivery section.\nSet On failure to Set failed rows aside & keep syncing: failed rows wait in the dead-letter queue, in full, and the rest keep flowing.\nKeep Stop the bridge when the destination must never get ahead of a failed row."
+      },
+      "http-no-idempotency": {
+        "title": "“{bridge}” can deliver the same rows twice",
+        "body": "It retries failed requests but sends no Idempotency-Key. When a request succeeds and its answer is lost, the retry sends it again, and the receiver cannot tell.",
+        "steps": "Open the bridge editor and turn on Send Idempotency-Key for the endpoint.\nHave the receiver ignore a key it has already handled."
+      },
+      "history-pruned": {
+        "title": "Older deliveries of “{bridge}” have no details any more",
+        "body": "The details of {count, plural, one {# delivery} other {# deliveries}} were removed by the delivery history setting. The rows were delivered and the totals still count them — only the per-row record is gone, which is why the table of deliveries can look empty.",
+        "steps": "Nothing to fix.\nTo keep details longer: Settings → Engine → Keep delivery details for (days), or SYNCLE_DELIVERY_RETENTION_DAYS."
+      },
+      "no-connections": {
+        "title": "Start by connecting a database",
+        "body": "A bridge moves rows from one connection to another, so the first step is connecting the databases you want to keep in sync.",
+        "steps": "Open Data sources and add a connection: host, port and credentials, encrypted at rest.\nThe connectivity check says at once whether Syncle can reach it.\nAdd the destination database the same way."
+      },
+      "no-bridges": {
+        "title": "Create your first bridge",
+        "body": "Your connections are ready. A bridge copies a table from one of them into one or more destinations — once, or continuously.",
+        "steps": "Press New bridge, or open a table under Data sources and choose Create bridge.\nPick the columns, add a destination, and choose One-time job or Live bridge.\nCheck the preview (or Dry run), then save and start it."
+      }
+    },
+    "causes": {
+      "duplicate-key": {
+        "title": "A row with the same key is already in the destination",
+        "steps": "If the destination’s Write mode is Insert (append), switch it to Upsert (no duplicates), keyed by the table’s primary key: an update then overwrites instead of failing.\nIf it already upserts, check that the Key columns match the destination’s unique key.\nRetry the rows that failed."
+      },
+      "schema-changed": {
+        "title": "The source table changed under the bridge",
+        "steps": "Open the bridge to see which columns are gone.\nFix the mapping and save — saving accepts the table as it is now.\nStart the bridge again."
+      },
+      "transform-failed": {
+        "title": "A value could not be converted on the way",
+        "steps": "The error names the column and the value.\nFix the value at the source, or set that conversion’s If a value cannot be converted to send it as empty (NULL) or leave it as it was.\nRetry the rows that failed."
+      },
+      "missing-table": {
+        "title": "The table does not exist",
+        "steps": "Check the database and table names, on the connection and in the bridge.\nFor a destination, turn on Create table if missing: Syncle creates it from the source’s shape.\nRetry."
+      },
+      "missing-column": {
+        "title": "A column the bridge writes does not exist there",
+        "steps": "Compare Map / rename columns in the bridge editor with the destination table.\nAdd the column to the destination, or map the source column onto one that exists.\nRetry the rows that failed."
+      },
+      "not-null": {
+        "title": "The destination needs a value the row does not have",
+        "steps": "Map a source column onto that destination column, or give it a Default value under Change values on the way.\nOr let that column be empty (NULL) at the destination.\nRetry the rows that failed."
+      },
+      "foreign-key": {
+        "title": "The row points at a row the destination does not have",
+        "steps": "Bridge the parent table too, and let it run first, so the rows it points at exist.\nOr drop the foreign key on a destination that is only a copy.\nRetry the rows that failed."
+      },
+      "bad-value": {
+        "title": "A value does not fit the destination column",
+        "steps": "Compare the column types at both ends.\nConvert the value with a Convert type step, or widen the destination column.\nRetry the rows that failed."
+      },
+      "cdc-not-enabled": {
+        "title": "Change capture is not switched on at the source",
+        "steps": "In the bridge editor, press Check readiness: it lists exactly what the source still needs.\nApply those settings — most need the database restarted.\nStart the bridge again."
+      },
+      "slots-exhausted": {
+        "title": "The source has no replication slots left",
+        "steps": "Delete the bridges you no longer need: their slots go with them.\nOr let bridges of one connection share a slot (Replication slot → Shared with the other bridges of this connection).\nOr raise max_replication_slots and max_wal_senders at the source and restart it."
+      },
+      "auth-failed": {
+        "title": "The database refused the user name or password",
+        "steps": "Open Data sources and correct the connection’s credentials.\nThe connectivity check confirms it.\nStart the bridge again."
+      },
+      "permission-denied": {
+        "title": "The database user may not do this",
+        "steps": "Grant what the bridge needs: read on the source table, write on the destination, and replication rights for event-based capture.\nCheck readiness names any that are missing.\nRetry."
+      },
+      "tls": {
+        "title": "The encrypted connection could not be set up",
+        "steps": "Check the connection’s encryption mode: a server without TLS needs Off; a private certificate authority needs its CA certificate added.\nThe connectivity check confirms it."
+      },
+      "host-not-found": {
+        "title": "The host name does not resolve",
+        "steps": "Check the connection’s host for typos.\nA database on the machine running Syncle is reached as localhost, even from Docker — but a name only your own machine knows is not.\nThe connectivity check confirms it."
+      },
+      "connection-refused": {
+        "title": "Nothing is listening at that address",
+        "steps": "Check the database is running, and that the host and port are right.\nCheck firewalls between Syncle and the database.\nConfirm with the connectivity check, then start the bridge again."
+      },
+      "timeout": {
+        "title": "The database or endpoint took too long to answer",
+        "steps": "Check it is reachable and not overloaded.\nFor an endpoint, raise the timeout or lower the batch size under Delivery.\nRetry."
+      },
+      "http-auth": {
+        "title": "The endpoint refused the credentials",
+        "steps": "Check the destination’s auth: the bearer token, or the custom header’s name and value.\nRetry the rows that failed."
+      },
+      "http-not-found": {
+        "title": "The endpoint’s address is not there",
+        "steps": "Check the destination’s URL and method.\nRetry the rows that failed."
+      },
+      "http-rate-limited": {
+        "title": "The endpoint is slowing the bridge down",
+        "steps": "Under Delivery, add a minimum delay between requests, or send larger batches.\nRetry the rows that failed."
+      },
+      "http-client-error": {
+        "title": "The endpoint rejected the request",
+        "steps": "Open a failed delivery to see the exact body sent and what came back.\nShape the payload into what the endpoint expects.\nRetry the rows that failed."
+      },
+      "http-server-error": {
+        "title": "The endpoint failed while handling the request",
+        "steps": "It is the receiving service’s own error — its logs say why.\nOnce it is healthy again, retry the rows that failed. Retries with backoff may already have covered a short outage."
+      }
+    },
+    "guide": {
+      "search": "Search the guide",
+      "noResults": "Nothing in the guide matches “{query}”.",
+      "intro": "Everything Syncle does, in the words its screens use. Open a section, or search.",
+      "sections": {
+        "overview": {
+          "title": "How Syncle works",
+          "summary": "Connections, bridges, and how rows cross.",
+          "body": "Syncle keeps databases in sync across engines — PostgreSQL, MySQL, SQLite, MongoDB and Redis — and can also send rows to an HTTP endpoint.\n\n- A connection is one database Syncle can reach. Its credentials are encrypted at rest.\n- A bridge reads one table (or a query) from a source connection and writes each row to one or more destinations.\n- A One-time job copies the rows once. A Live bridge stays on and delivers each change as it happens, by Polling or Event-based (real-time) capture.\n- Every row that is read ends up in exactly one of three places: the destination, the bridge’s dead-letter queue, or still ahead of the bridge’s place in the source.\n\nWrites are idempotent upserts by default, so a retry or a replay never makes a duplicate. Workspaces keep groups of connections and bridges apart."
+        },
+        "connections": {
+          "title": "Connecting a database",
+          "summary": "Hosts, localhost, SSH, TLS, environments.",
+          "body": "Open Data sources and add a connection. The form adapts to the engine, and the connectivity check tells you at once whether Syncle can reach it.\n\n- localhost works even when Syncle runs in Docker: a loopback address is dialled at the machine running Syncle. What is stored and shown is what you typed.\n- SSH tunnel reaches a database through a jump host. The host key fingerprint is recorded on first connect and enforced after that. A connection string cannot be combined with a tunnel.\n- Encryption: Off, Encrypt only, Verify the certificate authority, or Verify the authority and the host name (recommended). A private authority needs its CA certificate.\n- Environment (Production, Staging, Development) is shown next to the connection everywhere; on production the query editor asks before any write.\n- Read-only: nothing is ever written through the connection. It can still be a source, never a destination."
+        },
+        "first-bridge": {
+          "title": "Your first bridge",
+          "summary": "From a table to a destination, step by step.",
+          "body": "1. Connect the source and the destination databases under Data sources.\n2. Open the source table and press Create bridge — or press New bridge and pick the table.\n3. Toggle the columns to send.\n4. Add a destination: a database (map columns onto an existing table, or let Syncle create it) or an HTTP endpoint.\n5. Choose what runs: One-time job, or Live bridge with Polling or Event-based (real-time).\n6. Check the preview, or press Dry run to see what would happen without writing anything.\n7. Save and start it. Each delivery shows on the timeline: green synced, red failed, amber skipped, grey queued.\n\nCommon first bridges: PostgreSQL → MongoDB (copy, then follow), MySQL → SQLite (a portable copy), MongoDB → Redis (a hot cache)."
+        },
+        "triggers": {
+          "title": "One-time job, polling or event-based",
+          "summary": "Choosing how a bridge runs.",
+          "body": "- One-time job: streams the rows once when you run it. For backfills and migrations. It can also run On a schedule.\n- Live bridge → Polling: asks the table for new rows every few seconds. Works on every engine and needs nothing set up at the source. Detect new rows by an Incrementing column (id), a Timestamp column (updated at — also sees updates), or New primary keys (small tables, UUIDs). Polling does not see deletes.\n- Live bridge → Event-based (real-time): reads the database’s own change log — PostgreSQL logical replication, MySQL binlog, MongoDB change streams, Redis keyspace notifications. Inserts, updates and deletes, the moment they happen. Needs the source set up for it; Check readiness says how.\n\nRedis event-based capture is not durable: a change made while Syncle is down is lost. When every change matters, use Polling on Redis.\nSQLite has no change log: use Polling."
+        },
+        "cdc-setup": {
+          "title": "Setting up event-based capture",
+          "summary": "What each source database needs.",
+          "body": "Press Check readiness in the bridge editor: it checks the source and lists exactly what is missing.\n\n- PostgreSQL: wal_level = logical (restart needed), and a role with REPLICATION: ALTER ROLE name REPLICATION. A table with no primary key needs REPLICA IDENTITY FULL, or only inserts are captured. Syncle creates the publication and the replication slot itself. Several bridges of one connection can share one slot.\n- MySQL / MariaDB: log_bin on, binlog_format = ROW, binlog_row_image = FULL, a unique server_id (restart needed), and GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to the user.\n- MongoDB: a replica set or sharded cluster. A single node is fine as a one-member replica set (--replSet rs0, then rs.initiate()). Atlas already is one.\n- Redis: notify-keyspace-events including E and the event classes (EA). Syncle tries to set it on start.\n\nA stopped bridge keeps its place in the change log. On PostgreSQL and MySQL that holds log on the source, and the bridge page shows how much: start the bridge, or delete it, before the disk fills."
+        },
+        "write-modes": {
+          "title": "Write modes, keys and deletes",
+          "summary": "Upsert or insert, and what a delete does.",
+          "body": "Each database destination has a Write mode:\n\n- Upsert (no duplicates): finds the row by its Key columns and updates it, or inserts it when it is not there. Replays, retries and updates never duplicate. The right choice for a copy of a table.\n- Insert (append): always adds a new row. For logs and event history. On a live bridge that sees updates, an update is inserted again — and a table with a primary key refuses it as a duplicate key.\n\nKey columns are the columns a row is matched on — usually the table’s primary key. They are required for upsert.\n\nWhen a row is deleted at the source:\n- Delete it here too.\n- Keep it, and mark it as deleted: a Marker column is set to the time of the delete, or to true.\n- Do nothing: keep every row — for archives and warehouses.\n\nPolling does not see deletes; event-based capture does."
+        },
+        "columns": {
+          "title": "Columns, filters and changing values",
+          "summary": "Mapping, creating tables, masking, converting.",
+          "body": "- Map / rename columns writes a source column into a differently named destination column, or leaves columns out.\n- Create table if missing creates the destination from the source’s shape. Between two instances of one engine the types are reused word for word; across engines each type is translated, and the preview names every column the destination cannot hold exactly.\n- Only rows where: send just the rows that meet every condition — equals, is not, less than, at most, greater than, at least, contains, starts with, ends with, is empty, is not empty.\n- Change values on the way, in order:\n  - Mask: keep the ends, replace with ********, a SHA-256 hash (still joins and works as a key), or send as empty.\n  - Convert type: to text, number, whole number, true / false, date and time, or JSON. A value that cannot be converted fails, becomes empty, or is left as it was — your choice.\n  - Clean text: trim spaces, lower case, UPPER CASE.\n  - Default value, and Computed column built from the other columns.\n\nValues keep their types: exact decimals, 64-bit integers, bytes and microseconds survive the trip."
+        },
+        "backfill": {
+          "title": "Copying what is already there",
+          "summary": "Backfill, then follow — without losing a change.",
+          "body": "A live bridge started with Only changes from now on follows changes from its first start, and leaves the rows already in the table alone. The destination then lacks those rows — expected, not an error.\n\nThree ways to bring them over:\n1. Copy what is there, then follow changes: the bridge takes its place in the change log first, copies the table, then delivers what changed meanwhile. Nothing is lost and no stale row lands on a fresh one.\n2. Run a One-time job into the same destination, then keep the live bridge: upserts make the overlap harmless.\n3. Verify the bridge, then Reconcile: only the missing and different rows are written."
+        },
+        "failures": {
+          "title": "When rows fail",
+          "summary": "Stop or set aside; dead letters; retries.",
+          "body": "Each delivery is tried up to the bridge’s attempt limit, with growing waits between tries. When it still fails, On failure decides:\n\n- Stop the bridge (or Stop the job): halts at the failure without moving past it. Fix the cause and start again; the same rows are retried. Nothing is skipped.\n- Set failed rows aside & keep syncing (Log & continue on a one-time job): the failed rows go to the dead-letter queue, in full, and the rest keep flowing. One bad row is isolated from the rest of its batch.\n\nThe dead-letter queue sits on the bridge’s page: Retry all, Retry, Discard. A retry reads the row from the source again, so it never overwrites a newer version. On a one-time job, Retry failed re-sends only the deliveries that failed; failed cells turn green in place.\n\nAlert channels can tell you when rows are set aside."
+        },
+        "verify": {
+          "title": "Verify and reconcile",
+          "summary": "Is the destination really the copy?",
+          "body": "Verify reads both ends and compares them row by row, by the kind of value each column holds — 1.50 and 1.5 are the same number, 007 and 7 are not the same key. It reports rows Missing, Different, and Only in the destination, with both readings of every column that differs. On a bridge that is still delivering, a row that looks wrong is read twice before it is reported.\n\nReconcile does the same and writes only the rows that are missing or different, from the source as it is now. Tick When reconciling, also remove rows that are only in the destination to delete the extras too — the one thing a reconcile does that cannot be read back.\n\nUse it after a gap: a bridge started from now, rows set aside and discarded, a change of replication slot, or a destination edited by hand."
+        },
+        "schedule": {
+          "title": "Running on a schedule",
+          "summary": "Nightly, hourly, weekdays.",
+          "body": "A one-time job can run On a schedule: Every hour, Every night at 02:00, Weekdays at 02:00, Mondays, the 1st of the month — or Custom, with a cron line and a named time zone.\n\n- Never two runs at once: a tick that finds the last one still running is skipped, and logged.\n- Each run starts from the top.\n- Once per tick, however many API processes share the Redis.\n- Correct across daylight saving."
+        },
+        "schema-changes": {
+          "title": "When the source table changes",
+          "summary": "Renamed and dropped columns, new columns.",
+          "body": "Syncle remembers the source table as the bridge was saved, and compares it on every run. When the source table changes decides what happens:\n\n- Stop, if a column the bridge uses is gone (default): a dropped or renamed column stops the bridge before it writes empty values over the destination, and names the column. A new column or a changed type is noted and the bridge carries on.\n- Same — and add new columns to the destination: like Stop, and a column added at the source is added to the tables Syncle created.\n- Carry on regardless.\n\nAfter a change: fix the mapping in the editor and save. Saving accepts the table as it is now."
+        },
+        "http": {
+          "title": "Sending rows to an HTTP endpoint",
+          "summary": "Payloads, auth, retries, idempotency.",
+          "body": "An HTTP destination POSTs, PUTs or PATCHes each row — or each batch — to a URL.\n\n- The payload is built from tokens: `'{{column}}'`, `'{{$row}}'` (the whole row, the default), `'{{$table}}'`, `'{{$op}}'` (insert, update or delete, on event-based bridges), `'{{$now}}'`, `'{{$index}}'`. Substitution is structured: no string injection, nothing evaluated. Wrap under key puts the row under one key.\n- Auth: No auth, Bearer token, or a Custom header; add more headers with + Header.\n- Send Idempotency-Key adds a key made from the run and the delivery, so a receiver can ignore a retry it has already handled.\n- Batch size, minimum delay between requests, timeout and attempts are under Delivery.\n\nRedirects are not followed: point the destination at the final URL."
+        },
+        "monitoring": {
+          "title": "Watching a bridge",
+          "summary": "Timeline, map, alerts, metrics, history.",
+          "body": "- The timeline gives every delivery a cell: green synced, red failed, amber skipped, grey queued. Click one for the exact row written, the result, the timing and any error.\n- The workspace map shows every source table, bridge and destination, wired together and coloured by state.\n- The page hears what happens as it happens; no refresh needed.\n- Alert channels — Webhook, Slack, E-mail — tell you when a bridge fails, loses its log position, sets rows aside, holds source log, or sees its table change. At most one message per 5 minutes.\n- /api/metrics speaks Prometheus.\n- Delivery details are kept for a while (Settings → Engine → Keep delivery details for (days)). After that the per-row record is removed; the totals still count it. An empty table on an old run means exactly that."
+        },
+        "accounts": {
+          "title": "Workspaces, accounts and keys",
+          "summary": "Who may do what.",
+          "body": "- Workspaces keep groups of connections and bridges apart. Switch them at the top of the sidebar.\n- Accounts (Settings → Security): an Admin does everything; an Operator does the work — connections, bridges, runs, the data browser — but not accounts, keys, settings, alert channels or workspaces; a Viewer may look at everything and change nothing but their own password.\n- API keys (Settings → Security): Read, or Read and write. Only an admin manages them.\n- The Activity log (Settings → Activity) records every change and every sign-in: who, what, to what, from where. Secrets are never written to it.\n- Forgot the password? The login screen asks for a reset code, which the server prints on its console (syncle reset-password)."
+        },
+        "workbench": {
+          "title": "The data workbench",
+          "summary": "Browse, query, diagram, back up.",
+          "body": "Data sources is a full workbench for any connected database:\n\n- Data: browse a table — pages, sorting, filters, inline edits, insert and delete, CSV or JSON export.\n- Structure: columns, indexes and the table’s DDL.\n- Query: an editor with tabs, autocomplete and formatting. ⌘/Ctrl + Enter runs it. On a production connection it asks before any write.\n- Diagram: the database as an interactive ER diagram.\n- Backup / restore from the schema tree: portable JSON for any engine, or .sql for relational ones.\n\nEvery table has Create bridge, which opens the builder with that table as the source."
+        },
+        "shortcuts": {
+          "title": "Shortcuts",
+          "summary": "Get around without the mouse.",
+          "body": "- ⌘K / Ctrl+K: the command palette — go to any bridge or connection, or run a command.\n- ?: this help panel.\n- ⌘/Ctrl + Enter: run the query in the query editor.\n- Esc: close a dialog, or clear the bridge search.\n- Back and Forward move between the bridges you opened; every view has its own address you can share."
+        },
+        "troubleshooting": {
+          "title": "Troubleshooting",
+          "summary": "The usual errors, and what they mean.",
+          "body": "- duplicate key / Duplicate entry / E11000 / UNIQUE constraint failed: the row is already there. Use Upsert, with the table’s key as Key columns.\n- relation does not exist / Table doesn’t exist / no such table: wrong name, or turn on Create table if missing.\n- column does not exist / Unknown column: fix Map / rename columns, or add the column.\n- violates not-null constraint / cannot be null: map a value onto that column, or give it a Default value.\n- password authentication failed / Access denied: wrong credentials on the connection.\n- permission denied / not authorized: the user lacks rights; Check readiness names them.\n- ECONNREFUSED: nothing is listening — is the database up, and the host and port right?\n- ENOTFOUND: the host name does not resolve.\n- wal_level / binlog_format / only supported on replica sets: event-based capture is not set up; see Setting up event-based capture.\n- all replication slots are in use: share a slot, delete unused bridges, or raise max_replication_slots.\n- HTTP 401 / 403: the endpoint’s auth. HTTP 429: slow down under Delivery. HTTP 5xx: the endpoint’s own error.\n\nThe bulb watches for most of these and lights up with the fix when one happens."
+        }
+      }
+    },
+    "show": "Show me"
   }
 }

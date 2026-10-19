@@ -12,6 +12,7 @@ import {
   BookOpen,
   Database,
   FolderOpen,
+  Lightbulb,
   Moon,
   Pencil,
   Plus,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useBridges, useConnections, useWorkspaces } from '@/lib/queries';
 import { useStudio } from '@/lib/store';
+import { useHelp } from '@/lib/hints/help-store';
 import {
   isPaletteShortcut,
   paletteCommands,
@@ -59,6 +61,8 @@ function iconFor(command: PaletteCommand) {
       return Pencil;
     case 'docs':
       return BookOpen;
+    case 'help':
+      return Lightbulb;
     default:
       return Sun;
   }
@@ -111,6 +115,7 @@ export function CommandPalette() {
           lightTheme: t('lightTheme'),
           darkTheme: t('darkTheme'),
           docs: t('docs'),
+          help: t('help'),
           switchTo: (name) => t('switchTo', { name }),
           editConnection: (name) => t('editConnection', { name }),
         },
@@ -123,6 +128,7 @@ export function CommandPalette() {
           openSettings: () => openSettings('account'),
           setWorkspace: setActiveWorkspace,
           setTheme,
+          openHelp: () => useHelp.getState().openHelp(),
           openDocs: () =>
             window.open(
               'https://syncle.dev/docs',

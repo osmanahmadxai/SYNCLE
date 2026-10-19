@@ -714,7 +714,8 @@
       "bridges": "Bridge",
       "connections": "Connessioni",
       "workspaces": "Spazi di lavoro"
-    }
+    },
+    "help": "Aiuto e suggerimenti"
   },
   "confirmDialog": {
     "confirm": "Conferma"
@@ -1352,5 +1353,289 @@
   },
   "uiCommon": {
     "close": "Chiudi"
+  },
+  "help": {
+    "title": "Aiuto e suggerimenti",
+    "description": "Cosa richiede la tua attenzione, e come funziona Syncle.",
+    "bulbOff": "Aiuto e guida — nulla richiede la tua attenzione",
+    "bulbOn": "{count, plural, one {# suggerimento} other {# suggerimenti}} — clicca per vedere cosa fare",
+    "tabSuggestions": "Suggerimenti",
+    "tabGuide": "Guida",
+    "severity": {
+      "critical": "Serve un intervento",
+      "warning": "Causerà problemi",
+      "info": "Buono a sapersi"
+    },
+    "emptyTitle": "Nulla richiede la tua attenzione",
+    "emptyBody": "Quando qualcosa va storto — o è configurato in modo che andrà storto — la lampadina si accende e qui compare cosa fare.",
+    "new": "Nuovo",
+    "dismiss": "Ignora",
+    "restore": "Mostra di nuovo",
+    "showDismissed": "Mostra ignorati ({count})",
+    "hideDismissed": "Nascondi ignorati",
+    "likelyCause": "Causa probabile",
+    "whatToDo": "Cosa fare",
+    "errorText": "L'errore, parola per parola",
+    "copy": "Copia",
+    "copied": "Copiato",
+    "readGuide": "Spiegato nella guida",
+    "shortcutHint": "Premi ? ovunque per aprire questo pannello.",
+    "actions": {
+      "openBridge": "Apri il bridge",
+      "editBridge": "Modifica il bridge",
+      "newBridge": "Nuovo bridge",
+      "dataSources": "Apri le origini dati"
+    },
+    "rules": {
+      "missing-connection": {
+        "title": "“{bridge}” punta a una connessione che non esiste più",
+        "body": "{count, plural, one {Una connessione} other {# connessioni}} da cui questo bridge legge o su cui scrive è stata eliminata, o appartiene a un'altra area di lavoro. Il bridge non può partire finché non punta a una che esiste.",
+        "steps": "Apri l'editor del bridge.\nScegli una connessione esistente per l'origine e per ogni destinazione — oppure aggiungi di nuovo quella mancante in Origini dati.\nSalva, poi avvia il bridge."
+      },
+      "failed": {
+        "title": "“{bridge}” è fallito nell'ultima esecuzione",
+        "body": "L'esecuzione si è fermata su un errore. Nulla oltre la riga fallita è stato scritto: risolta la causa, ripartendo si riprende dallo stesso punto.",
+        "steps": "Apri il bridge e leggi l'errore dell'esecuzione fallita.\nRisolvi la causa — la sezione Risoluzione dei problemi della guida elenca quelle comuni.\nAvvia di nuovo il bridge. In un processo singolo, Riprova le fallite rimanda solo le righe fallite."
+      },
+      "dead-letters": {
+        "title": "“{bridge}” ha messo da parte {count, plural, one {# riga} other {# righe}}",
+        "body": "Queste righe non sono state consegnate, quindi sono finite nella coda dead-letter del bridge e il resto ha continuato a scorrere. Nulla è perso: aspettano lì, complete, finché non vengono riprovate o scartate.",
+        "steps": "Apri il bridge e guarda le righe nella coda dead-letter — cosa hanno in comune?\nRisolvi la causa.\nPremi Riprova tutte. Un nuovo tentativo rilegge ogni riga dall'origine, quindi non può mai sovrascrivere qualcosa di più recente."
+      },
+      "insert-on-live": {
+        "title": "“{bridge}” fallirà la prima volta che una riga cambia",
+        "body": "Scrive in {table} con Insert (aggiungi in coda), ma è un bridge live, e un bridge live rivede una riga ogni volta che viene aggiornata. L'aggiornamento viene allora inserito una seconda volta, e la chiave della tabella rifiuta il duplicato.",
+        "steps": "Apri l'editor del bridge e trova la destinazione {table}.\nImposta Modalità di scrittura su Upsert (nessun duplicato), con la chiave della tabella ({keys}) come Colonne chiave.\nSalva. Per le righe già messe da parte: apri il bridge e premi Riprova tutte nella coda dead-letter.\nPoi verifica il bridge e Riconcilia, così la destinazione torna a corrispondere all'origine."
+      },
+      "schema-drift": {
+        "title": "La tabella di origine di “{bridge}” è cambiata",
+        "body": "{breaking, select, yes {Non ha più {columns}, che il bridge usa. Il bridge si ferma invece di scrivere valori vuoti su ciò che la destinazione contiene.} other {Una colonna è stata aggiunta o ha cambiato tipo. Il bridge continua; la modifica è annotata nella sua cronologia.}}",
+        "steps": "Apri il bridge per vedere esattamente cosa è cambiato.\nUna colonna rinominata: mappa il nuovo nome nell'editor. Una colonna eliminata: toglila dalla mappatura.\nSalva — salvando si accetta la tabella com'è ora — e avvia di nuovo il bridge."
+      },
+      "source-hold": {
+        "title": "“{bridge}” trattiene {size} di log delle modifiche sull'origine",
+        "body": "{running, select, yes {Il bridge sta leggendo, ma più lentamente di quanto l'origine scriva.} other {Il bridge è fermo, e la sua posizione nel log impedisce al database di liberarlo.}} Se continua a crescere, il disco dell'origine si riempie.",
+        "steps": "Avvia il bridge perché recuperi — il log viene liberato man mano che lo legge.\nIl bridge non serve più? Eliminalo: il suo slot di replica o la sua posizione nel log se ne vanno con lui.\nLa pagina del bridge mostra cosa è trattenuto, e può liberarlo se la posizione del bridge non conta più."
+      },
+      "cdc-from-now": {
+        "title": "“{bridge}” copia solo le modifiche fatte dopo il suo avvio",
+        "body": "Segue il log delle modifiche dal suo primo avvio (Solo le modifiche da ora in poi). Le righe che la tabella conteneva già non sono state copiate, quindi alla destinazione possono mancarne alcune — è previsto, non è un errore.",
+        "steps": "Per controllare: verifica il bridge. Elenca le righe mancanti nella destinazione.\nPer colmare il vuoto: Riconcilia. Scrive solo le righe mancanti o diverse.\nLa prossima volta scegli Copia ciò che c'è, poi segui le modifiche per fare entrambe le cose in un solo bridge."
+      },
+      "redis-cdc": {
+        "title": "“{bridge}” segue modifiche di Redis che non sono durevoli",
+        "body": "La cattura basata su eventi da Redis usa le notifiche keyspace, che non vengono conservate: una modifica fatta mentre Syncle è disconnesso — un riavvio, un problema di rete — è persa, e nulla lo segnala. Inoltre ogni scrittura arriva come aggiornamento.",
+        "steps": "Ti serve ogni modifica? Imposta Come resta in ascolto su Polling, che non può perderne nessuna.\nMantieni la cattura basata su eventi se perdere ogni tanto una modifica durante un'interruzione è accettabile.\nVerifica il bridge di tanto in tanto per recuperare ciò che è sfuggito."
+      },
+      "abort-on-live": {
+        "title": "Una sola riga sbagliata ferma “{bridge}”",
+        "body": "In caso di errore è impostato su Ferma il bridge. Su un bridge live, una sola riga rifiutata dalla destinazione blocca tutto ciò che viene dopo finché qualcuno non la sistema.",
+        "steps": "Apri l'editor del bridge, sezione Consegna.\nImposta In caso di errore su Metti da parte le righe fallite e continua: le righe fallite aspettano complete nella coda dead-letter, e il resto continua a scorrere.\nMantieni Ferma il bridge quando la destinazione non deve mai andare oltre una riga fallita."
+      },
+      "http-no-idempotency": {
+        "title": "“{bridge}” può consegnare due volte le stesse righe",
+        "body": "Riprova le richieste fallite ma non invia un Idempotency-Key. Quando una richiesta riesce e la sua risposta va persa, il nuovo tentativo la rimanda, e chi la riceve non può accorgersene.",
+        "steps": "Apri l'editor del bridge e attiva l'invio di Idempotency-Key per l'endpoint.\nFai in modo che chi riceve ignori una chiave che ha già gestito."
+      },
+      "history-pruned": {
+        "title": "Le consegne più vecchie di “{bridge}” non hanno più dettagli",
+        "body": "I dettagli di {count, plural, one {# consegna} other {# consegne}} sono stati rimossi dall'impostazione della cronologia delle consegne. Le righe sono state consegnate e i totali le contano ancora — manca solo il registro riga per riga, ed è per questo che la tabella delle consegne può sembrare vuota.",
+        "steps": "Niente da sistemare.\nPer conservare i dettagli più a lungo: Impostazioni → Motore → Conserva i dettagli delle consegne per (giorni), oppure SYNCLE_DELIVERY_RETENTION_DAYS."
+      },
+      "no-connections": {
+        "title": "Inizia collegando un database",
+        "body": "Un bridge sposta righe da una connessione all'altra, quindi il primo passo è collegare i database che vuoi tenere sincronizzati.",
+        "steps": "Apri Origini dati e aggiungi una connessione: host, porta e credenziali, cifrate a riposo.\nIl controllo di connettività dice subito se Syncle riesce a raggiungerla.\nAggiungi allo stesso modo il database di destinazione."
+      },
+      "no-bridges": {
+        "title": "Crea il tuo primo bridge",
+        "body": "Le tue connessioni sono pronte. Un bridge copia una tabella da una di esse verso una o più destinazioni — una volta, o di continuo.",
+        "steps": "Premi Nuovo bridge, oppure apri una tabella in Origini dati e scegli Crea bridge.\nScegli le colonne, aggiungi una destinazione, e scegli Processo singolo o Bridge live.\nControlla l'anteprima (o la Prova a vuoto), poi salva e avvialo."
+      }
+    },
+    "causes": {
+      "duplicate-key": {
+        "title": "Nella destinazione c'è già una riga con la stessa chiave",
+        "steps": "Se la Modalità di scrittura della destinazione è Insert (aggiungi in coda), passa a Upsert (nessun duplicato), con la chiave primaria della tabella: un aggiornamento allora sovrascrive invece di fallire.\nSe fa già upsert, controlla che le Colonne chiave corrispondano alla chiave univoca della destinazione.\nRiprova le righe fallite."
+      },
+      "schema-changed": {
+        "title": "La tabella di origine è cambiata sotto il bridge",
+        "steps": "Apri il bridge per vedere quali colonne mancano.\nCorreggi la mappatura e salva — salvando si accetta la tabella com'è ora.\nAvvia di nuovo il bridge."
+      },
+      "transform-failed": {
+        "title": "Un valore non è stato convertito lungo il percorso",
+        "steps": "L'errore indica la colonna e il valore.\nCorreggi il valore all'origine, oppure imposta Se un valore non può essere convertito di quella conversione su inviarlo vuoto (NULL) o lasciarlo com'era.\nRiprova le righe fallite."
+      },
+      "missing-table": {
+        "title": "La tabella non esiste",
+        "steps": "Controlla i nomi del database e della tabella, sulla connessione e nel bridge.\nPer una destinazione, attiva Crea tabella se mancante: Syncle la crea dalla forma dell'origine.\nRiprova."
+      },
+      "missing-column": {
+        "title": "Una colonna che il bridge scrive lì non esiste",
+        "steps": "Confronta Mappa / rinomina colonne nell'editor del bridge con la tabella di destinazione.\nAggiungi la colonna alla destinazione, oppure mappa la colonna di origine su una che esiste.\nRiprova le righe fallite."
+      },
+      "not-null": {
+        "title": "La destinazione richiede un valore che la riga non ha",
+        "steps": "Mappa una colonna di origine su quella colonna di destinazione, oppure dalle un Valore predefinito in Modifica i valori lungo il percorso.\nOppure consenti che quella colonna sia vuota (NULL) nella destinazione.\nRiprova le righe fallite."
+      },
+      "foreign-key": {
+        "title": "La riga punta a una riga che la destinazione non ha",
+        "steps": "Crea un bridge anche per la tabella padre, e lascialo girare prima, così le righe a cui si punta esistono.\nOppure togli la chiave esterna su una destinazione che è solo una copia.\nRiprova le righe fallite."
+      },
+      "bad-value": {
+        "title": "Un valore non entra nella colonna di destinazione",
+        "steps": "Confronta i tipi delle colonne ai due capi.\nConverti il valore con un passaggio Converti tipo, oppure allarga la colonna di destinazione.\nRiprova le righe fallite."
+      },
+      "cdc-not-enabled": {
+        "title": "La cattura delle modifiche non è attiva sull'origine",
+        "steps": "Nell'editor del bridge premi Verifica idoneità: elenca esattamente cosa manca all'origine.\nApplica quelle impostazioni — quasi tutte richiedono il riavvio del database.\nAvvia di nuovo il bridge."
+      },
+      "slots-exhausted": {
+        "title": "L'origine non ha più slot di replica liberi",
+        "steps": "Elimina i bridge che non ti servono più: i loro slot se ne vanno con loro.\nOppure fai condividere uno slot ai bridge di una connessione (Slot di replica → Condiviso con gli altri bridge di questa connessione).\nOppure aumenta max_replication_slots e max_wal_senders sull'origine e riavviala."
+      },
+      "auth-failed": {
+        "title": "Il database ha rifiutato nome utente o password",
+        "steps": "Apri Origini dati e correggi le credenziali della connessione.\nIl controllo di connettività lo conferma.\nAvvia di nuovo il bridge."
+      },
+      "permission-denied": {
+        "title": "L'utente del database non può farlo",
+        "steps": "Concedi ciò che serve al bridge: lettura sulla tabella di origine, scrittura sulla destinazione, e i diritti di replica per la cattura basata su eventi.\nVerifica idoneità indica quelli mancanti.\nRiprova."
+      },
+      "tls": {
+        "title": "Non è stato possibile stabilire la connessione cifrata",
+        "steps": "Controlla la modalità di cifratura della connessione: un server senza TLS richiede Off; un'autorità di certificazione privata richiede il suo certificato CA.\nIl controllo di connettività lo conferma."
+      },
+      "host-not-found": {
+        "title": "Il nome host non si risolve",
+        "steps": "Controlla che l'host della connessione non abbia errori di battitura.\nUn database sulla macchina dove gira Syncle si raggiunge come localhost, anche da Docker — ma un nome che conosce solo la tua macchina no.\nIl controllo di connettività lo conferma."
+      },
+      "connection-refused": {
+        "title": "Nessuno è in ascolto a quell'indirizzo",
+        "steps": "Controlla che il database sia in esecuzione e che host e porta siano giusti.\nControlla i firewall tra Syncle e il database.\nConferma con il controllo di connettività, poi avvia di nuovo il bridge."
+      },
+      "timeout": {
+        "title": "Il database o l'endpoint ha impiegato troppo a rispondere",
+        "steps": "Controlla che sia raggiungibile e non sovraccarico.\nPer un endpoint, aumenta il timeout o riduci la dimensione del batch in Consegna.\nRiprova."
+      },
+      "http-auth": {
+        "title": "L'endpoint ha rifiutato le credenziali",
+        "steps": "Controlla l'autenticazione della destinazione: il token Bearer, o nome e valore dell'intestazione personalizzata.\nRiprova le righe fallite."
+      },
+      "http-not-found": {
+        "title": "L'indirizzo dell'endpoint non esiste",
+        "steps": "Controlla l'URL e il metodo della destinazione.\nRiprova le righe fallite."
+      },
+      "http-rate-limited": {
+        "title": "L'endpoint sta rallentando il bridge",
+        "steps": "In Consegna, aggiungi un ritardo minimo tra le richieste, o invia batch più grandi.\nRiprova le righe fallite."
+      },
+      "http-client-error": {
+        "title": "L'endpoint ha rifiutato la richiesta",
+        "steps": "Apri una consegna fallita per vedere il corpo esatto inviato e cosa è tornato.\nDai al payload la forma che l'endpoint si aspetta.\nRiprova le righe fallite."
+      },
+      "http-server-error": {
+        "title": "L'endpoint è fallito mentre gestiva la richiesta",
+        "steps": "È un errore del servizio che riceve — i suoi log dicono perché.\nQuando torna in salute, riprova le righe fallite. I tentativi con attesa crescente potrebbero aver già coperto una breve interruzione."
+      }
+    },
+    "guide": {
+      "search": "Cerca nella guida",
+      "noResults": "Nulla nella guida corrisponde a “{query}”.",
+      "intro": "Tutto ciò che fa Syncle, con le parole delle sue schermate. Apri una sezione, o cerca.",
+      "sections": {
+        "overview": {
+          "title": "Come funziona Syncle",
+          "summary": "Connessioni, bridge, e come passano le righe.",
+          "body": "Syncle tiene sincronizzati database di motori diversi — PostgreSQL, MySQL, SQLite, MongoDB e Redis — e può anche inviare righe a un endpoint HTTP.\n\n- Una connessione è un database che Syncle può raggiungere. Le sue credenziali sono cifrate a riposo.\n- Un bridge legge una tabella (o una query) da una connessione di origine e scrive ogni riga su una o più destinazioni.\n- Un Processo singolo copia le righe una volta. Un Bridge live resta attivo e consegna ogni modifica appena avviene, tramite Polling o cattura Basata su eventi (tempo reale).\n- Ogni riga letta finisce esattamente in uno di tre posti: la destinazione, la coda dead-letter del bridge, o ancora davanti alla posizione del bridge nell'origine.\n\nPer impostazione predefinita le scritture sono upsert idempotenti, quindi un nuovo tentativo o una riesecuzione non creano mai duplicati. Le aree di lavoro tengono separati gruppi di connessioni e bridge."
+        },
+        "connections": {
+          "title": "Collegare un database",
+          "summary": "Host, localhost, SSH, TLS, ambienti.",
+          "body": "Apri Origini dati e aggiungi una connessione. Il modulo si adatta al motore, e il controllo di connettività dice subito se Syncle riesce a raggiungerla.\n\n- localhost funziona anche quando Syncle gira in Docker: un indirizzo di loopback viene contattato sulla macchina dove gira Syncle. Ciò che viene salvato e mostrato è quello che hai scritto.\n- Il Tunnel SSH raggiunge un database passando da un host intermedio. L'impronta della chiave dell'host viene registrata al primo collegamento e poi verificata. Una stringa di connessione non si può combinare con un tunnel.\n- Cifratura: Off, solo cifratura, verifica dell'autorità di certificazione, o verifica dell'autorità e del nome host (consigliata). Un'autorità privata richiede il suo certificato CA.\n- L'Ambiente (Produzione, Staging, Sviluppo) è mostrato accanto alla connessione ovunque; in produzione l'editor di query chiede conferma prima di ogni scrittura.\n- Sola lettura: attraverso la connessione non viene mai scritto nulla. Può essere un'origine, mai una destinazione."
+        },
+        "first-bridge": {
+          "title": "Il tuo primo bridge",
+          "summary": "Da una tabella a una destinazione, passo per passo.",
+          "body": "1. Collega i database di origine e di destinazione in Origini dati.\n2. Apri la tabella di origine e premi Crea bridge — oppure premi Nuovo bridge e scegli la tabella.\n3. Seleziona le colonne da inviare.\n4. Aggiungi una destinazione: un database (mappa le colonne su una tabella esistente, o lascia che Syncle la crei) o un endpoint HTTP.\n5. Scegli cosa viene eseguito: Processo singolo, o Bridge live con Polling o Basato su eventi (tempo reale).\n6. Controlla l'anteprima, o premi Prova a vuoto per vedere cosa succederebbe senza scrivere nulla.\n7. Salva e avvialo. Ogni consegna compare nella cronologia: verde sincronizzata, rosso fallita, ambra saltata, grigio in coda.\n\nPrimi bridge comuni: PostgreSQL → MongoDB (copia, poi segui), MySQL → SQLite (una copia portatile), MongoDB → Redis (una cache veloce)."
+        },
+        "triggers": {
+          "title": "Processo singolo, polling o basato su eventi",
+          "summary": "Scegliere come gira un bridge.",
+          "body": "- Processo singolo: invia le righe una volta quando lo esegui. Per riempimenti iniziali e migrazioni. Può anche girare A orari programmati.\n- Bridge live → Polling: chiede alla tabella le righe nuove ogni pochi secondi. Funziona su ogni motore e non richiede configurazione sull'origine. Rileva le righe nuove con una Colonna incrementale (id), una Colonna timestamp (aggiornato il — vede anche gli aggiornamenti), o Nuove chiavi primarie (tabelle piccole, UUID). Il polling non vede le eliminazioni.\n- Bridge live → Basato su eventi (tempo reale): legge il log delle modifiche del database — replica logica di PostgreSQL, binlog di MySQL, change stream di MongoDB, notifiche keyspace di Redis. Inserimenti, aggiornamenti ed eliminazioni, nel momento in cui avvengono. Richiede che l'origine sia predisposta; Verifica idoneità dice come.\n\nLa cattura basata su eventi di Redis non è durevole: una modifica fatta mentre Syncle è fermo va persa. Quando conta ogni modifica, usa il Polling su Redis.\nSQLite non ha un log delle modifiche: usa il Polling."
+        },
+        "cdc-setup": {
+          "title": "Predisporre la cattura basata su eventi",
+          "summary": "Cosa serve a ogni database di origine.",
+          "body": "Premi Verifica idoneità nell'editor del bridge: controlla l'origine ed elenca esattamente cosa manca.\n\n- PostgreSQL: wal_level = logical (serve un riavvio), e un ruolo con REPLICATION: ALTER ROLE nome REPLICATION. Una tabella senza chiave primaria richiede REPLICA IDENTITY FULL, altrimenti vengono catturati solo gli inserimenti. Syncle crea da sé la publication e lo slot di replica. Più bridge di una connessione possono condividere uno slot.\n- MySQL / MariaDB: log_bin attivo, binlog_format = ROW, binlog_row_image = FULL, un server_id univoco (serve un riavvio), e GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* all'utente.\n- MongoDB: un replica set o un cluster shardato. Un singolo nodo va bene come replica set di un membro (--replSet rs0, poi rs.initiate()). Atlas lo è già.\n- Redis: notify-keyspace-events con E e le classi di eventi (EA). Syncle prova a impostarlo all'avvio.\n\nUn bridge fermo conserva la sua posizione nel log. Su PostgreSQL e MySQL questo trattiene log sull'origine, e la pagina del bridge mostra quanto: avvia il bridge, o eliminalo, prima che il disco si riempia."
+        },
+        "write-modes": {
+          "title": "Modalità di scrittura, chiavi ed eliminazioni",
+          "summary": "Upsert o insert, e cosa fa un'eliminazione.",
+          "body": "Ogni destinazione database ha una Modalità di scrittura:\n\n- Upsert (nessun duplicato): trova la riga tramite le sue Colonne chiave e la aggiorna, o la inserisce se non c'è. Riesecuzioni, nuovi tentativi e aggiornamenti non duplicano mai. La scelta giusta per una copia di una tabella.\n- Insert (aggiungi in coda): aggiunge sempre una riga nuova. Per log e storici di eventi. Su un bridge live che vede gli aggiornamenti, un aggiornamento viene inserito di nuovo — e una tabella con chiave primaria lo rifiuta come chiave duplicata.\n\nLe Colonne chiave sono le colonne su cui si confronta una riga — di solito la chiave primaria della tabella. Sono obbligatorie per l'upsert.\n\nQuando una riga viene eliminata nell'origine:\n- Eliminala anche qui.\n- Mantienila e segnala come eliminata: una Colonna marcatore riceve l'ora dell'eliminazione, o true.\n- Non fare nulla: mantieni ogni riga — per archivi e data warehouse.\n\nIl polling non vede le eliminazioni; la cattura basata su eventi sì."
+        },
+        "columns": {
+          "title": "Colonne, filtri e valori modificati",
+          "summary": "Mappatura, creazione tabelle, mascheramento, conversione.",
+          "body": "- Mappa / rinomina colonne scrive una colonna di origine in una colonna di destinazione con un altro nome, o lascia fuori delle colonne.\n- Crea tabella se mancante crea la destinazione dalla forma dell'origine. Tra due istanze dello stesso motore i tipi vengono riusati alla lettera; tra motori diversi ogni tipo viene tradotto, e l'anteprima indica ogni colonna che la destinazione non può contenere esattamente.\n- Solo le righe in cui: invia solo le righe che soddisfano ogni condizione — uguale, diverso, minore, al massimo, maggiore, almeno, contiene, inizia con, finisce con, è vuoto, non è vuoto.\n- Modifica i valori lungo il percorso, in ordine:\n  - Maschera: mantieni gli estremi, sostituisci con ********, un hash SHA-256 (si può ancora unire e usare come chiave), o invia vuoto.\n  - Converti tipo: in testo, numero, numero intero, vero / falso, data e ora, o JSON. Un valore che non si può convertire fallisce, diventa vuoto, o resta com'era — a tua scelta.\n  - Pulisci testo: togli gli spazi, minuscole, MAIUSCOLE.\n  - Valore predefinito, e Colonna calcolata dalle altre colonne.\n\nI valori mantengono i loro tipi: decimali esatti, interi a 64 bit, byte e microsecondi sopravvivono al viaggio."
+        },
+        "backfill": {
+          "title": "Copiare ciò che c'è già",
+          "summary": "Riempi, poi segui — senza perdere una modifica.",
+          "body": "Un bridge live avviato con Solo le modifiche da ora in poi segue le modifiche dal suo primo avvio, e lascia stare le righe che la tabella contiene già. Alla destinazione mancano allora quelle righe — è previsto, non è un errore.\n\nTre modi per portarle:\n1. Copia ciò che c'è, poi segui le modifiche: il bridge prende prima la sua posizione nel log, copia la tabella, poi consegna ciò che è cambiato nel frattempo. Nulla va perso e nessuna riga vecchia finisce sopra una nuova.\n2. Esegui un Processo singolo verso la stessa destinazione, poi tieni il bridge live: gli upsert rendono innocua la sovrapposizione.\n3. Verifica il bridge, poi Riconcilia: vengono scritte solo le righe mancanti e diverse."
+        },
+        "failures": {
+          "title": "Quando le righe falliscono",
+          "summary": "Fermarsi o mettere da parte; dead-letter; nuovi tentativi.",
+          "body": "Ogni consegna viene tentata fino al limite di tentativi del bridge, con attese crescenti tra un tentativo e l'altro. Se fallisce ancora, decide In caso di errore:\n\n- Ferma il bridge (o Interrompi il processo): si ferma sull'errore senza andare oltre. Risolvi la causa e riparti; vengono ritentate le stesse righe. Nulla viene saltato.\n- Metti da parte le righe fallite e continua (Registra nei log e continua su un processo singolo): le righe fallite vanno nella coda dead-letter, complete, e il resto continua a scorrere. Una riga sbagliata viene isolata dal resto del suo batch.\n\nLa coda dead-letter è nella pagina del bridge: Riprova tutte, Riprova, Scarta. Un nuovo tentativo rilegge la riga dall'origine, quindi non sovrascrive mai una versione più recente. Su un processo singolo, Riprova le fallite rimanda solo le consegne fallite; le celle fallite diventano verdi sul posto.\n\nI canali di avviso possono dirti quando delle righe vengono messe da parte."
+        },
+        "verify": {
+          "title": "Verifica e riconcilia",
+          "summary": "La destinazione è davvero la copia?",
+          "body": "Verifica legge i due capi e li confronta riga per riga, secondo il tipo di valore di ogni colonna — 1.50 e 1.5 sono lo stesso numero, 007 e 7 non sono la stessa chiave. Riporta le righe Mancanti, Diverse e Solo nella destinazione, con entrambe le letture di ogni colonna che differisce. Su un bridge che sta ancora consegnando, una riga che sembra sbagliata viene letta due volte prima di essere riportata.\n\nRiconcilia fa lo stesso e scrive solo le righe mancanti o diverse, dall'origine com'è ora. Spunta Durante la riconciliazione, rimuovi anche le righe presenti solo nella destinazione per eliminare anche quelle in più — l'unica cosa di una riconciliazione che non si può rileggere.\n\nUsala dopo un vuoto: un bridge avviato da ora, righe messe da parte e scartate, un cambio di slot di replica, o una destinazione modificata a mano."
+        },
+        "schedule": {
+          "title": "Esecuzione programmata",
+          "summary": "Ogni notte, ogni ora, nei giorni feriali.",
+          "body": "Un processo singolo può girare A orari programmati: ogni ora, ogni notte alle 02:00, nei giorni feriali alle 02:00, il lunedì, il primo del mese — o Personalizzato, con una riga cron e un fuso orario.\n\n- Mai due esecuzioni insieme: un'esecuzione che trova la precedente ancora in corso viene saltata, e registrata.\n- Ogni esecuzione riparte dall'inizio.\n- Una volta per scatto, per quanti processi API condividano Redis.\n- Corretta anche con l'ora legale."
+        },
+        "schema-changes": {
+          "title": "Quando la tabella di origine cambia",
+          "summary": "Colonne rinominate ed eliminate, colonne nuove.",
+          "body": "Syncle ricorda la tabella di origine com'era quando il bridge è stato salvato, e la confronta a ogni esecuzione. Quando la tabella di origine cambia decide cosa succede:\n\n- Fermati, se manca una colonna usata dal bridge (predefinito): una colonna eliminata o rinominata ferma il bridge prima che scriva valori vuoti sulla destinazione, e indica la colonna. Una colonna nuova o un tipo cambiato viene annotato e il bridge continua.\n- Lo stesso — e aggiungi le nuove colonne alla destinazione: come Fermati, e una colonna aggiunta all'origine viene aggiunta alle tabelle create da Syncle.\n- Continua comunque.\n\nDopo una modifica: correggi la mappatura nell'editor e salva. Salvando si accetta la tabella com'è ora."
+        },
+        "http": {
+          "title": "Inviare righe a un endpoint HTTP",
+          "summary": "Payload, autenticazione, tentativi, idempotenza.",
+          "body": "Una destinazione HTTP invia con POST, PUT o PATCH ogni riga — o ogni batch — a un URL.\n\n- Il payload si costruisce con dei token: `'{{column}}'`, `'{{$row}}'` (l'intera riga, il predefinito), `'{{$table}}'`, `'{{$op}}'` (insert, update o delete, nei bridge basati su eventi), `'{{$now}}'`, `'{{$index}}'`. La sostituzione è strutturata: nessuna iniezione di stringhe, nulla viene valutato. Racchiudi sotto la chiave mette la riga sotto una chiave.\n- Autenticazione: Nessuna autenticazione, Token Bearer, o un'Intestazione personalizzata; aggiungi altre intestazioni con + Header.\n- L'invio di Idempotency-Key aggiunge una chiave fatta dall'esecuzione e dalla consegna, così chi riceve può ignorare un nuovo tentativo già gestito.\n- Dimensione del batch, ritardo minimo tra le richieste, timeout e tentativi sono in Consegna.\n\nI redirect non vengono seguiti: punta la destinazione all'URL finale."
+        },
+        "monitoring": {
+          "title": "Tenere d'occhio un bridge",
+          "summary": "Cronologia, mappa, avvisi, metriche, storico.",
+          "body": "- La cronologia dà a ogni consegna una cella: verde sincronizzata, rosso fallita, ambra saltata, grigio in coda. Clicca per vedere la riga esatta scritta, il risultato, i tempi e l'eventuale errore.\n- La mappa dell'area di lavoro mostra ogni tabella di origine, bridge e destinazione, collegati e colorati secondo lo stato.\n- La pagina sente ciò che succede mentre succede; non serve aggiornare.\n- I canali di avviso — Webhook, Slack, E-mail — ti avvisano quando un bridge fallisce, perde la sua posizione nel log, mette da parte righe, trattiene log sull'origine, o vede cambiare la sua tabella. Al massimo un messaggio ogni 5 minuti.\n- /api/metrics parla Prometheus.\n- I dettagli delle consegne vengono conservati per un po' (Impostazioni → Motore → Conserva i dettagli delle consegne per (giorni)). Dopo, il registro riga per riga viene rimosso; i totali lo contano ancora. Una tabella vuota su un'esecuzione vecchia significa proprio questo."
+        },
+        "accounts": {
+          "title": "Aree di lavoro, account e chiavi",
+          "summary": "Chi può fare cosa.",
+          "body": "- Le aree di lavoro tengono separati gruppi di connessioni e bridge. Si cambiano in cima alla barra laterale.\n- Account (Impostazioni → Sicurezza): un Amministratore fa tutto; un Operatore fa il lavoro — connessioni, bridge, esecuzioni, il browser dei dati — ma non account, chiavi, impostazioni, canali di avviso o aree di lavoro; un Visualizzatore può guardare tutto e non cambiare nulla tranne la propria password.\n- Chiavi API (Impostazioni → Sicurezza): Leggere, oppure Leggere e scrivere. Solo un amministratore le gestisce.\n- Il registro Attività (Impostazioni → Attività) registra ogni modifica e ogni accesso: chi, cosa, su cosa, da dove. I segreti non vi vengono mai scritti.\n- Password dimenticata? La schermata di accesso chiede un codice di ripristino, che il server stampa sulla sua console (syncle reset-password)."
+        },
+        "workbench": {
+          "title": "Il banco di lavoro dei dati",
+          "summary": "Sfoglia, interroga, diagramma, backup.",
+          "body": "Origini dati è un banco di lavoro completo per ogni database collegato:\n\n- Dati: sfoglia una tabella — pagine, ordinamento, filtri, modifica in linea, inserimento ed eliminazione, esportazione CSV o JSON.\n- Struttura: colonne, indici e il DDL della tabella.\n- Query: un editor con schede, completamento automatico e formattazione. ⌘/Ctrl + Invio la esegue. Su una connessione di produzione chiede conferma prima di ogni scrittura.\n- Diagramma: il database come diagramma ER interattivo.\n- Backup / ripristino dall'albero dello schema: JSON portabile per ogni motore, o .sql per quelli relazionali.\n\nOgni tabella ha Crea bridge, che apre l'editor con quella tabella come origine."
+        },
+        "shortcuts": {
+          "title": "Scorciatoie",
+          "summary": "Muoversi senza mouse.",
+          "body": "- ⌘K / Ctrl+K: la tavolozza dei comandi — vai a qualunque bridge o connessione, o esegui un comando.\n- ?: questo pannello di aiuto.\n- ⌘/Ctrl + Invio: esegue la query nell'editor.\n- Esc: chiude una finestra, o svuota la ricerca dei bridge.\n- Indietro e Avanti si spostano tra i bridge che hai aperto; ogni vista ha un suo indirizzo da condividere."
+        },
+        "troubleshooting": {
+          "title": "Risoluzione dei problemi",
+          "summary": "Gli errori comuni, e cosa significano.",
+          "body": "- duplicate key / Duplicate entry / E11000 / UNIQUE constraint failed: la riga c'è già. Usa Upsert, con la chiave della tabella come Colonne chiave.\n- relation does not exist / Table doesn’t exist / no such table: nome sbagliato, oppure attiva Crea tabella se mancante.\n- column does not exist / Unknown column: correggi Mappa / rinomina colonne, o aggiungi la colonna.\n- violates not-null constraint / cannot be null: mappa un valore su quella colonna, o dalle un Valore predefinito.\n- password authentication failed / Access denied: credenziali sbagliate sulla connessione.\n- permission denied / not authorized: all'utente mancano dei diritti; Verifica idoneità li indica.\n- ECONNREFUSED: nessuno è in ascolto — il database è attivo, host e porta sono giusti?\n- ENOTFOUND: il nome host non si risolve.\n- wal_level / binlog_format / only supported on replica sets: la cattura basata su eventi non è predisposta; vedi Predisporre la cattura basata su eventi.\n- all replication slots are in use: condividi uno slot, elimina i bridge inutilizzati, o aumenta max_replication_slots.\n- HTTP 401 / 403: l'autenticazione dell'endpoint. HTTP 429: rallenta in Consegna. HTTP 5xx: un errore dell'endpoint stesso.\n\nLa lampadina tiene d'occhio quasi tutti questi casi e si accende con la soluzione quando uno si presenta."
+        }
+      }
+    },
+    "show": "Mostrami"
   }
 }
