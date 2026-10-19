@@ -6,7 +6,7 @@
     "dev": "node scripts/copy-monaco.mjs && node scripts/next-with-port.mjs dev",
     "build": "node scripts/copy-monaco.mjs && next build",
     "start": "node scripts/next-with-port.mjs start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests"
