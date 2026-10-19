@@ -33,6 +33,7 @@ export interface PaletteInput {
     lightTheme: string;
     darkTheme: string;
     docs: string;
+    help: string;
     switchTo(name: string): string;
     editConnection(name: string): string;
   };
@@ -45,6 +46,7 @@ export interface PaletteInput {
     setWorkspace(id: string): void;
     setTheme(theme: 'light' | 'dark'): void;
     openDocs(): void;
+    openHelp(): void;
   };
 }
 
@@ -100,6 +102,13 @@ export function paletteCommands(input: PaletteInput): PaletteCommand[] {
     label: dark ? text.lightTheme : text.darkTheme,
     keywords: ['theme', 'appearance', 'mode'],
     run: () => actions.setTheme(dark ? 'light' : 'dark'),
+  });
+  commands.push({
+    id: 'help',
+    group: 'actions',
+    label: text.help,
+    keywords: ['help', 'hint', 'suggestion', 'guide', 'how', 'tips', 'problem'],
+    run: actions.openHelp,
   });
   commands.push({
     id: 'docs',

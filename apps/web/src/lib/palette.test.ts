@@ -28,6 +28,7 @@ function input(over: Partial<PaletteInput> = {}): PaletteInput {
       lightTheme: 'Light theme',
       darkTheme: 'Dark theme',
       docs: 'Documentation',
+      help: 'Help & suggestions',
       switchTo: (n) => `Switch to ${n}`,
       editConnection: (n) => `Edit connection ${n}`,
     },
@@ -40,6 +41,7 @@ function input(over: Partial<PaletteInput> = {}): PaletteInput {
       setWorkspace: vi.fn(),
       setTheme: vi.fn(),
       openDocs: vi.fn(),
+      openHelp: vi.fn(),
     },
     ...over,
   };

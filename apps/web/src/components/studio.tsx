@@ -24,6 +24,7 @@ import { BridgeList } from '@/components/bridges/bridge-list';
 import { BridgeBuilder } from '@/components/bridges/bridge-builder';
 import { DataSourcesManager } from '@/components/data-sources-manager';
 import { CommandPalette } from '@/components/command-palette';
+import { HelpBulb } from '@/components/help/help-bulb';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 /**
@@ -142,6 +143,7 @@ export function Studio() {
                 />
               </div>
               <div className="flex items-center gap-0.5">
+                <HelpBulb />
                 <Button
                   variant="ghost"
                   size="icon"
