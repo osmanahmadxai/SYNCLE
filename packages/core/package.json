@@ -1,6 +1,6 @@
 {
   "name": "@syncle/core",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "private": true,
   "description": "Framework-agnostic database domain: adapters, types, validation.",
   "main": "./dist/index.js",

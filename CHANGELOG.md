@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-19
+
+Two things the app could not tell you before: what a bridge connects, beyond
+`table → table`, and — when something goes wrong, or is set up to — why, and
+what to do about it.
+
+### Added
+
+- **A light bulb that lights up when something needs you.** It sits at the top
+  of the sidebar, dark while nothing needs anybody. As soon as something does
+  it lights amber — red when it is serious — with a count, and pulses until
+  the suggestion has been looked at; a problem that turns up while the page is
+  open also pops up once. Click it, press `?`, or pick *Help & suggestions* in
+  the command palette.
+  - **Suggestions**, worst first. Each says what is happening; the **likely
+    cause**, read from the engine's own error (21 kinds, across PostgreSQL,
+    MySQL, MongoDB, SQLite, Redis and HTTP — `duplicate key value violates
+    unique constraint` is a row already there, `Access denied for user` is the
+    credentials, `wal_level` is CDC not set up); **numbered steps** in the
+    words the screens use; buttons that go where the fix is; and the error word
+    for word. *Dismiss* hides one until its situation changes.
+  - **What it watches**: a connection a bridge needs that is gone, a failed
+    run, rows set aside in a dead-letter queue, a source table that changed,
+    change log piling up on a source, a live bridge that stops on one bad row,
+    an endpoint retried without an `Idempotency-Key`, Redis CDC (not durable),
+    a CDC bridge that never copied what the table already held, a run whose
+    delivery details were pruned (why its table looks empty), and an empty
+    workspace.
+  - **And a set-up that will fail, before it does.** A live bridge writing with
+    *Insert (append)* sees a row again every time it is updated, inserts it a
+    second time, and the table's key refuses the duplicate — on the first
+    update. The bulb says so from the moment the bridge is saved, and turns red
+    once it has happened.
+  - It reads the same data the bridge pages do, under the same query keys, so
+    the bulb and the page cannot disagree.
+- **A guide inside the app**, next to the suggestions: 18 searchable sections,
+  from a first bridge, CDC setup per engine, write modes and deletes, columns
+  and transforms, backfills, failures and dead letters, verify and reconcile,
+  schedules and schema changes, to HTTP destinations, monitoring, accounts, the
+  workbench, shortcuts and troubleshooting. A suggestion opens it on the
+  section that explains it.
+- **The bridge list can be searched, and says what each bridge connects.** A
+  search box (name, table, connection, host or database, at either end) and
+  chips — All, Live, Failed, Idle, Off — each with a count. A row names both
+  ends: engine, table and connection, `+N` for a fan-out. Hovering it shows the
+  whole bridge: where each database runs, its environment and SSH hop, how each
+  target is written (upsert key, insert, what a delete does), the columns that
+  cross with their renames, the trigger, filters and transforms.
+- **The workspace map says it too**: a node per source table rather than per
+  connection; tables that name their engine, connection, environment, host and
+  database; HTTP destinations by method, host and path; bridges that say how
+  they fire and which columns cross; and edges that say how each target is
+  written.
+
+Everything above is in English, Italian and Chinese.
+
 ## [1.4.1] - 2026-09-28
 
 ### Fixed
