@@ -168,6 +168,11 @@ The rest is the same whichever destination and trigger you pick:
 - **Live delivery timeline.** Each delivery gets a cell, coloured green
   (synced) · red (failed) · amber (skipped) · slate (queued). Click one for the
   exact row written, the result, timing, and any error.
+- **Help that speaks up.** A light bulb in the sidebar lights when something
+  needs you — a failed bridge, rows set aside, a changed source table, a
+  set-up that will fail on the first update — and says the likely cause, read
+  from the database's own error, and the steps to fix it. Next to the
+  suggestions, a searchable guide to everything Syncle does; `?` opens it.
 - **Job control.** Jobs survive restarts, resume where they stopped, and can
   be cancelled. Skip rows by range or selection, or retry only the failed ones in
   place — failed cells flip green. On a live bridge, retrying works without

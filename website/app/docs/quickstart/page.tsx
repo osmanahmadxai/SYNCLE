@@ -161,6 +161,42 @@ export default function Page() {
         you were and the browser&apos;s Back and Forward buttons move between
         them.
       </p>
+      <p>
+        The bridge list in the sidebar names both ends of every bridge — the
+        engine, the table and the connection — and a search box above it
+        finds a bridge by its name, a table, a connection, a host or a
+        database. The chips under the search narrow it to the bridges that
+        are live, failed, idle or off, with a count on each. Hover a bridge
+        for all of it: where each database runs, how each destination is
+        written, the columns that cross, the trigger, and any filters and
+        transforms. The workspace map — the view with no bridge open — draws
+        the same: a node per source table, each bridge saying how it fires,
+        and each destination saying which connection, host and database it
+        is on.
+      </p>
+
+      <h2 id="help-and-suggestions">Help and suggestions</h2>
+      <p>
+        The light bulb at the top of the sidebar is dark while nothing needs
+        you. It lights up — amber, or red when it is serious — with a count
+        as soon as something does: a bridge that failed, rows set aside in a
+        dead-letter queue, a source table that changed, change log piling up
+        on a source, a connection that is gone. It also speaks up about a
+        set-up that <em>will</em> go wrong, before it does — a live bridge
+        writing with Insert (append), say, fails on the first update of a
+        row it has already written. A problem that turns up while the page
+        is open also pops up once.
+      </p>
+      <p>
+        Click the bulb, press <kbd>?</kbd>, or pick{' '}
+        <em>Help &amp; suggestions</em> in the command palette. Each
+        suggestion says what is happening, the likely cause — read from the
+        database&apos;s own error — and numbered steps to fix it, with
+        buttons that go where the fix is. <strong>Dismiss</strong> hides one
+        until its situation changes. The <strong>Guide</strong> tab next to
+        the suggestions is a searchable how-to for everything in Syncle, in
+        the words its screens use.
+      </p>
 
       <h2 id="where-next">Where next</h2>
       <p>
